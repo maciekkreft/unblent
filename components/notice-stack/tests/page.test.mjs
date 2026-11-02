@@ -82,40 +82,6 @@ const clickPhone = (page) =>
   });
 
 // A short undo window, set before the stack mounts (the kit's helper).
-const { shortUndo } = await import(process.env.UNBLENT_KIT);
-const UNDO_MS = 600;
-const REMOVED_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const SETTLED_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
-
-// Stands in for the views that delete and the facts that listen, which this page does
-// not hold: a throwaway component that emits removal.started with its schema and
-// keeps every removal.undone and removal.settled it hears in window.removals.
-const removalHarness = (page) =>
-  page.evaluate(async () => {
-    const [{ mount }, { setup, emit }] = await Promise.all([import("/static/bus/bus.js"), import("xstate")]);
-    // No component emits removal.started, so no copy of its schema is served; its shape
-    // is removal.undone's with the thing's name added.
-    const undone = await (await fetch("/static/components/notice-stack/events/removal.undone.json")).json();
-    const schema = {
-      ...undone,
-      properties: { ...undone.properties, name: { type: "string" } },
-      required: [...undone.required, "name"],
-    };
-    window.removals = [];
-    const keep = ({ event }) => window.removals.push({ type: event.type, kind: event.kind, id: event.id });
-    const harness = setup({}).createMachine({
-      id: "test-removals",
-      meta: { kind: "view", emits: ["removal.started"], attributes: [] },
-      on: {
-        go: { actions: emit(({ event }) => ({ type: "removal.started", ...event.body })) },
-        "removal.undone": { actions: keep },
-        "removal.settled": { actions: keep },
-      },
-    });
-    window.removalHarness = mount(harness, { events: { "removal.started": schema } });
-  });
-const startRemoval = (page, body) => page.evaluate((body) => window.removalHarness.send({ type: "go", body }), body);
-const heard = (page) => page.evaluate(() => window.removals);
 
 const ENGINES = [
   { name: "webkit", launch: () => webkit.launch() },
@@ -276,42 +242,6 @@ for (const engine of ENGINES) {
       await setFile(resolve(FIXTURES, "broken.epub"));
       await until(async () => (await notices(page)).some((n) => n.text === "This file is not an epub."));
 
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-    } finally {
-      await browser.close();
-    }
-  });
-
-  // The Undo row: a removal shows its words with Undo; Undo brings the thing back, and
-  // a removal left alone settles when its window runs out.
-  // Browser: a gesture.
-  test(`a removal offers Undo and settles when left in ${engine.name}`, async () => {
-    const browser = await engine.launch();
-    const context = await browser.newContext();
-    context.setDefaultTimeout(4000);
-    try {
-      await shortUndo(context, UNDO_MS);
-      const problems = [];
-      const page = await context.newPage();
-      page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
-      page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
-      await page.goto(`${BASE_URL}/workshop/design/session`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => customElements.get("notice-stack") && document.querySelector("notice-stack").shadowRoot);
-      await removalHarness(page);
-
-      await startRemoval(page, { kind: "option", id: REMOVED_ID, name: "Goal" });
-      await until(async () => (await notices(page)).some((n) => n.text === "Option “Goal” removed." && n.role === "status"));
-      await page.locator("notice-stack .undo").click();
-      await until(async () => (await heard(page)).length === 1);
-      assert.deepEqual(await heard(page), [{ type: "removal.undone", kind: "option", id: REMOVED_ID }]);
-      assert.equal((await notices(page)).length, 0, "Undo closes the notice");
-
-      await page.mouse.move(0, 0);
-      await startRemoval(page, { kind: "case", id: SETTLED_ID, name: "" });
-      await until(async () => (await notices(page)).some((n) => n.text === "Case deleted."));
-      await until(async () => (await heard(page)).length === 2);
-      assert.deepEqual((await heard(page))[1], { type: "removal.settled", kind: "case", id: SETTLED_ID });
-      assert.equal((await notices(page)).length, 0, "the window ran out");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();

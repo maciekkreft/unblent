@@ -11,7 +11,6 @@ import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
-import reopened from "./events/conflict.reopened.json" with { type: "json" };
 
 // The entry's view: one CodeMirror 6 document holds the day's text, so it is shown once.
 // The theme, Vim and the paragraphs come from the editor kit (architecture.md 10). The
@@ -195,7 +194,6 @@ class ActorController {
         "day.shown": dayShown,
         "book.closed": closed,
         "passage.selected": passageSelected,
-        "conflict.reopened": reopened,
       },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());

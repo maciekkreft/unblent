@@ -84,7 +84,6 @@ const look = (page) =>
       n: li.querySelector(".n").textContent,
       quote: li.querySelector(".quote").textContent,
       text: li.querySelector(".text").textContent,
-      removing: li.classList.contains("removing"),
     })),
   }));
 
@@ -101,7 +100,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test("a selection in the last answer takes a comment, shown highlighted, numbered and listed; Remove has Undo; it is kept", async () => {
+    test("a selection in the last answer takes a comment, shown highlighted, numbered and listed; it is kept; Remove takes it off", async () => {
       const { context, page, problems } = await open(browser);
       try {
         await drag(page, PHRASE);
@@ -114,20 +113,18 @@ for (const engine of ENGINES) {
         await until(async () => (await look(page)).box === null);
         let seen = await look(page);
         assert.equal(seen.numbers, "1");
-        assert.deepEqual(seen.list, [{ n: "1", quote: PHRASE, text: "Say why.", removing: false }]);
-
-        await page.locator("chat-thread .comments .remove").click();
-        await until(async () => (await look(page)).list[0]?.removing);
-        await page.locator("chat-thread .comments .undo").click();
-        await until(async () => (await look(page)).list[0]?.removing === false);
-        await new Promise((r) => setTimeout(r, 300));
-        assert.equal((await look(page)).list.length, 1, "undone, the comment stays after the window");
+        assert.deepEqual(seen.list, [{ n: "1", quote: PHRASE, text: "Say why." }]);
 
         await until(async () => (await kept(context))?.marks?.[0]?.comment === "Say why.");
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await look(page)).marked === PHRASE);
         seen = await look(page);
-        assert.deepEqual(seen.list, [{ n: "1", quote: PHRASE, text: "Say why.", removing: false }]);
+        assert.deepEqual(seen.list, [{ n: "1", quote: PHRASE, text: "Say why." }]);
+
+        // The global Undo takes it back (12, Undo); this page has no undo-bar.
+        await page.locator("chat-thread .comments .remove").click();
+        await until(async () => (await look(page)).list.length === 0 && (await look(page)).marked === "");
+        await until(async () => (await kept(context)) === null || (await kept(context))?.marks?.length === 0);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -155,14 +152,13 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test("a selection in an earlier answer is a highlight with no comment; its bubble removes it with Undo; it is kept", async () => {
+    test("a selection in an earlier answer is a highlight with no comment; it is kept; its bubble removes it", async () => {
       const { context, page, problems } = await open(browser, { later: true });
       const earlier = (root, id) => {
         const answer = root.querySelector(`[data-answer="${id}"]`);
         const bubble = root.querySelector(".bubble");
         return {
           marked: [...(answer?.querySelectorAll("mark.hl") ?? [])].map((m) => m.textContent).join("|"),
-          removing: Boolean(answer?.querySelector("mark.hl.removing")),
           numbers: answer?.closest(".turn").querySelectorAll("sup.num").length ?? -1,
           box: Boolean(root.querySelector(".popover textarea")),
           bubble: bubble ? bubble.textContent.replace(/\s+/g, " ").trim() : null,
@@ -181,16 +177,17 @@ for (const engine of ENGINES) {
 
         await page.locator(`chat-thread mark.hl`).first().click();
         await until(async () => (await see()).bubble === "Remove highlight");
-        await page.locator("chat-thread .bubble .remove").click();
-        await until(async () => (await see()).removing);
-        assert.equal((await see()).bubble, "Removed.Undo", "the removal can be taken back");
-        await page.locator("chat-thread .bubble .undo").click();
-        await until(async () => !(await see()).removing && (await see()).bubble === "Remove highlight");
         await page.keyboard.press("Escape");
         await until(async () => (await see()).bubble === null);
 
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await see()).marked === PHRASE);
+        // The global Undo takes it back (12, Undo); this page has no undo-bar.
+        await page.locator(`chat-thread mark.hl`).first().click();
+        await until(async () => (await see()).bubble === "Remove highlight");
+        await page.locator("chat-thread .bubble .remove").click();
+        await until(async () => (await see()).marked === "" && (await see()).bubble === null);
+        await until(async () => (await stored()).length === 0);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

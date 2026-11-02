@@ -13,7 +13,7 @@ import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, sel
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["day.saved", "conflict.reopened"].map((n) => [n, schema(n)]));
+const SCHEMAS = Object.fromEntries(["day.saved"].map((n) => [n, schema(n)]));
 
 const at = (d, h = 0, m = 0, s = 0) => new Date(2026, 9, d, h, m, s).getTime();
 

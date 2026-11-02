@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The admin pressed Reset use on a guest: the guest's spending goes back to $0. undone: the admin pressed Undo, and llm brings back the totals from before the reset.",
+  "description": "The admin pressed Reset use on a guest: the guest's spending goes back to $0, one step Undo takes back (12). undone is not sent any more: llm undoes the step itself. It is kept because a contract only grows (7.1).",
   "type": "object",
   "properties": {
     "user": {

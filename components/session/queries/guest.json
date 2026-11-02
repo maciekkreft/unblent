@@ -42,7 +42,7 @@
           "startedOverAt": {
             "type": "integer",
             "minimum": 0,
-            "description": "When this account last started over, in milliseconds since the epoch, so the page can offer Undo during the undo window after the reload (12)."
+            "description": "Not sent any more: Start over is one step Undo takes back (12). Kept because a contract only grows (7.1)."
           },
           "leaving": {
             "type": "boolean",

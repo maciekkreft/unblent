@@ -352,7 +352,6 @@ test("a run is split at the edges of the comments; a selection loses its white s
 
 // --- Comments on the last answer ---------------------------------------------------------
 
-const UNDO_MS = 100;
 const IDS = ["01ARZ3NDEKTSV4RRFFQ69G5FA0", "01ARZ3NDEKTSV4RRFFQ69G5FA1", "01ARZ3NDEKTSV4RRFFQ69G5FA2"];
 const ANSWER_TEXT = "# Title\n\nA book was a path through the box.";
 const ASK = { id: "01HQ8ZK7M4N5P6Q7R8S9T0V1Q1", role: "user", text: "tell me" };
@@ -371,7 +370,6 @@ async function commenting(chat = answered(), more = {}) {
         return Promise.resolve({ conversation: chat, ...more });
       },
       mint: () => IDS[n++],
-      undoMs: UNDO_MS,
     },
     clock,
   });
@@ -474,13 +472,11 @@ test("the trash on a new comment box drops the selection, leaving no highlight",
   assert.equal(emitted.length + highlighted.length, 0);
 });
 
-test("a highlight on the last answer is removed with Undo like any other", async () => {
+test("a highlight on the last answer is removed like any other", async () => {
   const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
   const { actor, highlighted } = await commenting(answered({ highlights: [kept] }));
   actor.send({ type: "_unhighlight", id: kept.id });
   assert.deepEqual(highlighted.at(-1).highlights, []);
-  actor.send({ type: "_rehighlight", id: kept.id });
-  assert.deepEqual(highlighted.at(-1).highlights, [kept]);
 });
 
 test("selecting elsewhere while writing saves the open comment first", async () => {
@@ -493,23 +489,14 @@ test("selecting elsewhere while writing saves the open comment first", async () 
   assert.equal(ctx().draft.quote, "path");
 });
 
-test("removing a comment takes it off the saved list at once; undo puts it back", async () => {
-  const { actor, emitted, clock, ctx, state } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] } }));
+// The global Undo takes the removal back (12, Undo): conversations records the step.
+test("removing a comment takes it off the saved list at once and closes the box", async () => {
+  const { actor, emitted, ctx, state } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] } }));
   actor.send({ type: "_opened", id: SAVED.id });
   actor.send({ type: "_remove", id: SAVED.id });
   assert.ok(state().matches({ showing: "idle" }), "the box closes");
-  assert.ok(ctx().discarding.has(SAVED.id), "it stays dimmed for the undo window");
+  assert.equal(ctx().draft, null);
   assert.deepEqual(emitted.at(-1).marks, [], "a message sent now does not carry it");
-  actor.send({ type: "_undo", id: SAVED.id });
-  assert.equal(ctx().discarding.size, 0);
-  assert.deepEqual(emitted.at(-1).marks, [SAVED]);
-  const count = emitted.length;
-  actor.send({ type: "_remove", id: SAVED.id });
-  clock.increment(UNDO_MS);
-  assert.equal(ctx().discarding.size, 0, "the window ends");
-  assert.equal(emitted.length, count + 1, "nothing more is sent when it ends");
-  actor.send({ type: "_undo", id: SAVED.id });
-  assert.equal(emitted.length, count + 1, "too late to undo");
 });
 
 test("a new last answer drops the comment being written", async () => {
@@ -577,37 +564,15 @@ test("no highlight on white space, over another highlight, over a sent comment, 
   assert.equal(highlighted.length, 0);
 });
 
-test("Remove takes a highlight off at once; Undo or a click on it puts it back until the window ends", async () => {
+// The global Undo takes the removal back (12, Undo): conversations records the step.
+test("Remove takes a highlight off at once and closes its bubble", async () => {
   const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
-  const { actor, highlighted, clock, ctx } = await commenting(twice({ highlights: [kept] }));
+  const { actor, highlighted, ctx } = await commenting(twice({ highlights: [kept] }));
   actor.send({ type: "_highlightOpened", id: kept.id });
   assert.equal(ctx().chosen, kept.id, "its bubble opens");
   actor.send({ type: "_unhighlight", id: kept.id });
   assert.deepEqual(highlighted.at(-1).highlights, []);
-  assert.ok(ctx().unhighlighting.has(kept.id), "dimmed for the undo window");
-  assert.equal(ctx().chosen, kept.id, "the bubble stays to offer Undo");
-  actor.send({ type: "_rehighlight", id: kept.id });
-  assert.deepEqual(highlighted.at(-1).highlights, [kept]);
-  actor.send({ type: "_unhighlight", id: kept.id });
-  actor.send({ type: "_highlightOpened", id: kept.id });
-  assert.deepEqual(highlighted.at(-1).highlights, [kept], "a click on the dimmed highlight is the undo");
-  actor.send({ type: "_unhighlight", id: kept.id });
-  clock.increment(UNDO_MS);
-  assert.equal(ctx().unhighlighting.size, 0, "the window ends");
-  assert.equal(ctx().chosen, null, "and the bubble closes");
-  const count = highlighted.length;
-  actor.send({ type: "_rehighlight", id: kept.id });
-  assert.equal(highlighted.length, count, "too late to undo");
-});
-
-test("opening another chat ends a highlight's undo window and closes its bubble", async () => {
-  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
-  const { actor, highlighted, ctx } = await commenting(twice({ highlights: [kept] }));
-  actor.send({ type: "_unhighlight", id: kept.id });
-  actor.send({ type: "conversation.opened", id: CHAT2 });
-  assert.equal(ctx().unhighlighting.size, 0);
-  assert.equal(ctx().chosen, null);
-  assert.deepEqual(highlighted.at(-1).highlights, [], "the removal stands");
+  assert.equal(ctx().chosen, null, "the bubble closes");
 });
 
 const BOOK = { kind: "book", id: "b1", title: "ACT Made Simple", view: "book-reader" };

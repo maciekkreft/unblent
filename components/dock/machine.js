@@ -72,7 +72,17 @@ const same = (a, b) => a.stage === b.stage && SIDES.every((s) => sameSide(a.dock
 
 // Which views sit on which side, in order: what arranging the desk changes. The stage, the
 // tab a side shows and whether it is folded are moving around, so they make no step.
-const placement = (layout) => JSON.stringify(SIDES.map((s) => layout.docks[s]?.views ?? []));
+// Only the views both layouts name count: one named in only one of them is a view the page
+// gained or lost since the layout was stored, which dock-desk fits in or leaves out by
+// itself, so the first tab click after it is no arrangement the user made. Every gesture
+// that arranges the desk moves a view both name (dock-desk docks the view on the stage).
+const named = (layout) => new Set([layout.stage, ...SIDES.flatMap((s) => layout.docks[s]?.views ?? [])].filter(Boolean));
+const placement = (layout, common) => JSON.stringify(SIDES.map((s) => (layout.docks[s]?.views ?? []).filter((n) => common.has(n))));
+const rearranged = (before, after) => {
+  const was = named(before);
+  const common = new Set([...named(after)].filter((n) => was.has(n)));
+  return placement(before, common) !== placement(after, common);
+};
 
 // `prior` is the step that wrote the layout before this one, so an Undo leaves it as that
 // step left it and the step before can be undone next; a layout no step of this browser
@@ -103,7 +113,7 @@ function applyArranged(context, event, enqueue) {
   const after = clean(event);
   const before = context.layout;
   if (same(after, before)) return;
-  if (placement(after) === placement(before)) return write(context, enqueue, after, context.stamp);
+  if (!rearranged(before, after)) return write(context, enqueue, after, context.stamp);
   const prior = held(context).stamp;
   const id = context.mint();
   write(context, enqueue, after, id);
@@ -141,7 +151,8 @@ export const machine = setup({}).createMachine({
       "It keeps the layout on this device, in localStorage. A view is docked in at most one " +
       "place. Moving a view to another side, back to the stage or along its side is a step " +
       "Undo and Redo reverse (section 12), which puts the whole layout back; picking a tab, " +
-      "folding or unfolding a side and following a selection are not. A step is refused when " +
+      "folding or unfolding a side and following a selection are not, and neither is a view " +
+      "the page gained or lost since the layout was stored. A step is refused when " +
       "the desk was arranged since by anything else, here or in another tab.",
     kind: "fact",
     shape: "local-only",

@@ -422,14 +422,12 @@ const closing = ({ conversation, draft }) => {
 
 // The ranges a new comment may not overlap: every saved comment but the open one, the
 // open one while it holds any text, and the answer's highlights.
-const occupied = ({ conversation, draft, discarding, unhighlighting }) => {
+const occupied = ({ conversation, draft }) => {
   const answerId = lastAnswer(conversation)?.id;
   return [
     ...savedMarks(conversation).filter((m) => m.id !== draft?.id),
-    ...[...(discarding?.values() ?? [])].filter((d) => d.answerId === answerId).map((d) => d.mark),
     ...(draft && draft.comment.trim() !== "" ? [draft] : []),
     ...highlightsOf(conversation, answerId),
-    ...[...(unhighlighting?.values() ?? [])].filter((h) => h.answerId === answerId),
   ];
 };
 
@@ -496,35 +494,13 @@ const canSelect = ({ context, event }) => {
   const range = trimRange(answer.text, event.start, event.end);
   return range != null && !overlaps(occupied(context), range.start, range.end);
 };
-const isComment = ({ context, event }) =>
-  savedMarks(context.conversation).some((m) => m.id === event.id) && !context.discarding.has(event.id);
-const isDiscarding = ({ context, event }) => context.discarding.has(event.id);
-// Undo puts a comment back only on the answer it was removed from.
-const canRestore = ({ context, event }) =>
-  context.discarding.get(event.id)?.answerId === lastAnswer(context.conversation)?.id;
+const isComment = ({ context, event }) => savedMarks(context.conversation).some((m) => m.id === event.id);
 const typed = assign({ draft: ({ context, event }) => ({ ...context.draft, comment: event.text }) });
 
-const without = (map, id) => {
-  const next = new Map(map);
-  next.delete(id);
-  return next;
-};
-// A removed comment leaves the saved list at once, so a message sent inside the undo
-// window does not carry it; Undo stores it again.
-const undo = enqueueActions(({ context, event, enqueue }) => {
-  enqueue.cancel(`undo:${event.id}`);
-  const { mark } = context.discarding.get(event.id);
-  enqueue.assign({ discarding: without(context.discarding, event.id) });
-  store(enqueue, context, withMark(savedMarks(context.conversation), mark));
-});
-
-// Leaving the chat: what is being written is saved and every undo window ends now,
-// because its timer would end on another chat.
+// Leaving the chat: what is being written is saved.
 const settle = enqueueActions(({ context, enqueue }) => {
   if (lastAnswer(context.conversation)) keep(enqueue, context, closing(context));
-  for (const id of context.discarding.keys()) enqueue.cancel(`undo:${id}`);
-  for (const id of context.unhighlighting.keys()) enqueue.cancel(`unhl:${id}`);
-  enqueue.assign({ draft: null, discarding: new Map(), chosen: null, unhighlighting: new Map() });
+  enqueue.assign({ draft: null, chosen: null });
 });
 
 // --- Highlights -------------------------------------------------------------------------------
@@ -552,14 +528,13 @@ export const sentMarks = (conversation, answerId) => {
 
 const answerText = (conversation, answerId) => conversation.turns.find((t) => t.id === answerId).text;
 
-// A highlight never overlaps another one, one in its undo window, or a sent comment.
+// A highlight never overlaps another one or a sent comment.
 const canHighlight = ({ context, event }) => {
   const { conversation } = context;
   if (!highlightable(conversation, event.answerId)) return false;
   const range = trimRange(answerText(conversation, event.answerId), event.start, event.end);
   if (!range) return false;
-  const removed = [...context.unhighlighting.values()].filter((h) => h.answerId === event.answerId);
-  return !overlaps([...highlightsOf(conversation, event.answerId), ...removed, ...sentMarks(conversation, event.answerId)], range.start, range.end);
+  return !overlaps([...highlightsOf(conversation, event.answerId), ...sentMarks(conversation, event.answerId)], range.start, range.end);
 };
 
 // The whole list goes to `conversations` (4.3, fifth rule), and the chat on screen takes
@@ -582,18 +557,6 @@ const highlight = enqueueActions(({ context, event, enqueue }) => {
 });
 
 const isHighlight = ({ context, event }) => (context.conversation?.highlights ?? []).some((h) => h.id === event.id);
-const isUnhighlighting = ({ context, event }) => context.unhighlighting.has(event.id);
-
-// Undo puts a highlight back while its answer is still there to hold it.
-const canRehighlight = ({ context, event }) =>
-  context.unhighlighting.has(event.id) && holdsHighlights(context.conversation, context.unhighlighting.get(event.id).answerId);
-
-const rehighlight = enqueueActions(({ context, event, enqueue }) => {
-  enqueue.cancel(`unhl:${event.id}`);
-  const back = context.unhighlighting.get(event.id);
-  enqueue.assign({ unhighlighting: without(context.unhighlighting, event.id) });
-  storeHighlights(enqueue, context, [...(context.conversation.highlights ?? []), back]);
-});
 
 // The conversation's Vim keys (12, "Vim keys"): what a key pressed on the conversation
 // asks for. Ctrl+d and Ctrl+u are the only ones with a modifier; a letter with Ctrl, Alt
@@ -823,8 +786,9 @@ export const machine = setup({
       "show read only. A comment box left empty leaves its passage highlighted instead, and " +
       "in every earlier answer a selection is a highlight at once; a highlight has no comment " +
       "and no number, and the highlights are kept with the chat by `conversations` " +
-      "and never sent to the model. A click on one offers Remove, which waits out the undo window. " +
-      "The answer's text never changes; removing a comment waits out the undo window. " +
+      "and never sent to the model. A click on one offers Remove. The answer's text never " +
+      "changes. Removing a comment or a highlight happens at once; the top bar's Undo, and " +
+      "the short notice `conversations` asks for, bring it back (12, Undo). " +
       "A failed answer says why in plain words under it; when Ollama on the user's Mac did not " +
       "answer, it reads \"Ollama isn't running. Open the Ollama app, or get it at ollama.com.\" " +
       "The conversation can hold the keyboard, with the focus ring on it. With Vim keys on, " +
@@ -856,7 +820,6 @@ export const machine = setup({
     // How many desk layouts it has seen (dock.changed): a dock moved without changing size
     // fires no resize, so this is what tells the view to point the arrow again.
     layouts: 0,
-    undoMs: input.undoMs ?? 3000,
     throttleMs: input.throttleMs ?? 200,
     // Which chat is open on this device, and its contents, or null when none is open.
     openId: null,
@@ -869,12 +832,10 @@ export const machine = setup({
     // The subject on the stage, from subject: read then subject.changed; null until known,
     // whenever nothing on the stage is a subject, and on a page without a subject fact.
     subject: null,
-    // The comment being written on the last answer, and the comments in their undo window.
+    // The comment being written on the last answer.
     draft: null,
-    discarding: new Map(),
-    // The highlight whose bubble is open, and the highlights in their undo window.
+    // The highlight whose bubble is open.
     chosen: null,
-    unhighlighting: new Map(),
   }),
   initial: "starting",
   invoke: [
@@ -962,7 +923,7 @@ export const machine = setup({
     "conversation.deleted": {
       guard: ({ context, event }) => event.id === context.openId,
       target: ".empty",
-      actions: assign({ openId: null, conversation: null, draft: null, discarding: new Map(), chosen: null, unhighlighting: new Map() }),
+      actions: assign({ openId: null, conversation: null, draft: null, chosen: null }),
     },
   },
   states: {
@@ -1015,55 +976,33 @@ export const machine = setup({
             actions: [syncOfChange, assign({ conversation: ({ event }) => asConversation(event) })],
           },
         ],
-        // A comment's Remove: the box closes, the comment leaves the saved list and stays
-        // dimmed for the undo window. A comment never saved is simply dropped.
+        // A comment's Remove: the box closes and the comment leaves the saved list at once,
+        // one step the global Undo takes back (12, Undo). A comment never saved is simply
+        // dropped.
         _remove: [
           {
             guard: isComment,
             target: ".idle",
             actions: enqueueActions(({ context, event, enqueue }) => {
-              const list = savedMarks(context.conversation);
-              const mark = list.find((m) => m.id === event.id);
-              const answerId = lastAnswer(context.conversation).id;
-              enqueue.assign({ draft: null, discarding: new Map(context.discarding).set(event.id, { mark, answerId }) });
-              store(enqueue, context, withoutMark(list, event.id));
-              enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });
+              enqueue.assign({ draft: null });
+              store(enqueue, context, withoutMark(savedMarks(context.conversation), event.id));
             }),
           },
           { guard: ({ context, event }) => context.draft?.id === event.id, target: ".idle", actions: assign({ draft: null }) },
         ],
-        _undo: [
-          { guard: canRestore, actions: undo },
-          { guard: isDiscarding, actions: assign({ discarding: ({ context, event }) => without(context.discarding, event.id) }) },
-        ],
-        _elapsed: { guard: isDiscarding, actions: assign({ discarding: ({ context, event }) => without(context.discarding, event.id) }) },
         // A selection in an earlier answer: a highlight at once. The last answer's
         // selections are taken by the comment states below before they reach here.
         _selected: { guard: canHighlight, actions: highlight },
-        // A click on a highlight opens its bubble; on a dimmed one, it is the undo.
-        _highlightOpened: [
-          { guard: canRehighlight, actions: rehighlight },
-          { guard: isHighlight, actions: assign({ chosen: ({ event }) => event.id }) },
-        ],
+        // A click on a highlight opens its bubble.
+        _highlightOpened: { guard: isHighlight, actions: assign({ chosen: ({ event }) => event.id }) },
         _highlightClosed: { actions: assign({ chosen: null }) },
-        // Remove: the highlight leaves the list at once and stays dimmed, its bubble
-        // offering Undo, until the undo window ends.
+        // Remove: the highlight leaves the list at once and its bubble closes, one step the
+        // global Undo takes back (12, Undo).
         _unhighlight: {
           guard: isHighlight,
           actions: enqueueActions(({ context, event, enqueue }) => {
-            const list = context.conversation.highlights;
-            const gone = list.find((h) => h.id === event.id);
-            enqueue.assign({ chosen: event.id, unhighlighting: new Map(context.unhighlighting).set(event.id, gone) });
-            storeHighlights(enqueue, context, list.filter((h) => h.id !== event.id));
-            enqueue.raise({ type: "_highlightElapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `unhl:${event.id}` });
-          }),
-        },
-        _rehighlight: { guard: canRehighlight, actions: rehighlight },
-        _highlightElapsed: {
-          guard: isUnhighlighting,
-          actions: assign({
-            unhighlighting: ({ context, event }) => without(context.unhighlighting, event.id),
-            chosen: ({ context, event }) => (context.chosen === event.id ? null : context.chosen),
+            enqueue.assign({ chosen: null });
+            storeHighlights(enqueue, context, context.conversation.highlights.filter((h) => h.id !== event.id));
           }),
         },
       },
@@ -1074,11 +1013,8 @@ export const machine = setup({
               { guard: ({ context, event }) => canSelect({ context, event }) && Boolean(event.text), target: "commenting.dirty", actions: openSelection },
               { guard: canSelect, target: "commenting", actions: openSelection },
             ],
-            // A click on a comment's highlight opens it; on a dimmed one, it is the undo.
-            _opened: [
-              { guard: canRestore, actions: undo },
-              { guard: isComment, target: "commenting", actions: openComment },
-            ],
+            // A click on a comment's highlight opens it.
+            _opened: { guard: isComment, target: "commenting", actions: openComment },
           },
         },
         commenting: {
@@ -1090,7 +1026,6 @@ export const machine = setup({
               { guard: canSelect, target: "commenting", reenter: true, actions: [closeDraft, openSelection] },
             ],
             _opened: [
-              { guard: canRestore, actions: undo },
               { guard: ({ context, event }) => event.id === context.draft?.id },
               { guard: isComment, target: "commenting", reenter: true, actions: [closeDraft, openComment] },
             ],

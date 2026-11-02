@@ -113,13 +113,16 @@ function applySaved(context, event, enqueue) {
     const joins = open && comment && open.comment === comment.id && context.stamp === open.id;
     const step = joins ? open : { id: context.mint(), before, prior: held(context).stamp };
     write(context, enqueue, after, step.id);
+    const label = labelOf(step.before, after, comment);
     enqueue.emit({
       type: "step.recorded",
       id: step.id,
       owner: "redline",
-      label: labelOf(step.before, after, comment),
+      label,
       undo: { kind: "redline", redline: step.before, ...priorOf(step.prior) },
       redo: { kind: "redline", redline: after, ...priorOf(step.prior) },
+      // Removing a comment and clearing the text are deletes: they ask for the short notice.
+      ...(label === "remove a comment" || label === "clear the text" ? { notice: true } : {}),
     });
     context.stretch = comment ? { ...step, comment: comment.id } : null;
   }
@@ -151,7 +154,8 @@ export const machine = setup({}).createMachine({
       "range of the source text; a comment that falls outside the text or overlaps an earlier " +
       "one is dropped, and an empty text means there is no redline. Each paste, comment, removed " +
       "comment and clear is a step Undo and Redo reverse (section 12); typing on in one " +
-      "comment stays one step until the user leaves it. A step is refused when the redline " +
+      "comment stays one step until the user leaves it. Removing a comment and clearing the " +
+      "text happen at once and ask for the short notice. A step is refused when the redline " +
       "was written since by anything else, here or in another tab.",
     kind: "fact",
     shape: "local-only",

@@ -330,24 +330,23 @@ function applySave(context, event, enqueue) {
 
 // The user deleted a note, in the list or as a highlight in the reader (note.discarded,
 // 4.3 fifth rule): it happens at once and is one step, shown with the short notice (12,
-// Undo). A removal.settled from the corner notice deletes the same way, without a step.
+// Undo).
 function applyDiscard(context, event, enqueue) {
   const current = context.notes.get(event.id);
   if (!current || current.deleted) return;
   // A highlight taken into the one just joined over it is part of that join's step.
   const merge = context.merge;
-  if (event.type === "note.discarded" && merge?.ids.includes(current.id)) {
+  if (merge?.ids.includes(current.id)) {
     tombstone(context, enqueue, current, merge.id);
     const ids = merge.ids.filter((id) => id !== current.id);
     context.merge = ids.length ? { ...merge, ids } : null;
     enqueue.assign({ merge: context.merge });
     return;
   }
-  const step = event.type === "note.discarded" ? context.mint() : null;
+  const step = context.mint();
   tombstone(context, enqueue, current, step);
   context.stretch = null;
   enqueue.assign({ stretch: null });
-  if (!step) return;
   enqueue.emit({
     type: "step.recorded",
     id: step,
@@ -645,7 +644,6 @@ function flush(context, message, enqueue) {
   else if (message.type === "note.saved") applySave(context, message, enqueue);
   else if (message.type === "note.discarded") applyDiscard(context, message, enqueue);
   else if (message.type === "note.moved") applyMove(context, message, enqueue);
-  else if (message.type === "removal.settled") applyDiscard(context, message, enqueue);
   else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
@@ -813,8 +811,7 @@ export const machine = setup({
       "is refused when the note's text, or its place for a move, was written since by " +
       "anything else. Joining highlights that overlap is one step, which Undo takes back to the " +
       "highlights as they were; moving a highlight to its passage after the book is imported " +
-      "again is no step. A delete handed to the corner notice happens when that notice's " +
-      "undo window ends.",
+      "again is no step.",
     kind: "fact",
     shape: "replicated",
     emits: ["note.changed", "note.deleted", "note.conflicted", "step.recorded", "step.settled"],
@@ -824,7 +821,6 @@ export const machine = setup({
       "note.saved": "step",
       "note.discarded": "step",
       "note.moved": "step",
-      "removal.settled": "pending",
     },
     asks: ["session: read"],
   },
@@ -910,7 +906,6 @@ export const machine = setup({
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
         "note.moved": { actions: queue },
-        "removal.settled": { guard: ({ event }) => event.kind === "note", actions: queue },
         "step.undone": { actions: queue },
         "step.redone": { actions: queue },
       },
@@ -949,7 +944,6 @@ export const machine = setup({
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
         "note.moved": { actions: queue },
-        "removal.settled": { guard: ({ event }) => event.kind === "note", actions: queue },
         "step.undone": { actions: queue },
         "step.redone": { actions: queue },
       },
@@ -967,12 +961,6 @@ export const machine = setup({
         "note.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
         "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
-        // A delete the list handed to the corner notice when the keyboard left it: the
-        // notice's undo window ran out, so the note goes, as on note.discarded.
-        "removal.settled": {
-          guard: ({ event }) => event.kind === "note",
-          actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)),
-        },
         // The fact's own news about who is signed in (4.3, fourth rule). A different
         // user resets the pull cursor (the cache is kept, to be pushed up); signing
         // in enqueues the cache so anonymous work becomes the account's, then syncs.

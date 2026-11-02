@@ -78,7 +78,7 @@ async function start({ store = fakeStore(), time = at(12, 10), ask, api } = {}) 
   let minted = 0;
   const mintStep = () => `01K7STEP0000000000000000${String(++minted).padStart(2, "0")}`;
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { store, now: () => now, mint: () => D2, mintStep, ask, api }, clock });
+  const actor = createActor(machine, { input: { store, now: () => now, mintStep, ask, api }, clock });
   const steps = [];
   const settled = [];
   const conflicted = [];

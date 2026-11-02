@@ -107,7 +107,7 @@ const EDITS = {
   "limits.edited": (event) => ({ what: "limits", fields: fieldsOf(event, ["guest", "allGuests", "providers"]) }),
   "guestkeys.edited": (event) => ({ what: "guestkeys", fields: fieldsOf(event, ["jev", "anthropic"]) }),
   "guest.blocked": (event) => ({ what: "blocked", fields: { user: event.user, blocked: event.blocked } }),
-  "use.reset": (event) => ({ what: "reset", fields: { user: event.user, ...(event.undone ? { undone: true } : {}) } }),
+  "use.reset": (event) => ({ what: "reset", fields: { user: event.user } }),
   "step.dropped": (event) => ({ what: "forget", fields: { user: event.payload.user } }),
 };
 
@@ -144,7 +144,7 @@ function draftOf(ledger, event) {
   if (!ledger) return null;
   if (event.type === "limits.edited") return { kind: "limits", before: limitsIn(ledger, EDITS[event.type](event).fields) };
   if (event.type === "guest.blocked") return { kind: "blocked", user: event.user, name: guestName(event), before: blockedOf(ledger, event.user) };
-  if (event.type === "use.reset" && !event.undone) return { kind: "reset", user: event.user, name: guestName(event), before: spentOf(ledger, event.user) };
+  if (event.type === "use.reset") return { kind: "reset", user: event.user, name: guestName(event), before: spentOf(ledger, event.user) };
   return null;
 }
 

@@ -276,7 +276,7 @@ test("a deleted evaluator becomes a tombstone at once and stays deleted; an unkn
   assert.deepEqual(await list(actor), [], "a deleted id stays deleted");
 });
 
-test("a save that leaves out a question or an option drops it; a settled removal of another fact passes by", async () => {
+test("a save that leaves out a question or an option drops it", async () => {
   const { actor, changed } = start(fakeStore());
   await ready(actor);
   actor.send(saved({ questions: [yesno(), pick()] }));
@@ -284,10 +284,6 @@ test("a save that leaves out a question or an option drops it; a settled removal
   const now = changed.at(-1);
   assert.deepEqual(now.questions.map((q) => q.id), [Q2]);
   assert.deepEqual(now.questions[0].options.map((o) => o.id), [O2]);
-  const count = changed.length;
-  actor.send({ type: "removal.settled", kind: "case", id: ID });
-  actor.send({ type: "removal.settled", kind: "option", id: O1 });
-  assert.equal(changed.length, count);
 });
 
 test("a mark left by a closed tab settles at the next load", async () => {
@@ -369,7 +365,7 @@ test("signed in: edits within the window coalesce into one write, with no step s
   await drain(clock);
   assert.equal(api.puts.length, 1);
   assert.deepEqual([api.puts[0].name, api.puts[0].on, api.puts[0].baseVersion], ["Three", false, null]);
-  assert.ok(!JSON.stringify(api.puts[0]).includes("removing"), "marks belong to this tab");
+  assert.ok(!JSON.stringify(api.puts[0]).includes("removing"), "marks are never sent");
   assert.ok(!JSON.stringify(api.puts[0]).includes("Step"), "steps belong to this browser");
   assert.ok(!("step" in api.puts[0]));
 });

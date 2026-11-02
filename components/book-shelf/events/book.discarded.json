@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A book's undo window ran out (6, delete with undo): books tombstones the row, purges its files, and emits book.deleted.",
+  "description": "The user deleted a book: books makes the row a tombstone at once and emits book.deleted, one step Undo takes back (12); its files are erased when the step leaves the undo list (5).",
   "type": "object",
   "properties": {
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }

@@ -3,8 +3,6 @@ import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { machine } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
-import undone from "./events/removal.undone.json" with { type: "json" };
-import settled from "./events/removal.settled.json" with { type: "json" };
 import requested from "./events/step.requested.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's fade
@@ -18,22 +16,6 @@ const toMs = (text, fallback = 3000) => {
 
 // The words for a notice live here, not in the machine (a view owns its own text).
 // One case per source; a future refusal or event adds one line, nothing else.
-// A removal names the thing the way the user sees it: a rubric is a Detector, and
-// a question or an option is removed from its evaluator rather than deleted outright.
-const REMOVED = {
-  project: ["Project", "deleted"],
-  rubric: ["Detector", "deleted"],
-  case: ["Case", "deleted"],
-  evaluator: ["Evaluator", "deleted"],
-  "choice-point": ["Choice point", "deleted"],
-  note: ["Note", "deleted"],
-  conversation: ["Chat", "deleted"],
-  book: ["Book", "deleted"],
-  guest: ["Account", "deleted"],
-  question: ["Question", "removed"],
-  option: ["Option", "removed"],
-};
-
 const capital = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 function describe(source) {
@@ -44,11 +26,6 @@ function describe(source) {
     if (source.reason === "changed") return `Couldn't ${what}: it changed since.`;
     if (source.reason === "closed") return `Couldn't ${what}: that day is closed.`;
     return `Couldn't ${what}.`;
-  }
-  if (source.type === "removal.started") {
-    if (source.kind === "trial") return "Starting over.";
-    const [noun, verb] = REMOVED[source.kind] ?? ["Item", "deleted"];
-    return source.name ? `${noun} “${source.name}” ${verb}.` : `${noun} ${verb}.`;
   }
   if (source.type === "note.conflicted") {
     const title = source.theirs.title || "your note";
@@ -104,21 +81,13 @@ class ActorController {
       input: { fadeMs, ask: (target, name, payload) => ask(machine, target, name, payload) },
       events: {
         "note.saved": saved,
-        "removal.undone": undone,
-        "removal.settled": settled,
         "step.requested": requested,
       },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
-    // A closed tab completes its deletes (the facts also settle at load).
-    this.onPagehide = () => this.actor.send({ type: "_leave" });
-    window.addEventListener("pagehide", this.onPagehide);
   }
 
   hostDisconnected() {
-    window.removeEventListener("pagehide", this.onPagehide);
-    // A removed stack leaves no removal waiting for an Undo no one can press.
-    this.actor.send({ type: "_leave" });
     this.subscription?.unsubscribe();
     unmount(this.actor);
   }
@@ -179,7 +148,7 @@ class NoticeStack extends LitElement {
       color: var(--color-body);
       overflow: hidden;
     }
-    /* A removal is news with a way back, not a warning: dark, with Undo in the
+    /* A delete is news with a way back, not a warning: dark, with Undo in the
        accent, as the mockup shows. */
     .notice.removal {
       grid-template-columns: minmax(0, 1fr) auto auto;
@@ -212,9 +181,6 @@ class NoticeStack extends LitElement {
     }
     .removal .dismiss:hover {
       color: var(--color-canvas);
-    }
-    .removal .timer {
-      background: var(--color-accent);
     }
     .glyph {
       display: flex;
@@ -355,7 +321,6 @@ class NoticeStack extends LitElement {
                 <button class="dismiss" aria-label="Dismiss" @click=${() => this.#actor.send({ type: "_dismiss", key: n.key })}>
                   ${icon("x")}
                 </button>
-                ${n.bar ? html`<div class="timer"></div>` : nothing}
               </div>
             `;
           return html`

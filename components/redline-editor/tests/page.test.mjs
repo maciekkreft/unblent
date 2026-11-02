@@ -140,7 +140,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test("a selection opens a comment that saves as typed, survives a reload, and is removed with an undo", async () => {
+    test("a selection opens a comment that saves as typed, survives a reload, and is removed", async () => {
       const { context, page, problems } = await open(browser);
       try {
         await pasteFixture(page);
@@ -157,7 +157,6 @@ for (const engine of ENGINES) {
         await until(async () => (await popoverText(page)) === "needs work");
 
         await page.locator("redline-editor button.remove").click();
-        await until(() => inEditor(page, (root) => Boolean(root.querySelector("mark.removing")) && root.querySelector(".bar").textContent.includes("Comment removed")));
         await until(async () => (await marked(page)) === "");
         assert.ok(await inEditor(page, (root) => root.querySelector(".count").textContent === "0 comments"));
         assert.deepEqual(problems, []);
@@ -214,15 +213,12 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test("New text empties the page with an undo, then clears the text", async () => {
+    test("New text clears the text at once", async () => {
       const { context, page, problems } = await open(browser);
       try {
         await pasteFixture(page);
         await page.locator("redline-editor button", { hasText: "New text" }).click();
-        await until(() => inEditor(page, (root) => Boolean(root.querySelector(".drop")) && root.textContent.includes("Text cleared")));
-        await page.locator("redline-editor button.undo").click();
-        await until(() => inEditor(page, (root) => Boolean(root.querySelector("article h1"))));
-        await page.locator("redline-editor button", { hasText: "New text" }).click();
+        await until(() => inEditor(page, (root) => Boolean(root.querySelector(".drop"))));
         await until(() => page.evaluate(() => !localStorage.getItem("redline")));
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(() => inEditor(page, (root) => Boolean(root.querySelector(".drop"))));

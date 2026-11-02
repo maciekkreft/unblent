@@ -1176,19 +1176,20 @@ const answersStep = (context, enqueue, chat, before, label, mark, joins) => {
   const prior = priorOf(stamps.markStep);
   const undo = { kind: "answers", id: chat.id, ...before, ...prior };
   stamp(context, chat.id, { markStep: step });
-  record(context, enqueue, { id: step, label, undo, redo: { kind: "answers", id: chat.id, ...after, ...prior } });
+  // Removing a comment or a highlight is a delete, so it asks for the short notice (12, Undo).
+  const notice = label.startsWith("remove") ? { notice: true } : {};
+  record(context, enqueue, { id: step, label, undo, redo: { kind: "answers", id: chat.id, ...after, ...prior }, ...notice });
   context.stretch = { id: step, chat: chat.id, mark, label, undo };
 };
 
 // The user deleted a chat in the list: it goes at once and is one step, shown with the
-// short notice (12, Undo). A removal.settled from the corner notice deletes the same way,
-// without a step.
+// short notice (12, Undo).
 const onDiscard = (context, event, enqueue) => {
   const { id } = event;
   const listed = context.headings.find((h) => h.id === id);
   const name = context.chats.get(id)?.title ?? listed?.title;
   const known = Boolean(listed) || context.chats.has(id);
-  const step = known && event.type === "conversation.discarded" ? context.mint() : null;
+  const step = known ? context.mint() : null;
   const prior = priorOf(stampOf(context, id).step);
   remove(context, enqueue, id, step);
   if (!step) return;
@@ -1737,11 +1738,10 @@ export const machine = setup({
       "a step Undo and Redo reverse (section 12); typing in one comment is one step until the user leaves its box " +
       "(`marks.edited` with `left`), so typing in it again after coming back is another, and a " +
       "comment box left empty becomes its highlight in the same step. A delete happens at once " +
-      "and asks for the short notice; the server keeps the chat, and a restore write brings it " +
+      "and asks for the short notice, and so does removing a comment or a highlight; the server keeps the chat, and a restore write brings it " +
       "back. A step is refused when that part of the chat was written since by anything else: " +
       "a generated title, a message that sent the comments, or another device. Sending a " +
-      "message, a lookup and a generated title are not steps. A delete from the corner " +
-      "notice, when its Undo runs out, is no step. A chat is " +
+      "message, a lookup and a generated title are not steps. A chat is " +
       "titled at first with the first line of its first message; the chat-title generator's " +
       "text replaces it, and so does a title the user types in the list, where an empty one " +
       "gives the first line back. A rename keeps the chat's links and its place and does not " +
@@ -1760,7 +1760,6 @@ export const machine = setup({
       "conversation.selected": "navigation",
       "conversation.discarded": "step",
       "conversation.moved": "step",
-      "removal.settled": "pending",
       "tools.edited": "step",
       "marks.edited": "step",
       "highlights.edited": "step",
@@ -1886,7 +1885,6 @@ export const machine = setup({
         "conversation.selected": { actions: queue },
         "conversation.discarded": { actions: queue },
         "conversation.moved": { actions: queue },
-        "removal.settled": { guard: ({ event }) => event.kind === "conversation", actions: queue },
         "tools.edited": { actions: queue },
         "marks.edited": { actions: queue },
         "highlights.edited": { actions: queue },
@@ -1918,12 +1916,6 @@ export const machine = setup({
         "step.redone": { actions: enqueueActions(({ context, event, enqueue, self }) => applyStep(context, event, enqueue, self)) },
         _restored: { actions: enqueueActions(({ context, event, enqueue, self }) => onRestored(context, event, enqueue, self)) },
         "conversation.moved": { actions: enqueueActions(({ context, event, enqueue, self }) => onMoved(context, event, enqueue, self)) },
-        // A delete the list handed to the corner notice when the keyboard left it: the
-        // notice's undo window ran out, so the chat goes, as on conversation.discarded.
-        "removal.settled": {
-          guard: ({ event }) => event.kind === "conversation",
-          actions: enqueueActions(({ context, event, enqueue }) => onDiscard(context, event, enqueue)),
-        },
         "tools.edited": { actions: enqueueActions(({ context, event, enqueue }) => onToolsEdited(context, event, enqueue)) },
         "marks.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onMarksEdited(context, event, enqueue, self)) },
         "highlights.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onHighlightsEdited(context, event, enqueue, self)) },

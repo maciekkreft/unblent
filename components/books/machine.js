@@ -495,16 +495,14 @@ function applySelect(context, event, enqueue) {
 }
 
 // The user deleted a book (book-shelf emits book.discarded, 4.3 fifth rule): it happens
-// at once and is one step, shown with the short notice (12, Undo). A removal.settled
-// from the corner notice deletes the same way, without a step. The journal is never in
+// at once and is one step, shown with the short notice (12, Undo). The journal is never in
 // the cache, so it is never deleted here.
 function applyDiscard(context, event, enqueue) {
   const { id } = event;
   const current = context.books.get(id);
   if (!current || current.deleted) return;
-  const step = event.type === "book.discarded" ? context.mint() : null;
+  const step = context.mint();
   tombstone(context, enqueue, current, step);
-  if (!step) return;
   const prior = current.step ? { prior: current.step } : {};
   enqueue.emit({
     type: "step.recorded",
@@ -686,7 +684,6 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
   else if (message.type === "book.renamed") applyRename(context, message, enqueue);
   else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
-  else if (message.type === "removal.settled") applyDiscard(context, message, enqueue);
   else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
@@ -881,8 +878,7 @@ export const machine = setup({
       "restore write the server accepts, its files kept on the server, so nothing is imported " +
       "again. Once a delete's step leaves the undo list (`step.dropped`), the book's files on " +
       "the server are erased; a restore after that is refused and the book stays deleted. A step is refused when the book was written since by anything else; turning a " +
-      "page is not a step and refuses nothing. A delete from the corner notice, when its Undo " +
-      "runs out, is no step. On a try page the Journal is always the open " +
+      "page is not a step and refuses nothing. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
       "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
       "book's tab to the front on the stage, and so does picking a chapter of a book, or a day of the " +
@@ -912,7 +908,6 @@ export const machine = setup({
       "chapter.selected": "navigation",
       "day.selected": "navigation",
       "book.discarded": "step",
-      "removal.settled": "pending",
     },
     asks: ["session: read", "journal: read"],
   },
@@ -1008,7 +1003,6 @@ export const machine = setup({
         "chapter.selected": { actions: queue },
         "day.selected": { actions: queue },
         "book.discarded": { actions: queue },
-        "removal.settled": { guard: ({ event }) => event.kind === "book", actions: queue },
         "step.undone": { actions: queue },
         "step.redone": { actions: queue },
       },
@@ -1058,7 +1052,6 @@ export const machine = setup({
         "chapter.selected": { actions: queue },
         "day.selected": { actions: queue },
         "book.discarded": { actions: queue },
-        "removal.settled": { guard: ({ event }) => event.kind === "book", actions: queue },
         "step.undone": { actions: queue },
         "step.redone": { actions: queue },
       },
@@ -1097,12 +1090,6 @@ export const machine = setup({
         "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         "step.dropped": { actions: ({ context, event }) => purge(context, event) },
-        // A delete the shelf handed to the corner notice when the keyboard left it: the
-        // notice's undo window ran out, so the book goes, as on book.discarded.
-        "removal.settled": {
-          guard: ({ event }) => event.kind === "book",
-          actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)),
-        },
         // The fact's own news of who is signed in (4.3, fourth rule). A book is only
         // ever created signed in, so there is nothing anonymous to adopt: signing in
         // resets the pull cursor and pulls, after emptying another account's copy;

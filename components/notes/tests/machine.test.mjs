@@ -912,14 +912,3 @@ test("a pull brings a move made on another device, unless this device moved it s
   assert.equal(listed.find((n) => n.id === ID).position, "z", "same version, new place: taken");
   assert.equal(listed.find((n) => n.id === ID2).position, mine, "a move not yet sent is the latest write");
 });
-
-test("a delete handed to the corner notice goes when the notice settles it", async () => {
-  const { actor, deleted } = start(fakeStore([{ id: ID, title: "a", body: "a", version: 1, updatedAt: 5 }]));
-  await ready(actor);
-  actor.send({ type: "removal.settled", kind: "evaluator", id: ID });
-  await flush();
-  assert.equal(deleted.length, 0, "another kind is not a note");
-  actor.send({ type: "removal.settled", kind: "note", id: ID });
-  await flush();
-  assert.deepEqual(deleted.map((e) => e.id), [ID]);
-});

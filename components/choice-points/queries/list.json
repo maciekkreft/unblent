@@ -61,7 +61,7 @@
             },
             "removing": {
               "type": "boolean",
-              "description": "The choice point waits out its undo window (removal.started)."
+              "description": "Always false: kept because a contract only grows (7.1); a deleted choice point is announced at once."
             }
           },
           "required": [
@@ -90,7 +90,7 @@
     "choice-point.deleted"
   ],
   "tool": {
-    "description": "Returns the reader's choice points, oldest first: worksheets from acceptance and commitment therapy, each kept with one journal day (its date). Each has the situation (what happened, where and with whom), the thoughts and feelings it brought, away (what the reader did or would do when hooked, moving away from what matters) and towards (what they did or would do when unhooked, moving towards what matters). Give day (YYYY-MM-DD) for one journal day's choice points, or nothing for every day's. One marked removing is about to be deleted.",
+    "description": "Returns the reader's choice points, oldest first: worksheets from acceptance and commitment therapy, each kept with one journal day (its date). Each has the situation (what happened, where and with whom), the thoughts and feelings it brought, away (what the reader did or would do when hooked, moving away from what matters) and towards (what they did or would do when unhooked, moving towards what matters). Give day (YYYY-MM-DD) for one journal day's choice points, or nothing for every day's.",
     "label": "Reading choice points", "title": "Choice points", "group": "Journal", "order": 330
   }
 }

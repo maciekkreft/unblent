@@ -611,21 +611,18 @@ test("spending? answers what the server says; an admin's edit replies and announ
   assert.deepEqual(await query(someone.actor, "spending?", {}, SPENDING.reply), { error: "not-admin" });
 });
 
-test("Block, Unblock, Reset use and its Undo reach the server and announce what guests spent (12)", async () => {
+test("Block, Unblock and Reset use reach the server and announce what guests spent (12)", async () => {
   const h = start({ spending: () => SPENT, edit: () => SPENT });
   await ready(h.actor);
   h.actor.send({ type: "guest.blocked", user: "g1", blocked: true });
   await until(() => h.calls.edit.length === 1);
   h.actor.send({ type: "use.reset", user: "g1" });
   await until(() => h.calls.edit.length === 2);
-  h.actor.send({ type: "use.reset", user: "g1", undone: true });
-  await until(() => h.calls.edit.length === 3);
   h.actor.send({ type: "guest.blocked", user: "g1", blocked: false });
-  await until(() => h.calls.edit.length === 4);
+  await until(() => h.calls.edit.length === 3);
   assert.deepEqual(h.calls.edit, [
     ["blocked", { user: "g1", blocked: true }],
     ["reset", { user: "g1" }],
-    ["reset", { user: "g1", undone: true }],
     ["blocked", { user: "g1", blocked: false }],
   ]);
   await until(() => h.emitted.filter((e) => e.type === "spending.changed").length >= 1);
@@ -636,7 +633,7 @@ test("Block, Unblock, Reset use and its Undo reach the server and announce what 
   h.actor.send({ type: "step.dropped", ...step, payload: { kind: "sync", user: "u1", allowed: true, expect: false } });
   h.actor.send({ type: "step.dropped", ...step, owner: "notes", payload: { kind: "guest", user: "g1", deleted: true } });
   h.actor.send({ type: "step.dropped", ...step, payload: { kind: "guest", user: "g1", deleted: true, expect: false } });
-  await until(() => h.calls.edit.length === 5);
+  await until(() => h.calls.edit.length === 4);
   assert.deepEqual(h.calls.edit.at(-1), ["forget", { user: "g1" }]);
 });
 

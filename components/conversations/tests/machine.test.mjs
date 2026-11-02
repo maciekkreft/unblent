@@ -1172,18 +1172,6 @@ test("a new chat goes first, a message never moves a chat, and a move is saved a
   assert.equal(h.calls.saved.at(-1).id, CHAT2);
 });
 
-test("a delete the corner notice settles removes the chat", async () => {
-  const h = start({ conversations: [heading(CHAT, 500)] });
-  await ready(h);
-  h.actor.send({ type: "removal.settled", kind: "note", id: CHAT });
-  await flush();
-  assert.deepEqual(h.calls.deleted, [], "another kind is not a chat");
-  h.actor.send({ type: "removal.settled", kind: "conversation", id: CHAT });
-  await flush();
-  assert.deepEqual(h.calls.deleted, [CHAT]);
-  assert.equal(h.emitted.at(-1).type, "conversation.deleted");
-});
-
 const GENERATION = JSON.parse(readFileSync(resolve(HERE, "..", "..", "generators", "events", "generation.changed.json"), "utf8"));
 const RENAMED = JSON.parse(readFileSync(resolve(HERE, "..", "..", "conversation-list", "events", "conversation.renamed.json"), "utf8"));
 const generated = (item, text, generator = "chat-title") => {

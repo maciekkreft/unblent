@@ -347,9 +347,7 @@ export const machine = setup({
       "gives `flag` naming a feature is not shown while `flags` reports the feature hidden, " +
       "and until `flags` answers; a page without `flags` hides nothing.",
     kind: "view",
-    // conflict.reopened is no longer sent; it stays declared until the old undo windows
-    // are retired, because `journal` still takes it in.
-    emits: ["day.saved", "day.shown", "book.closed", "passage.selected", "conflict.reopened"],
+    emits: ["day.saved", "day.shown", "book.closed", "passage.selected"],
     attributes: ["height"],
     asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read", "flags: read"],
   },

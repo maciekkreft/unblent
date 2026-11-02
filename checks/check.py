@@ -530,26 +530,26 @@ def check_supersession(manifests: dict) -> None:
 
 # --- Steps check (architecture.md 7.3, 11.2, 12) ----------------------------------
 
-# Section 7.3: "pending" stays allowed until the last part joins Undo (14).
-_STEP_CLASSES = ("step", "follows", "navigation", "spends", "identity", "keys", "undo", "pending")
+# Section 7.3: the classes a user action may have.
+_STEP_CLASSES = ("step", "follows", "navigation", "spends", "identity", "keys", "undo")
 _STEP_WIRING = {"emits": ("step.recorded", "step.settled"), "consumes": ("step.undone", "step.redone")}
 
 
-def steps_breaks(recs: dict, parties: dict) -> tuple:
+def steps_breaks(recs: dict, parties: dict) -> list:
     """Section 4.3's fifth rule makes every user action an event a view emits and a
     fact consumes, so the full set of actions Undo must class is read from the
     manifests (12). Pure over recs ({name: manifest}) and the event parties
-    _contract_parties builds, so a unit test needs no tree. Returns (breaks, pending):
-    breaks a list of (fact, detail), pending the number of "pending" entries."""
+    _contract_parties builds, so a unit test needs no tree. Returns a list of
+    (fact, detail)."""
     events = parties["events"]
     views = {n for n, m in recs.items() if m["meta"].get("kind") == "view"}
-    out, pending = [], 0
+    out = []
     owners = {}
     for name, m in recs.items():
         steps = m["meta"].get("steps")
         if isinstance(steps, dict):
             for ev, cls in steps.items():
-                if cls in ("step", "pending"):
+                if cls == "step":
                     owners.setdefault(ev, set()).add(name)
     for name, m in sorted(recs.items()):
         if m["meta"].get("kind") != "fact":
@@ -573,8 +573,6 @@ def steps_breaks(recs: dict, parties: dict) -> tuple:
                 continue
             if cls not in _STEP_CLASSES:
                 out.append((name, f"`{ev}` is classed {cls!r}; a class is one of " + ", ".join(_STEP_CLASSES)))
-            elif cls == "pending":
-                pending += 1
             elif cls == "step":
                 missing = [e for e in _STEP_WIRING["emits"] if e not in m["meta"].get("emits", [])]
                 missing += [e for e in _STEP_WIRING["consumes"] if e not in m["consumes"]]
@@ -582,21 +580,17 @@ def steps_breaks(recs: dict, parties: dict) -> tuple:
                     out.append((name, f"`{ev}` is a step, so `{name}` must emit step.recorded and step.settled "
                                       f"and consume step.undone and step.redone; missing: {', '.join(missing)}"))
             elif cls == "follows":
-                # A "pending" owner counts: its step is coming, and the follower's class is final.
                 if not owners.get(ev, set()) - {name}:
                     out.append((name, f"`{ev}` follows a step, but no other fact marks `{ev}` as a step"))
-    return out, pending
+    return out
 
 
 def check_steps(manifests: dict) -> None:
     """Section 11.2, 12: every user action is classed for Undo. Defers the decision to
-    steps_breaks and prints how many actions still wait to become steps (14)."""
+    steps_breaks."""
     recs = {Path(p).parent.name: m for p, m in manifests.items()}
-    breaks, pending = steps_breaks(recs, _contract_parties(manifests))
-    for name, detail in breaks:
+    for name, detail in steps_breaks(recs, _contract_parties(manifests)):
         fail(f"components/{name}/machine.js", "steps check (11.2)", detail)
-    if pending:
-        print(f"steps: {pending} user actions are pending, not yet steps (architecture 14)")
 
 
 # --- Schema compatibility check (architecture.md 7.1, 7.2, 11.2) -----------------

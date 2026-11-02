@@ -108,7 +108,7 @@
                         },
                         "removing": {
                           "type": "boolean",
-                          "description": "The option waits out its undo window (removal.started)."
+                          "description": "False, kept because a contract only grows (7.1); true only for a mark left in this browser by the undo window of before, until the next load."
                         },
                         "icon": {
                           "type": "string",
@@ -129,7 +129,7 @@
                   },
                   "removing": {
                     "type": "boolean",
-                    "description": "The question waits out its undo window (removal.started)."
+                    "description": "False, kept because a contract only grows (7.1); true only for a mark left in this browser by the undo window of before, until the next load."
                   },
                   "expect": {
                     "type": "string",
@@ -167,7 +167,7 @@
             },
             "removing": {
               "type": "boolean",
-              "description": "The evaluator waits out its undo window (removal.started)."
+              "description": "False, kept because a contract only grows (7.1); true only for a mark left in this browser by the undo window of before, until the next load."
             },
             "starterFor": {
               "type": "array",

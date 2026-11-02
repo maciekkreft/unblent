@@ -22,15 +22,6 @@ const POPOVER_GAP = 6;
 // selection is adjusted with handles that send no pointer events, only selection changes.
 const TOUCH_SETTLE_MS = 700;
 
-// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
-// the token is the one clock (7.4).
-const toMs = (text, fallback = 3000) => {
-  const t = (text || "").trim();
-  const n = parseFloat(t);
-  if (Number.isNaN(n)) return fallback;
-  return t.endsWith("ms") ? n : n * 1000;
-};
-
 // The comments of an answer, numbered in reading order; its highlights carry no number.
 const numberedOf = (marking) => (marking.highlights ? marking.list.filter((m) => !marking.highlights.has(m.id)) : marking.list);
 
@@ -42,7 +33,6 @@ class ActorController {
   }
 
   hostConnected() {
-    const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     // 4.1: a page may hold this view twice (the Chats panel and the stage), so each
     // mounts and asks under its own id.
     const instance = this.host.id || undefined;
@@ -52,7 +42,6 @@ class ActorController {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload, instance),
         mint: ulid,
-        undoMs,
         // Parsed by the time hostConnected runs, so the actor is born knowing it.
         staged: this.host.hasAttribute("stage"),
       },
@@ -400,10 +389,6 @@ class ChatThread extends LitElement {
     mark.open {
       box-shadow: inset 0 calc(var(--border-width) * -2) 0 var(--color-accent);
     }
-    mark.removing,
-    .comments li.removing .body {
-      opacity: 0.4;
-    }
     sup.num {
       padding-left: var(--space-2xs);
       font-size: var(--text-caption);
@@ -486,12 +471,6 @@ class ChatThread extends LitElement {
       color: var(--color-danger);
       background: var(--color-surface-hover);
     }
-    .act.undo {
-      color: var(--color-accent);
-    }
-    .act.undo:hover {
-      color: var(--color-accent);
-    }
     .act:focus-visible,
     button.text:focus-visible {
       outline: none;
@@ -538,7 +517,7 @@ class ChatThread extends LitElement {
       padding: var(--space-2xs);
       color: var(--color-mute);
     }
-    /* A highlight's bubble: one action, Remove, then Undo for the undo window. */
+    /* A highlight's bubble: one action, Remove. */
     .popover.bubble {
       width: auto;
       align-items: center;
@@ -550,10 +529,6 @@ class ChatThread extends LitElement {
       align-items: center;
       gap: var(--space-2xs);
       padding: var(--space-2xs) var(--space-xs);
-    }
-    .bubble .removed {
-      padding-left: var(--space-xs);
-      color: var(--color-body-mid);
     }
     /* A message sent with comments says so above its text. */
     .turn.user .sent-marks {
@@ -948,31 +923,24 @@ class ChatThread extends LitElement {
   #editable(snapshot) {
     const { context } = snapshot;
     const draft = snapshot.matches({ showing: "commenting" }) ? context.draft : null;
-    // A removed comment is already off the saved list; it stays dimmed until its undo
-    // window ends.
     const answerId = lastAnswer(context.conversation)?.id;
-    const removed = [...context.discarding.values()].filter((d) => d.answerId === answerId).map((d) => d.mark);
     const byStart = (a, b) => a.start - b.start;
-    const unhighlighted = [...context.unhighlighting.values()].filter((h) => h.answerId === answerId);
-    const own = [...highlightsOf(context.conversation, answerId), ...unhighlighted];
-    const list = [...marks({ conversation: context.conversation, draft }), ...removed, ...own].sort(byStart);
-    const comments = [...savedMarks(context.conversation).map((m) => (m.id === draft?.id ? { ...m, comment: draft.comment } : m)), ...removed].sort(byStart);
+    const own = highlightsOf(context.conversation, answerId);
+    const list = [...marks({ conversation: context.conversation, draft }), ...own].sort(byStart);
+    const comments = savedMarks(context.conversation).map((m) => (m.id === draft?.id ? { ...m, comment: draft.comment } : m)).sort(byStart);
     const highlights = new Set(own.map((h) => h.id));
     const chosen = highlights.has(context.chosen) ? context.chosen : null;
-    // A comment and a highlight each fade in their own undo window.
-    const discarding = new Map([...context.discarding, ...context.unhighlighting]);
-    return { list, comments, markable: true, selectable: true, draft, discarding, highlights, chosen };
+    return { list, comments, markable: true, selectable: true, draft, highlights, chosen };
   }
 
-  // What an earlier answer paints: its highlights, one in its undo window dimmed, beside
+  // What an earlier answer paints: its highlights, beside
   // the comments that went with the next message, which stay numbered and read only.
   #highlighting(snapshot, answerId, sent) {
     const { context } = snapshot;
-    const removed = [...context.unhighlighting.values()].filter((h) => h.answerId === answerId);
-    const own = [...highlightsOf(context.conversation, answerId), ...removed];
+    const own = highlightsOf(context.conversation, answerId);
     const list = [...sent, ...own].sort((a, b) => a.start - b.start);
     const chosen = own.some((h) => h.id === context.chosen) ? context.chosen : null;
-    return { list, comments: sent, markable: false, selectable: true, highlights: new Set(own.map((h) => h.id)), chosen, discarding: context.unhighlighting };
+    return { list, comments: sent, markable: false, selectable: true, highlights: new Set(own.map((h) => h.id)), chosen };
   }
 
   // The reader's own message. A turn that only carries tool results has no text (7.7): it
@@ -1183,49 +1151,43 @@ class ChatThread extends LitElement {
       // A highlight carries no number; it is the user's own, not a comment.
       if (marking.highlights?.has(p.id)) {
         const state = p.id === marking.chosen ? " open" : "";
-        return html`<mark data-id=${p.id} class=${`hl${state}${marking.discarding.has(p.id) ? " removing" : ""}`}>${text}</mark>`;
+        return html`<mark data-id=${p.id} class=${`hl${state}`}>${text}</mark>`;
       }
       const numbered = numberedOf(marking);
       const n = numbered.findIndex((m) => m.id === p.id);
       const end = p.s + p.text.length >= numbered[n].end;
-      const cls = p.id === marking.draft?.id ? "open" : marking.discarding?.has(p.id) ? "removing" : "";
+      const cls = p.id === marking.draft?.id ? "open" : "";
       return html`<mark data-id=${p.id} class=${cls}>${text}</mark>${end ? html`<sup class="num">${n + 1}</sup>` : nothing}`;
     });
   }
 
   // The list under the answer: number, passage, comment. On the last answer a comment
-  // opens to be edited and has Remove, which waits out the undo window with Undo; a
-  // sent answer's list is read only.
+  // opens to be edited and has Remove (the global Undo takes it back, 12); a sent
+  // answer's list is read only.
   #comments(marking) {
     const { list, comments, markable } = marking;
     if (!comments.length) return nothing;
     const number = (id) => numberedOf(marking).findIndex((m) => m.id === id) + 1;
     return html`<ol class="comments" aria-label="Comments on this answer">
       ${comments.map((m) => {
-        const removing = markable && marking.discarding.has(m.id);
         const comment = markable
           ? html`<button class="text" title="Edit comment" @click=${() => this.#actor.send({ type: "_opened", id: m.id })}>${m.comment}</button>`
           : html`<p class="text">${m.comment}</p>`;
-        return html`<li class=${removing ? "removing" : ""} data-id=${m.id}>
+        return html`<li data-id=${m.id}>
           <span class="n">${number(m.id)}</span>
           <div class="body">
             <span class="quote">${m.quote}</span>
             ${comment}
           </div>
-          ${!markable
-            ? nothing
-            : removing
-              ? html`<span class="removed">Removed.</span><button class="act undo" @click=${() => this.#actor.send({ type: "_undo", id: m.id })}>Undo</button>`
-              : html`<button class="act remove" @click=${() => this.#actor.send({ type: "_remove", id: m.id })}>Remove</button>`}
+          ${markable ? html`<button class="act remove" @click=${() => this.#actor.send({ type: "_remove", id: m.id })}>Remove</button>` : nothing}
         </li>`;
       })}
     </ol>`;
   }
 
-  // A highlight's bubble: Remove, and while the removal can be taken back, Undo.
+  // A highlight's bubble: Remove (the global Undo takes it back, 12).
   #bubble(marking) {
     const id = marking.chosen;
-    const removing = marking.discarding.has(id);
     return html`
       <div
         class="popover bubble"
@@ -1239,12 +1201,9 @@ class ChatThread extends LitElement {
           this.renderRoot.querySelector(".transcript")?.focus({ preventScroll: true });
         }}
       >
-        ${removing
-          ? html`<span class="removed">Removed.</span
-              ><button class="act undo" @click=${() => this.#actor.send({ type: "_rehighlight", id })}>Undo</button>`
-          : html`<button class="act remove" @click=${() => this.#actor.send({ type: "_unhighlight", id })}>
-              ${icon("trash-simple")} Remove highlight
-            </button>`}
+        <button class="act remove" @click=${() => this.#actor.send({ type: "_unhighlight", id })}>
+          ${icon("trash-simple")} Remove highlight
+        </button>
       </div>
     `;
   }
@@ -1400,10 +1359,8 @@ class ChatThread extends LitElement {
       return;
     }
     this.#positionPopover(chosen, ".bubble");
-    // Remove and Undo replace each other, so the keys follow to the new button.
-    const shown = `${chosen}:${snapshot.context.unhighlighting.has(chosen)}`;
-    if (this.#bubbleFor === shown) return;
-    this.#bubbleFor = shown;
+    if (this.#bubbleFor === chosen) return;
+    this.#bubbleFor = chosen;
     this.renderRoot.querySelector(".bubble button")?.focus({ preventScroll: true });
   }
 

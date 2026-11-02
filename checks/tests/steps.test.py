@@ -48,28 +48,23 @@ def wired_pair(cls="step"):
 
 class Ok(unittest.TestCase):
     def test_a_wired_step_passes(self):
-        self.assertEqual(breaks(wired_pair()), ([], 0))
-
-    def test_pending_is_counted_not_failed(self):
-        recs = {"sheet": view(emits=["thing.saved"]),
-                "things": fact(consumes=["thing.saved"], steps={"thing.saved": "pending"})}
-        self.assertEqual(breaks(recs), ([], 1))
+        self.assertEqual(breaks(wired_pair()), [])
 
     def test_an_event_from_a_fact_needs_no_class(self):
         recs = {"clock": fact(emits=["day.changed"]), "things": fact(consumes=["day.changed"])}
-        self.assertEqual(breaks(recs), ([], 0))
+        self.assertEqual(breaks(recs), [])
 
-    def test_follows_a_pending_owner_passes(self):
-        recs = wired_pair("pending")
+    def test_follows_a_step_owner_passes(self):
+        recs = wired_pair()
         recs["checks"] = fact(consumes=["thing.saved"], steps={"thing.saved": "follows"})
-        self.assertEqual(breaks(recs), ([], 1))
+        self.assertEqual(breaks(recs), [])
 
 
 class Breaks(unittest.TestCase):
     def test_missing_entry(self):
         recs = wired_pair()
         recs["things"]["meta"]["steps"] = {}
-        out, _ = breaks(recs)
+        out = breaks(recs)
         self.assertEqual(out, [("zz-things",
             "`zz-things` takes in `thing.saved` from `zz-sheet`: say in `steps` of "
             "`components/zz-things/machine.js` whether it is a step (architecture 12)")])
@@ -77,12 +72,12 @@ class Breaks(unittest.TestCase):
     def test_stale_key(self):
         recs = wired_pair()
         recs["things"]["meta"]["steps"]["thing.gone"] = "navigation"
-        out, _ = breaks(recs)
+        out = breaks(recs)
         self.assertEqual(len(out), 1)
         self.assertIn("`thing.gone` in `steps` is not an event", out[0][1])
 
     def test_bad_value(self):
-        out, _ = breaks(wired_pair("maybe"))
+        out = breaks(wired_pair("maybe"))
         self.assertEqual(len(out), 1)
         self.assertIn("classed 'maybe'", out[0][1])
 
@@ -90,20 +85,25 @@ class Breaks(unittest.TestCase):
         recs = {"sheet": view(emits=["thing.saved"]),
                 "things": fact(emits=["step.recorded"], consumes=["thing.saved", "step.undone"],
                                steps={"thing.saved": "step"})}
-        out, _ = breaks(recs)
+        out = breaks(recs)
         self.assertEqual(len(out), 1)
         self.assertIn("missing: step.settled, step.redone", out[0][1])
+
+    def test_pending_is_no_class_any_more(self):
+        out = breaks(wired_pair("pending"))
+        self.assertEqual(len(out), 1)
+        self.assertIn("classed 'pending'", out[0][1])
 
     def test_follows_with_no_step_owner(self):
         recs = {"sheet": view(emits=["thing.saved"]),
                 "things": fact(consumes=["thing.saved"], steps={"thing.saved": "navigation"}),
                 "checks": fact(consumes=["thing.saved"], steps={"thing.saved": "follows"})}
-        out, _ = breaks(recs)
+        out = breaks(recs)
         self.assertEqual(out[0][0], "zz-checks")
         self.assertIn("no other fact marks `thing.saved` as a step", out[0][1])
 
     def test_steps_not_a_mapping(self):
-        out, _ = breaks({"things": fact(steps=["thing.saved"])})
+        out = breaks({"things": fact(steps=["thing.saved"])})
         self.assertIn("meta.steps must map", out[0][1])
 
     def test_steps_on_a_view(self):

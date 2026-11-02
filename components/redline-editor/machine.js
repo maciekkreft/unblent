@@ -1,7 +1,7 @@
 import { setup, assign, fromPromise, enqueueActions } from "xstate";
 
 // The view component where a pasted markdown text is read and commented (8, the Review
-// app): it owns only UI state — the comment being written, the undo windows — and
+// app): it owns only UI state — the comment being written — and
 // points at `redline`, which owns the text and the comments. It asks redline: read for
 // the starting picture and follows redline.changed after (4.3); every gesture that
 // changes the redline is emitted as the whole redline in redline.saved (4.3, fifth rule).
@@ -383,9 +383,7 @@ const canSelect = ({ context, event }) => {
   const range = trimRange(context.redline.text, event.start, event.end);
   return range != null && !overlaps(occupied(context), range.start, range.end);
 };
-const isComment = ({ context, event }) =>
-  Boolean(context.redline?.comments.some((c) => c.id === event.id)) && !context.discarding.has(event.id);
-const isDiscarding = ({ context, event }) => context.discarding.has(event.id);
+const isComment = ({ context, event }) => Boolean(context.redline?.comments.some((c) => c.id === event.id));
 const typed = assign({ draft: ({ context, event }) => ({ ...context.draft, text: event.text }) });
 const save = enqueueActions(({ context, enqueue }) => {
   const next = closing(context);
@@ -395,15 +393,6 @@ const save = enqueueActions(({ context, enqueue }) => {
   }
 });
 
-const without = (set, id) => {
-  const next = new Set(set);
-  next.delete(id);
-  return next;
-};
-const undo = enqueueActions(({ event, enqueue }) => {
-  enqueue.cancel(`undo:${event.id}`);
-  enqueue.assign({ discarding: ({ context }) => without(context.discarding, event.id) });
-});
 
 export const machine = setup({
   actors: {
@@ -411,7 +400,8 @@ export const machine = setup({
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
-    undo: ({ context }) => context.undoMs,
+    // How long the paste-refused hint stays: the --duration-undo token, read in the view.
+    hint: ({ context }) => context.undoMs,
   },
 }).createMachine({
   id: "redline-editor",
@@ -420,8 +410,9 @@ export const machine = setup({
       "The Review app's editor: the user pastes a markdown text, reads it formatted, selects a " +
       "passage and writes a comment on it. A selection on the formatted page maps back to the " +
       "exact characters of the pasted text, because a comment belongs to the text and not to " +
-      "the page. Removing a comment waits out the undo window. Closing a comment says the user " +
-      "left it, so what was typed in it is one step for Undo (section 12).",
+      "the page. Removing a comment and New text happen at once; each is one step the top bar's " +
+      "Undo takes back (section 12). Closing a comment says the user left it, so what was " +
+      "typed in it is one step for Undo.",
     kind: "view", emits: ["redline.saved"], attributes: [], asks: ["redline: read"],
   },
   context: ({ input }) => ({
@@ -431,7 +422,6 @@ export const machine = setup({
     throttleMs: input.throttleMs ?? 200,
     redline: null,
     draft: null,
-    discarding: new Set(),
   }),
   initial: "loading",
   on: {
@@ -474,7 +464,7 @@ export const machine = setup({
         idle: { on: { _pasteRefused: "refused" } },
         // The browser would not hand over the clipboard: say so for a moment, and how
         // to paste instead.
-        refused: { after: { undo: "idle" }, on: { _pasteRefused: { target: "refused", reenter: true } } },
+        refused: { after: { hint: "idle" }, on: { _pasteRefused: { target: "refused", reenter: true } } },
       },
     },
     marking: {
@@ -485,34 +475,31 @@ export const machine = setup({
           { guard: ({ event }) => event.redline == null, target: "empty", actions: assign({ redline: null, draft: null }) },
           { actions: assign({ redline: ({ event }) => event.redline }) },
         ],
-        // A comment's ×: the popover closes and the mark dims for the undo window; only
-        // its end removes the comment. A comment never saved is simply dropped.
+        // A comment's ×: the popover closes and the comment is removed at once, one step
+        // `redline` records (12, Undo). A comment never saved is simply dropped.
         _remove: [
           {
-            guard: ({ context, event }) => context.redline.comments.some((c) => c.id === event.id) && !context.discarding.has(event.id),
+            guard: isComment,
             target: ".idle",
-            actions: enqueueActions(({ event, enqueue }) => {
-              enqueue.assign({ draft: null });
-              enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
-              enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });
+            actions: enqueueActions(({ context, event, enqueue }) => {
+              const next = withoutComment(context.redline, event.id);
+              enqueue.assign({ draft: null, redline: next });
+              enqueue.emit(saved(next));
             }),
           },
           { guard: ({ context, event }) => context.draft?.id === event.id, target: ".idle", actions: assign({ draft: null }) },
         ],
-        _undo: { guard: isDiscarding, actions: undo },
-        _elapsed: {
-          guard: isDiscarding,
-          actions: enqueueActions(({ context, event, enqueue }) => {
-            enqueue.assign({ discarding: without(context.discarding, event.id) });
-            if (!context.redline.comments.some((c) => c.id === event.id)) return;
-            const next = withoutComment(context.redline, event.id);
-            enqueue.assign({ redline: next });
-            enqueue.emit(saved(next));
-          }),
+        // New text: the text is cleared at once, one step `redline` records (12, Undo).
+        _clear: {
+          target: "empty",
+          actions: [
+            closeDraft,
+            enqueueActions(({ enqueue }) => {
+              enqueue.assign({ redline: null });
+              enqueue.emit({ type: "redline.saved", text: "", comments: [] });
+            }),
+          ],
         },
-        // New text: the page empties at once, and the text is only cleared when the
-        // undo window ends.
-        _clear: { target: "clearing", actions: closeDraft },
       },
       states: {
         idle: {
@@ -521,11 +508,8 @@ export const machine = setup({
               { guard: ({ context, event }) => canSelect({ context, event }) && Boolean(event.text), target: "commenting.dirty", actions: openSelection },
               { guard: canSelect, target: "commenting", actions: openSelection },
             ],
-            // A click on a comment's mark opens it; on a dimmed one, it is the undo.
-            _opened: [
-              { guard: isDiscarding, actions: undo },
-              { guard: isComment, target: "commenting", actions: openComment },
-            ],
+            // A click on a comment's mark opens it.
+            _opened: { guard: isComment, target: "commenting", actions: openComment },
           },
         },
         commenting: {
@@ -537,7 +521,6 @@ export const machine = setup({
               { guard: canSelect, target: "commenting", reenter: true, actions: [closeDraft, openSelection] },
             ],
             _opened: [
-              { guard: isDiscarding, actions: undo },
               { guard: ({ context, event }) => event.id === context.draft?.id },
               { guard: isComment, target: "commenting", reenter: true, actions: [closeDraft, openComment] },
             ],
@@ -553,34 +536,6 @@ export const machine = setup({
               after: { throttle: { target: "clean", actions: save } },
             },
           },
-        },
-      },
-    },
-    // The page shows empty with an undo; a paste in the meantime replaces the text.
-    clearing: {
-      on: {
-        _undoClear: "marking",
-        _pasted: {
-          guard: ({ event }) => normaliseText(event.text).trim() !== "",
-          target: "marking",
-          actions: enqueueActions(({ event, enqueue }) => {
-            const redline = { text: normaliseText(event.text), comments: [] };
-            enqueue.assign({ redline });
-            enqueue.emit(saved(redline));
-          }),
-        },
-        "redline.changed": [
-          { guard: ({ event }) => event.redline == null, target: "empty", actions: assign({ redline: null }) },
-          { actions: assign({ redline: ({ event }) => event.redline }) },
-        ],
-      },
-      after: {
-        undo: {
-          target: "empty",
-          actions: enqueueActions(({ enqueue }) => {
-            enqueue.assign({ redline: null });
-            enqueue.emit({ type: "redline.saved", text: "", comments: [] });
-          }),
         },
       },
     },

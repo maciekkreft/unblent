@@ -494,8 +494,6 @@ const entry = (d, prior = d.step) => ({
 const before = (e, step) => e.prior ?? `^${step}`;
 
 // A choice is one step, shown with the short notice since it deletes a copy (12, Undo).
-// It is also remembered, until the next change to that day, as the records it changed
-// and the conflict it settled, so conflict.reopened can put both back (reopened).
 const saved = enqueueActions(({ context, event, enqueue }) => {
   const choice = kept(context, event);
   if (choice) {
@@ -503,11 +501,10 @@ const saved = enqueueActions(({ context, event, enqueue }) => {
     const pending = new Map(context.pending);
     pending.delete(event.id);
     const was = context.days.filter((d) => d.id === event.id || d.id === settled.other);
-    const undo = new Map(context.undo).set(event.id, { before: was, text: event.text, other: settled.other, told: settled.told });
     const step = context.mintStep();
     const touched = new Set(was.map((d) => d.id));
     const next = choice.map((d) => (touched.has(d.id) ? { ...d, step } : d));
-    enqueue.assign({ pending, undo, stretch: null });
+    enqueue.assign({ pending, stretch: null });
     update({ ...context, pending }, enqueue, next, event.id);
     enqueue.emit({
       type: "step.recorded",
@@ -526,11 +523,6 @@ const saved = enqueueActions(({ context, event, enqueue }) => {
   if (!days) {
     if (event.left && open?.day === event.id) enqueue.assign({ stretch: null });
     return;
-  }
-  if (context.undo.has(event.id)) {
-    const undo = new Map(context.undo);
-    undo.delete(event.id);
-    enqueue.assign({ undo });
   }
   // One stretch of typing in today's page is one step, from the first save until the
   // editor says the user left it; a save while that stretch last wrote the day joins it.
@@ -590,33 +582,6 @@ const applyStep = enqueueActions(({ context, event, enqueue }) => {
   update({ ...context, pending }, enqueue, mint(context.days, next), settled);
   if (told) enqueue.emit({ type: "journal.conflicted", ...told });
   settle("applied");
-});
-
-// The user took back a choice (conflict.reopened): the day the conflict named gets back
-// the text and time of last edit it had, and both copies are put to the page again. The
-// other record of a date was deleted, and on the server a delete always wins (5), so it
-// cannot come back under its own id: its text returns as a new record of the same date,
-// written at the same time, which the journal shows exactly as it showed the deleted one.
-// Taken back only while the day still holds the copy that was kept, and only for the
-// conflict the page names.
-const reopened = enqueueActions(({ context, event, enqueue }) => {
-  const choice = context.undo.get(event.id);
-  if (!choice || choice.told.mine.text !== event.mine || choice.told.theirs.text !== event.theirs) return;
-  const undo = new Map(context.undo);
-  undo.delete(event.id);
-  enqueue.assign({ undo });
-  const day = context.days.find((d) => d.id === event.id && !d.deleted);
-  const was = choice.before.find((d) => d.id === event.id);
-  if (!day || !was || day.text !== choice.text) return;
-  const gone = choice.before.find((d) => d.id === choice.other);
-  const next = context.days.map((d) => (d.id === event.id ? { ...d, text: was.text, editedAt: was.editedAt } : d));
-  if (gone) next.push({ id: context.mint(), day: gone.day, text: gone.text, editedAt: gone.editedAt, version: 1 });
-  // Two records of one date are told again by update, as any clash is (tell); a day
-  // saved on two devices is told again here, as the server's conflict was.
-  const pending = gone ? context.pending : new Map(context.pending).set(event.id, { copies: [event.mine, event.theirs], other: null, told: choice.told });
-  if (!gone) enqueue.assign({ pending });
-  update({ ...context, pending }, enqueue, mint(context.days, next));
-  if (!gone) enqueue.emit({ type: "journal.conflicted", ...choice.told });
 });
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
@@ -787,12 +752,11 @@ export const machine = setup({
       "record with a restore write the server accepts, and puts both copies to the page again, " +
       "also on a closed day. Typing in a day can be undone only while the day can be written: " +
       "after 2:00 it is refused as closed. A step is refused when a day it names was written " +
-      "since by anything else. Taking a choice back through conflict.reopened still works " +
-      "until that event is retired.",
+      "since by anything else.",
     kind: "fact",
     shape: "replicated",
     owns: "the journal's days",
-    steps: { "day.saved": "step", "day.shown": "navigation", "conflict.reopened": "pending" },
+    steps: { "day.saved": "step", "day.shown": "navigation" },
     emits: ["journal.changed", "journal.conflicted", "step.recorded", "step.settled"],
     asks: ["session: read", "generators: results"],
   },
@@ -807,9 +771,6 @@ export const machine = setup({
     // The conflicts announced and not yet settled, by the id they named: the two copies'
     // texts and, for two records of one date, the other record's id (kept).
     pending: new Map(),
-    // The choices that can still be taken back (conflict.reopened), by the day's id: the
-    // records as they were before, the kept text, the other record's id and the conflict.
-    undo: new Map(),
     userId: null,
     cursor: 0,
     outbox: new Map(),
@@ -824,8 +785,6 @@ export const machine = setup({
     pull: false,
     store: input.store,
     now: input.now,
-    // Mints the id of a record put back as a new one (reopened).
-    mint: input.mint,
     mintStep: input.mintStep ?? ulid,
     // The stretch of typing still open (12, Undo): { id, day, before }, the step's id, the
     // day typed in and that day as it was before the stretch; null when none is.
@@ -906,7 +865,6 @@ export const machine = setup({
         "generation.changed": { actions: summarised },
         "index?": { actions: ({ context, event }) => event.reply(indexOf(context, event.payload)) },
         "day.saved": { actions: saved },
-        "conflict.reopened": { actions: reopened },
         "step.undone": { actions: applyStep },
         "step.redone": { actions: applyStep },
         // The outbox drains only while someone is signed in (5); signing out keeps it,

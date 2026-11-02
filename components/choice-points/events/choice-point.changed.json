@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A choice point now looks like this: the whole choice point (4, third rule), pending until the server acknowledges it (5), and marked removing while it waits out an undo window.",
+  "description": "A choice point now looks like this: the whole choice point (4, third rule), pending until the server acknowledges it (5); `removing` is always false.",
   "type": "object",
   "properties": {
     "choicePoint": {
@@ -46,7 +46,7 @@
         },
         "removing": {
           "type": "boolean",
-          "description": "The choice point waits out its undo window (removal.started)."
+          "description": "Always false: kept because a contract only grows (7.1); a deleted choice point is announced at once."
         }
       },
       "required": [

@@ -21,8 +21,9 @@ const YOURS_ID = "0000000000000000000000YVAS";
 // --- Records --------------------------------------------------------------------------
 
 // Each part in one fixed shape and key order, so two copies of the same content compare
-// equal as text. `removing` marks an item in this tab's undo window; it is kept in the
-// cache (so a leftover mark settles at the next load) but never sent to the server.
+// equal as text. `removing` stays in the announced shape because a contract only grows
+// (7.1); only a mark left in this browser's cache by the undo window of before is ever
+// true, and it settles at the next load (settleAll). It is never sent to the server.
 // An option's icon is kept only when it names one, and absent otherwise, so an option
 // that never had one compares equal to one kept from before icons were offered.
 const option = (o) =>
@@ -52,10 +53,10 @@ const question = (q) =>
     : null;
 
 // The expected answer holds only while it names an answer the question has: yes or no,
-// or one of its options (marked ones too, so an Undo brings it back), whichever kind the
+// or one of its options, whichever kind the
 // question is now; the options are kept across a switch of kind, and so is the
 // expectation, so switching back brings it back (a reader honours it only for its kind).
-// A settled removal of its option takes it away.
+// Removing its option takes it away.
 const fitExpect = (q) => {
   const { expect, ...rest } = q;
   const holds = expect === "yes" || expect === "no" || q.options.some((o) => o.id === expect);
@@ -157,8 +158,8 @@ const hasContent = (row) => row != null && "name" in row;
 const bare = (questions) =>
   questions.map(({ removing, options, ...q }) => ({ ...q, options: options.map(({ removing: _, ...o }) => o) }));
 
-// What a write carries, and what decides whether a change is a new version. The marks
-// belong to this tab's undo window, so setting or clearing one is not a change.
+// What a write carries, and what decides whether a change is a new version. A mark is
+// never sent, so clearing one is not a change.
 const content = (r) => ({
   book: r.book,
   name: r.name,
@@ -313,7 +314,7 @@ const expectedOf = (q) =>
   q.kind === "pick" ? liveOptions(q).find((o) => o.id === q.expect)?.name : q.expect === "yes" ? "Yes" : q.expect === "no" ? "No" : undefined;
 
 // An evaluator the chat may use: any of the account's, switched on or not, since the
-// chat's own switch in Settings decides (7.7); not in its undo window, with a question to
+// chat's own switch in Settings decides (7.7); not deleted, with a question to
 // ask, its questions as announced (Your values' from the values given).
 function usable(context, r, values) {
   if (!r || r.removing) return null;
@@ -432,20 +433,6 @@ function replyEvaluate(context, payload, reply) {
   else run(null);
 }
 
-// The incoming list with every marked item of the old list that it left out put back
-// after the nearest item before it that is still there, so a save never drops what is
-// still in its undo window. An incoming item marked in the old list stays marked.
-const keepMarked = (old, incoming) => {
-  const marked = new Set(old.filter((x) => x.removing).map((x) => x.id));
-  const out = incoming.map((x) => (marked.has(x.id) ? { ...x, removing: true } : x));
-  old.forEach((x, i) => {
-    if (!x.removing || out.some((y) => y.id === x.id)) return;
-    const before = old.slice(0, i).reverse().find((p) => out.some((y) => y.id === p.id));
-    out.splice(before ? out.findIndex((y) => y.id === before.id) + 1 : 0, 0, x);
-  });
-  return out;
-};
-
 // --- Changes --------------------------------------------------------------------------
 
 // The one place a changed record is kept, stored and announced. A change of content is
@@ -500,8 +487,8 @@ const live = (context, id) => {
 };
 
 // A new id adds an evaluator to its book, switched on; a save to one already kept
-// changes its name and its questions, keeps its book and its tick, and keeps whatever
-// of it is still in its undo window. A deleted id stays deleted (5).
+// changes its name and its questions, and keeps its book and its tick. A deleted id
+// stays deleted (5).
 // A `journal` field in a save or a stored row is no longer read: the schemas keep it
 // because contracts only grow (7.1), and a write leaving it out keeps the server's.
 // Every save is a step (12, Undo); typing on in the one field the step last wrote joins
@@ -531,13 +518,7 @@ function saveOnce(context, event, enqueue) {
     context.added = { id: next.id, step: step.id, before: step.before };
     return enqueue.assign({ added: context.added });
   }
-  const questions = keepMarked(
-    was.questions,
-    questionsOf(event.questions).map((q) => {
-      const old = was.questions.find((x) => x.id === q.id);
-      return { ...q, options: keepMarked(old ? old.options : [], q.options) };
-    }),
-  );
+  const questions = questionsOf(event.questions);
   // A save from an editor without the description field keeps the one held.
   const description = typeof event.description === "string" ? event.description : was.description;
   const next = { ...was, name: str(event.name), description, questions };
@@ -685,23 +666,8 @@ function applySwitch(context, { id, on }, enqueue) {
   });
 }
 
-// Sets `removing` on the one item of `kind` named by `id`, wherever it sits. An id that
-// is not one of the evaluators' own matches nothing, so other facts' removals pass by.
-function applyMark(context, { kind, id }, removing, enqueue) {
-  const set = (x) => (x.id === id ? { ...x, removing } : x);
-  // Your values cannot be deleted, and its questions are its values'.
-  for (const r of [...context.evaluators.values()].filter((x) => visible(x) && x.id !== YOURS)) {
-    let next = null;
-    if (kind === "evaluator" && r.id === id) next = set(r);
-    else if (kind === "question" && r.questions.some((q) => q.id === id)) next = { ...r, questions: r.questions.map(set) };
-    else if (kind === "option" && r.questions.some((q) => q.options.some((o) => o.id === id)))
-      next = { ...r, questions: r.questions.map((q) => ({ ...q, options: q.options.map(set) })) };
-    if (next && JSON.stringify(next) !== JSON.stringify(r)) commit(context, enqueue, next);
-  }
-}
-
-// A settled removal makes a tombstone of an evaluator, and drops a question or an option
-// from its evaluator. Only an item still marked settles: one that was undone stays.
+// A mark left by the undo window of before makes a tombstone of an evaluator, and drops
+// a question or an option from its evaluator.
 function applySettle(context, { kind, id }, enqueue) {
   const marked = (x) => x.id === id && x.removing;
   const keep = (x) => !marked(x);
@@ -902,8 +868,8 @@ function applyStep(context, event, enqueue) {
   settle("refused", "changed");
 }
 
-// At load no tab can undo anything any more, because the tab that showed the undo
-// notice is gone, so every leftover mark settles.
+// At load every mark left in this browser by the undo window of before settles, as that
+// window running out would have.
 function settleAll(context, enqueue) {
   const all = [...context.evaluators.values()].filter(visible);
   for (const r of all) {
@@ -924,8 +890,6 @@ function flush(context, message, enqueue) {
   else if (message.type === "evaluator.switched") applySwitch(context, message, enqueue);
   else if (message.type === "evaluator.moved") applyMove(context, message, enqueue);
   else if (message.type === "starter.ticked") applyTick(context, message, enqueue);
-  else if (message.type === "removal.undone") applyMark(context, message, false, enqueue);
-  else if (message.type === "removal.settled") applySettle(context, message, enqueue);
   else if (message.type === "trial.restarted") startOver(context, enqueue);
   else if (message.type === "evaluator.discarded") applyDiscard(context, message, enqueue);
   else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
@@ -939,7 +903,7 @@ function unanswerable(message) {
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "active?", "evaluate?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.undone", "removal.settled", "trial.restarted", "evaluator.discarded", "step.undone", "step.redone"].map((t) => [t, { actions: queue }]),
+  ["list?", "active?", "evaluate?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "trial.restarted", "evaluator.discarded", "step.undone", "step.redone"].map((t) => [t, { actions: queue }]),
 );
 
 // A visitor on a try page (8) with nothing in this browser yet gets the page's
@@ -1107,7 +1071,7 @@ export const machine = setup({
       "each a yes / no question with what yes and no mean, or a pick-one question with its " +
       "options, each option with an optional icon its mark on a choice point line shows; a " +
       "question may name the answer expected (an option, or yes or no), kept across a switch " +
-      "of kind and back, which a removed option takes with it once its removal settles; and it is switched on or off, which only the Evaluate box of a try page reads. Each question is switched on or off too: one " +
+      "of kind and back, which a removed option takes with it; and it is switched on or off, which only the Evaluate box of a try page reads. Each question is switched on or off too: one " +
       "switched off is kept, with its wording, but not asked, and a question without the " +
       "switch counts as on. Each evaluator is stored with a book, as from before evaluators " +
       "belonged to the account, and one made now is stored with the Journal; the views list them all together. " +
@@ -1174,8 +1138,6 @@ export const machine = setup({
       "evaluator.switched": "step",
       "evaluator.moved": "step",
       "starter.ticked": "step",
-      "removal.undone": "pending",
-      "removal.settled": "pending",
       "trial.restarted": "step",
       "evaluator.discarded": "step",
     },
@@ -1351,8 +1313,6 @@ export const machine = setup({
         "evaluator.switched": { actions: enqueueActions(({ context, event, enqueue }) => applySwitch(context, event, enqueue)) },
         "evaluator.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
         "starter.ticked": { actions: enqueueActions(({ context, event, enqueue }) => applyTick(context, event, enqueue)) },
-        "removal.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, false, enqueue)) },
-        "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => applySettle(context, event, enqueue)) },
         "trial.restarted": { actions: enqueueActions(({ context, enqueue }) => startOver(context, enqueue)) },
         "evaluator.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
@@ -1481,26 +1441,12 @@ export const machine = setup({
   },
 });
 
-// Adopt one record the server holds: its content and version, with this tab's marks
-// kept on what is still there. Announced as a change or, for a tombstone of an
-// evaluator this tab was showing, as gone.
+// Adopt one record the server holds: its content and version. Announced as a change
+// or, for a tombstone of an evaluator this tab was showing, as gone.
 // `stamps` are the steps of this browser that wrote what the server now holds.
 function adopt(context, server, enqueue, stamps = {}) {
   const held = context.evaluators.get(server.id);
-  let r = record({ ...server, removing: held?.removing, ...stamps });
-  if (held && !held.deleted && !r.deleted) {
-    const marks = new Map(held.questions.map((q) => [q.id, q]));
-    r = {
-      ...r,
-      questions: r.questions.map((q) => {
-        const old = marks.get(q.id);
-        if (!old) return q;
-        const opts = new Set(old.options.filter((o) => o.removing).map((o) => o.id));
-        return { ...q, removing: old.removing, options: q.options.map((o) => (opts.has(o.id) ? { ...o, removing: true } : o)) };
-      }),
-    };
-  }
-  if (r.deleted) r.removing = false;
+  const r = record({ ...server, ...stamps });
   context.evaluators.set(r.id, r);
   enqueue(() => context.store.put(r).catch(() => {}));
   if (r.deleted) {

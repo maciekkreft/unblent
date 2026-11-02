@@ -227,32 +227,19 @@ test("selecting elsewhere while writing saves the open comment first", async () 
   assert.equal(ctx().draft.quote, "path");
 });
 
-test("removing a comment waits out the undo window; undo keeps it", async () => {
+// The top bar's Undo takes each back (12, Undo): `redline` records the step.
+test("removing a comment saves the redline without it at once", async () => {
   const comments = [{ id: IDS[2], ...at("book"), quote: "book", text: "x" }];
-  const { actor, emitted, clock, ctx, state } = await editor({ text: TEXT, comments });
+  const { actor, emitted, state } = await editor({ text: TEXT, comments });
   actor.send({ type: "_opened", id: IDS[2] });
   actor.send({ type: "_remove", id: IDS[2] });
   assert.ok(state().matches({ marking: "idle" }), "the popover closes");
-  assert.ok(ctx().discarding.has(IDS[2]));
-  actor.send({ type: "_opened", id: IDS[2] });
-  assert.equal(ctx().discarding.size, 0, "a click on the dimmed mark is the undo");
-  clock.increment(UNDO_MS);
-  assert.equal(emitted.length, 0);
-  actor.send({ type: "_remove", id: IDS[2] });
-  clock.increment(UNDO_MS);
   assert.deepEqual(emitted.at(-1).comments, []);
 });
 
-test("New text empties the page, and clears the text only when the undo window ends", async () => {
-  const { actor, emitted, clock, state } = await editor({ text: TEXT, comments: [] });
+test("New text empties the page and clears the text at once", async () => {
+  const { actor, emitted, state } = await editor({ text: TEXT, comments: [] });
   actor.send({ type: "_clear" });
-  assert.ok(state().matches("clearing"));
-  actor.send({ type: "_undoClear" });
-  assert.ok(state().matches("marking"));
-  clock.increment(UNDO_MS);
-  assert.equal(emitted.length, 0);
-  actor.send({ type: "_clear" });
-  clock.increment(UNDO_MS);
   assert.ok(state().matches("empty"));
   assert.deepEqual(emitted.at(-1), { type: "redline.saved", text: "", comments: [] });
 });

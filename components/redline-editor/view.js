@@ -10,8 +10,8 @@ import saved from "./events/redline.saved.json" with { type: "json" };
 const POPOVER_GAP = 6;
 const COPIED_MS = 1500;
 
-// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
-// the token is the one clock, shared with the bar's animation.
+// A CSS duration token ("3s", "300ms") as milliseconds, for how long the machine shows
+// the paste-refused hint.
 const toMs = (text, fallback = 3000) => {
   const t = (text || "").trim();
   const n = parseFloat(t);
@@ -179,7 +179,7 @@ class RedlineEditor extends LitElement {
       font-weight: var(--weight-semibold);
     }
     /* A commented fragment: the marker yellow books use (7.4). The one being written
-       carries the accent underline; one in its undo window fades. */
+       carries the accent underline. */
     mark {
       background: var(--color-highlight);
       color: inherit;
@@ -190,9 +190,6 @@ class RedlineEditor extends LitElement {
     }
     mark.open {
       box-shadow: inset 0 calc(var(--border-width) * -2) 0 var(--color-accent);
-    }
-    mark.removing {
-      opacity: 0.4;
     }
     /* The comment box: under the fragment's last line, placed by --bx/--by set in JS. */
     .popover {
@@ -322,11 +319,6 @@ class RedlineEditor extends LitElement {
       border-color: var(--color-ink);
       color: var(--color-canvas);
     }
-    button.undo {
-      border-color: transparent;
-      background: transparent;
-      color: var(--color-accent);
-    }
     button.remove {
       display: inline-flex;
       border-color: transparent;
@@ -362,7 +354,6 @@ class RedlineEditor extends LitElement {
   // --- The empty page ---------------------------------------------------------------
 
   #empty(snapshot) {
-    const clearing = snapshot.matches("clearing");
     const refused = snapshot.matches({ empty: "refused" });
     return html`
       <div class="page">
@@ -387,9 +378,6 @@ class RedlineEditor extends LitElement {
           ></textarea>
           <button @click=${() => this.#paste()}>Paste</button>
           ${refused ? html`<div class="notice refused" role="status">The browser did not allow it. Press ⌘V in the box instead.</div>` : nothing}
-          ${clearing
-            ? html`<div class="notice" role="status">Text cleared. <button class="undo" @click=${() => this.#actor.send({ type: "_undoClear" })}>Undo</button></div>`
-            : nothing}
         </div>
       </div>
     `;
@@ -420,14 +408,10 @@ class RedlineEditor extends LitElement {
     this.#marks = marks(context);
     this.#context = context;
     const count = context.redline.comments.length;
-    const removing = [...context.discarding].at(-1);
     const draft = snapshot.matches({ marking: "commenting" }) ? context.draft : null;
     return html`
       <div class="bar">
         <button class="quiet" @click=${() => this.#actor.send({ type: "_clear" })}>New text</button>
-        ${removing
-          ? html`<span>Comment removed.</span><button class="undo" @click=${() => this.#actor.send({ type: "_undo", id: removing })}>Undo</button>`
-          : nothing}
         <span class="spacer"></span>
         <span class="count">${count === 1 ? "1 comment" : `${count} comments`}</span>
         <button class="primary copy" @click=${() => this.#copy()}>${this.#copied ?? "Copy with comments"}</button>
@@ -554,7 +538,7 @@ class RedlineEditor extends LitElement {
     return pieces(value, s, this.#marks).map((p) => {
       const span = html`<span data-s=${p.s}>${p.text}</span>`;
       if (!p.id) return span;
-      const cls = p.id === draftId ? "open" : this.#context.discarding.has(p.id) ? "removing" : "";
+      const cls = p.id === draftId ? "open" : "";
       return html`<mark data-id=${p.id} class=${cls}>${span}</mark>`;
     });
   }
@@ -678,7 +662,7 @@ class RedlineEditor extends LitElement {
 
   updated() {
     const snapshot = this.#actor.snapshot;
-    if (snapshot?.matches("empty") || snapshot?.matches("clearing")) {
+    if (snapshot?.matches("empty")) {
       const drop = this.renderRoot.querySelector(".drop");
       if (drop && this.#focused !== "drop" && this.renderRoot.activeElement == null) {
         drop.focus({ preventScroll: true });

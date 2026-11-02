@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user deleted a chat and its undo window ran out (6.4); `conversations` writes the tombstone (5).",
+  "description": "The user deleted a chat: `conversations` writes the tombstone (5) at once, one step Undo takes back (12).",
   "type": "object",
   "properties": {
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }

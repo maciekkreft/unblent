@@ -39,15 +39,6 @@ const TABLE = {
     standing: false,
     actions: [],
   }),
-  // A removal waits out the undo window here, so every delete is reversible in one step: Undo brings
-  // the thing back; the window running out, or a dismiss, lets it go. One row per
-  // thing, so several removals stack, each with its own window.
-  "removal.started": (p) => ({
-    key: `removal:${p.kind}:${p.id}`,
-    standing: false,
-    actions: [{ label: "undo", emit: { type: "removal.undone", kind: p.kind, id: p.id } }],
-    settle: { type: "removal.settled", kind: p.kind, id: p.id },
-  }),
   // A step that asked for it (a delete) shows the dark notice with Undo, the same as the
   // top bar's, and no countdown: Undo goes on working after it has gone (12, Undo). One
   // notice for all of them, so the next one replaces it.
@@ -58,7 +49,6 @@ const TABLE = {
           step: p.id,
           standing: false,
           undo: true,
-          bar: false,
           actions: [{ label: "undo", emit: { type: "step.requested", direction: "undo" } }],
         }
       : null,
@@ -93,11 +83,9 @@ function fade(context, notice, enqueue) {
   enqueue.raise({ type: "_elapsed", key: notice.key }, { delay: ({ context }) => context.fadeMs, id: `fade:${notice.key}` });
 }
 
-// A notice that ends without its action (elapsed, dismissed, the page leaving) lets
-// its pending news go out, if it has any: a removal settles.
+// A notice that ends without its action (elapsed, dismissed) only goes: nothing waits
+// on it, because a delete is done at once and Undo goes on working (12, Undo).
 function end(context, key, enqueue) {
-  const settle = context.notices.get(key)?.settle;
-  if (settle) enqueue.emit(settle);
   enqueue.cancel(`fade:${key}`);
   enqueue.assign({ notices: ({ context }) => without(context.notices, key) });
 }
@@ -110,9 +98,7 @@ function show(context, event, enqueue) {
     standing: row.standing,
     source: row.source ?? event,
     actions: row.actions,
-    settle: row.settle ?? null,
-    undo: Boolean(row.settle || row.undo),
-    bar: row.bar !== false,
+    undo: Boolean(row.undo),
     step: row.step ?? null,
     gone: false,
   };
@@ -150,11 +136,7 @@ export const machine = setup({
       "sign-in, a book that could not be added, and a save conflict. A conflict offers Keep mine, which saves " +
       "the user's copy again, because `notes` otherwise keeps the server's copy; Undo takes " +
       "that back in one step, to the server's copy. A deleted note or highlight shows the " +
-      "short notice below. Something the " +
-      "user deleted or removed shows as a " +
-      "dark notice with Undo for the undo window; hovering or " +
-      "focusing it holds the window, and when the window runs out or the notice is dismissed the " +
-      "removal is final. Leaving the page makes every open removal final. Notices are " +
+      "short notice below. Notices are " +
       "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
       "because `notes` does not keep conflicts. A step that is a delete (12, Undo), or Reset use, " +
       "Block or Unblock on a guest in the People tab, shows a " +
@@ -166,7 +148,7 @@ export const machine = setup({
       "the part that owns it is not on the page. Notices sit in the bottom corner of the " +
       "window, and in the phone preview in the bottom of the phone's screen.",
     kind: "view",
-    emits: ["note.saved", "removal.undone", "removal.settled", "step.requested"],
+    emits: ["note.saved", "step.requested"],
     attributes: [],
     asks: ["undo: read"],
   },
@@ -191,7 +173,6 @@ export const machine = setup({
     "note.conflicted": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "session.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "book.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
-    "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "step.recorded": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         enqueue.assign({ steps: { ...context.steps, [event.id]: { label: event.label, side: "undo" } } });
@@ -216,17 +197,10 @@ export const machine = setup({
       }),
     },
     // The dismiss on a notice, or Escape (7.2, internal gestures). On a conflict this
-    // keeps theirs, which is already the state, so nothing is emitted; a removal settles.
+    // keeps theirs, which is already the state, so nothing is emitted.
     _dismiss: {
       guard: ({ context, event }) => context.notices.has(event.key),
       actions: enqueueActions(({ context, event, enqueue }) => end(context, event.key, enqueue)),
-    },
-    // The page is going away (pagehide): no one is left to press Undo, so every open
-    // removal settles now and a closed tab completes the delete.
-    _leave: {
-      actions: enqueueActions(({ context, enqueue }) => {
-        for (const [key, notice] of context.notices) if (notice.settle) end(context, key, enqueue);
-      }),
     },
     // An action on a notice: the event it carries goes out as the user's gesture (4,
     // fifth rule), and the notice is done.

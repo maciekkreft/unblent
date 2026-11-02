@@ -70,7 +70,7 @@ function start(meta, userId = "u1", answer = acked) {
   const { store, meta: held, queued, log } = fakeStore(meta);
   const { api, calls } = fakeApi(answer);
   const ask = async (target) => (target === "session" ? { userId, registrationOpen: false } : empty());
-  const actor = createActor(machine, { input: { store, api, ask, now: () => 1000, revoke: () => {}, mint: () => "01ARZ3NDEKTSV4RRFFQ69G5FB9" } });
+  const actor = createActor(machine, { input: { store, api, ask, now: () => 1000, revoke: () => {} } });
   const emitted = [];
   actor.on("*", (e) => emitted.push(e));
   actor.start();

@@ -82,6 +82,18 @@ test("picking a tab, folding and staging are no steps, and keep the step undoabl
   assert.deepEqual(layout(actor), START);
 });
 
+test("a tab click right after the page gained or lost a view is no step", () => {
+  const disk = storage();
+  disk.keys.set("dock:/", JSON.stringify({ stage: "notes", docks: { left: { open: true, views: ["chat", "gone"] } } }));
+  const { actor, steps } = start(disk);
+  // dock-desk left out the view the page lost and put the one it gained at the end of its side.
+  arrange(actor, "notes", { left: { open: true, views: ["chat", "values"], active: "values" } });
+  assert.equal(steps.length, 0);
+  assert.deepEqual(layout(actor).docks.left.views, ["chat", "values"]);
+  arrange(actor, "notes", { right: { open: true, views: ["values"] }, left: { open: true, views: ["chat"] } });
+  assert.equal(steps.length, 1, "moving a view afterwards is still a step");
+});
+
 test("several arrangements undo in a row, also after a reload", () => {
   const disk = storage();
   disk.keys.set("dock:/", JSON.stringify(START));

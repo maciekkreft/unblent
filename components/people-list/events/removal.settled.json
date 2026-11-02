@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The undo window ran out, or the user dismissed the notice: the thing is gone.",
+  "description": "The admin deleted a guest in the People tab: session hides it and signs it out at once, one step Undo takes back (12).",
   "type": "object",
   "properties": {
     "kind": {
