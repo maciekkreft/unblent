@@ -70,7 +70,8 @@ for (const engine of ENGINES) {
         const note = page.locator("chat-thread .lookup summary", { hasText: "Reading a note" });
         await note.focus();
         await page.keyboard.press("Enter");
-        await until(async () => (await look(page))[1].open);
+        // The view draws what came back after the browser has opened the record.
+        await until(async () => (await look(page))[1].got !== null);
         assert.equal((await look(page))[1].got, "Asked for | One by its id | Got | Nothing: this lookup failed, and the chat was told.");
         assert.ok((await look(page))[1].danger, "the failure is drawn in the danger color");
         await page.keyboard.press("Space");
