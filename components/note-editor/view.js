@@ -260,7 +260,7 @@ const drawMarks = (into, marks) => {
   else
     render(
       html`<span class="marks">${marks.map(
-        (m, i) => html`${i ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}<span class="mark">${(MARK_ICONS[m.icon] ?? MARK_ICONS.check)()}${m.name}</span>`,
+        (m, i) => html`${i ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}<span class="mark" role="img" aria-label=${m.name}>${(MARK_ICONS[m.icon] ?? MARK_ICONS.check)()}<span class="name" aria-hidden="true">${m.name}</span></span>`,
       )}</span>`,
       into,
     );
@@ -593,6 +593,29 @@ class NoteEditor extends LitElement {
       display: inline-flex;
       align-items: center;
       gap: var(--space-2xs);
+    }
+    /* The dock is narrow, so there a mark shows only its icon, and its name above it on
+       hover, out of the line's flow so the text never moves. The stage keeps the name. */
+    :host(:not([stage])) .marks .mark {
+      position: relative;
+    }
+    :host(:not([stage])) .marks .mark .name {
+      display: none;
+    }
+    :host(:not([stage])) .marks .mark:hover .name {
+      display: block;
+      position: absolute;
+      bottom: calc(100% + var(--space-2xs));
+      right: 0;
+      z-index: 1;
+      padding: 0 var(--space-xs);
+      border-radius: var(--radius-sm);
+      background: var(--color-canvas-soft);
+      box-shadow: var(--shadow-card);
+      color: var(--color-body-mid);
+      font-size: var(--text-caption);
+      white-space: nowrap;
+      pointer-events: none;
     }
     .marks svg {
       display: block;

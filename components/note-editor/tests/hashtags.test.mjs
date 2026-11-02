@@ -100,11 +100,48 @@ for (const engine of ENGINES) {
         await page.keyboard.press("End");
         await page.keyboard.press("ArrowUp");
         const marks = line(page, "Calling her").locator(".marks");
-        await until(async () => ((await marks.count()) ? await marks.innerText() : "") === "In my control");
+        // The name, read from the mark's label: the dock shows only the icon.
+        const named = (locator) => locator.locator(".mark").first().getAttribute("aria-label").catch(() => null);
+        await until(async () => (await marks.locator(".mark").count()) && (await named(marks)) === "In my control");
         assert.equal(await marks.locator("svg").count(), 1, "the option's icon before its name");
         assert.equal(await line(page, "Whether I get the job").locator(".marks").count(), 0, "a line not finished is not checked");
         await page.keyboard.press("ArrowDown");
-        await until(async () => ((await line(page, "Whether I get the job").locator(".marks").count()) ? await line(page, "Whether I get the job").locator(".marks").innerText() : "") === "Not in my control");
+        const job = line(page, "Whether I get the job").locator(".marks");
+        await until(async () => (await job.locator(".mark").count()) && (await named(job)) === "Not in my control");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: rendering and layout.
+    test("in the dock a mark shows only its icon and its name on hover; on the stage both", async () => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("note-dock-marks"));
+        const page = await context.newPage();
+        const problems = watch(page);
+        await setUp(context, page);
+        await line(page, "Calling her").click();
+        await page.keyboard.press("End");
+        await page.keyboard.press("ArrowUp");
+        // The answer's mark, not the pending dot, which is also a .marks.
+        const mark = line(page, "Calling her").locator(".marks:not(.pending) .mark");
+        await mark.waitFor();
+        assert.equal(await mark.getAttribute("aria-label"), "In my control");
+        assert.ok(await mark.locator("svg").isVisible(), "the dock shows the icon");
+        assert.equal(await mark.locator(".name").isVisible(), false, "but not the name");
+        const before = await line(page, "Calling her").boundingBox();
+        await mark.hover();
+        await mark.locator(".name").waitFor({ state: "visible" });
+        assert.equal(await mark.locator(".name").textContent(), "In my control");
+        assert.deepEqual(await line(page, "Calling her").boundingBox(), before, "the line does not move");
+        await page.locator("#notes-editor").evaluate((el) => el.shadowRoot.querySelector("button.open").click());
+        const staged = page.locator("#stage .cm-line", { hasText: "Calling her" }).locator(".marks:not(.pending) .mark");
+        await staged.waitFor();
+        assert.ok(await staged.locator("svg").isVisible(), "the stage shows the icon");
+        assert.ok(await staged.locator(".name").isVisible(), "and the name");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
