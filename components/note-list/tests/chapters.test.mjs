@@ -26,18 +26,25 @@ const subject = (chapter, chapterTitle) => ({ kind: "book", id: BOOK, title: "Bo
 const context = (over = {}) => ({ notes, following: true, subject: subject("chapter-two", "Chapter Two"), handed: new Set(), open: null, allChapters: false, cut: null, ...over });
 const idsOf = (rows) => rows.map((n) => n.id);
 
-test("under This chapter the notes linked to no chapter come first, then the open chapter's", () => {
+test("under This chapter only the open chapter's notes are listed, none linked to no chapter", () => {
   const g = chaptered(context());
   assert.equal(g.unit, "chapter");
   assert.equal(g.all, false);
-  assert.deepEqual(idsOf(g.loose), [LOOSE]);
+  assert.deepEqual(idsOf(g.loose), []);
   assert.deepEqual(idsOf(g.here), [TWO, TWO_B]);
+});
+
+test("under All chapters the notes linked to no chapter come first, then every chapter's", () => {
+  const g = chaptered(context({ allChapters: true }));
+  assert.equal(g.all, true);
+  assert.deepEqual(idsOf(g.loose), [LOOSE]);
   assert.deepEqual(idsOf(g.rest), [TWO, ONE, TWO_B], "every chapter's, in the user's order");
 });
 
 test("a chapter with no notes yet has an empty group", () => {
   const g = chaptered(context({ subject: subject("chapter-three", "Chapter Three") }));
   assert.deepEqual(idsOf(g.here), []);
+  assert.deepEqual(idsOf(g.loose), [], "so the list holds only New note");
 });
 
 test("a Journal day is a chapter named by its date, so the switch speaks of days", () => {
@@ -66,7 +73,7 @@ test("the switch starts on This chapter, comes back from input, and _chapters tu
 });
 
 test("a move in the filtered list lands next to the row it was placed at in the whole order", () => {
-  // As shown under Chapter Two: LOOSE, TWO, TWO_B (group order, not the whole order).
+  // A list showing LOOSE, TWO, TWO_B (group order, not the whole order).
   const shownIds = [LOOSE, TWO, TWO_B];
   // ONE cut, placed below TWO: right after TWO, before LOOSE, which comes next in the whole order.
   assert.deepEqual(placement(context({ cut: ONE }), shownIds, TWO, true), { after: TWO, before: LOOSE });

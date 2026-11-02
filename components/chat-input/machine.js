@@ -14,7 +14,9 @@ import { setup, assign, emit, fromPromise, enqueueActions } from "xstate";
 // once, by the view where the user acted, and never changes). Written once when the chat
 // is created and never changed, so the provider's cache holds and the chat is an honest
 // record of what the model was told. General on purpose: the specific request is what
-// the reader types. The open item, if any, is named on one appended line.
+// the reader types. The open item, if any, is named on one appended line with its id,
+// because the lookups narrow to a book only by its id and a title alone left the model
+// searching the whole library.
 const START = `You are a thoughtful reading companion inside a personal library app. The reader keeps books, highlights passages that matter to them, and writes notes. Help them read and understand what they are reading.
 
 Keep answers to a few sentences. When something in the reader's own library is relevant, you may look it up — their highlights and notes show what caught their attention and what they were thinking, so read them when they help you answer.
@@ -24,7 +26,14 @@ Answer in plain language, and say when you are unsure.`;
 export const startText = (subject) => {
   if (!subject) return START;
   const named = subject.title ? `${subject.kind} "${subject.title}"` : subject.kind;
-  return `${START}\n\nThe reader currently has open: ${named}.`;
+  return `${START}\n\nThe reader currently has open: ${named} (id ${subject.id})${chapterText(subject)}. To look only in it, pass this id as the book of a lookup.`;
+};
+
+// The Journal's chapter is a day (subject: read), named by its date rather than a title.
+const chapterText = (subject) => {
+  if (!subject.chapter) return "";
+  if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(subject.chapter)) return `, at the day ${subject.chapter}`;
+  return `, at the chapter "${subject.chapterTitle}"`;
 };
 
 const asConversation = (event) => {

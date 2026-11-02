@@ -38,8 +38,8 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const BOOK = "01K00000000000000000000SMP";
 const NOTES = ["Note one", "Note two", "Note three"];
 
-// A user set up straight through the server (5): the sample book open, three notes about it
-// and two chats about it. No model is chosen, which is what one step is about.
+// A user set up straight through the server (5): the sample book open, three notes about its first chapter
+// and two chats about it, where it opens. No model is chosen, which is what one step is about.
 const seedUser = async () => {
   const cookie = forgeCookie("tabs");
   const put = async (path, type, body) => {
@@ -50,7 +50,7 @@ const seedUser = async () => {
   await put(`/api/books/${BOOK}`, "application/epub+zip", readFileSync(SAMPLE));
   await json(`/api/books/${BOOK}/opened`, {});
   for (const [k, title] of NOTES.entries()) {
-    await json(`/api/notes/${ulid()}`, { title, body: `${title} body ${k}`, baseVersion: null, about: [{ kind: "book", id: BOOK }] });
+    await json(`/api/notes/${ulid()}`, { title, body: `${title} body ${k}`, baseVersion: null, about: [{ kind: "book", id: BOOK, chapter: "chapter-one", chapterTitle: "Chapter One" }] });
     await pause(5);
   }
   for (const k of [1, 2]) {
@@ -58,7 +58,7 @@ const seedUser = async () => {
       { id: ulid(), role: "user", text: `question ${k}` },
       { id: ulid(), role: "assistant", text: `answer ${k}`, status: "done" },
     ];
-    await json(`/api/conversations/${ulid()}`, { title: `Chat ${k}`, about: [{ kind: "book", id: BOOK }], start: "", turns });
+    await json(`/api/conversations/${ulid()}`, { title: `Chat ${k}`, about: [{ kind: "book", id: BOOK, chapter: "chapter-one", chapterTitle: "Chapter One" }], start: "", turns });
   }
   return cookie;
 };

@@ -70,15 +70,16 @@ const linkTo = (chat, subject) =>
 
 // The chapter switch and its groups, as note-list has them: only while following a
 // subject that has an open chapter; null otherwise, and then the list is `shown` with no
-// switch. `all` is the user's choice, This chapter by default. Under either choice the
-// chats linked to no chapter come first, because they belong to every chapter, then the
-// open chapter's (`here`) or every chapter's (`rest`).
+// switch. `all` is the user's choice, This chapter by default. This chapter is the open
+// chapter's chats alone (`here`), so it reads as that chapter; All chapters is the whole
+// book, so the chats linked to no chapter come first there (`loose`), then every
+// chapter's (`rest`).
 export const chaptered = (context) => {
   const { following, subject, allChapters } = context;
   if (!following || !subject?.chapter) return null;
   const chats = shown(context);
   const chapter = (c) => linkTo(c, subject)?.chapter ?? null;
-  const loose = chats.filter((c) => chapter(c) == null);
+  const loose = allChapters ? chats.filter((c) => chapter(c) == null) : [];
   const here = chats.filter((c) => chapter(c) === subject.chapter);
   const rest = chats.filter((c) => chapter(c) != null);
   return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest };
@@ -191,10 +192,10 @@ export const machine = setup({
       "choice is kept in this browser. The switch is two equal halves across the list in one " +
       "rectangular box, and the top row of its keyboard path: k or the up arrow on the first " +
       "row reaches it, h and l or the left and right arrows change it, and j or the down arrow " +
-      "goes back to the first row. This chapter shows first the chats about the book " +
-      "linked to no chapter, under \"Not linked to a chapter\" when there are any, then, under " +
-      "the open chapter's title, its chats. All chapters lists " +
-      "every chat about the book. A chat row linked to a chapter names the chapter's title " +
+      "goes back to the first row. This chapter lists only the open chapter's chats (in the " +
+      "Journal, the open day's). All chapters lists every chat about the book: first the " +
+      "chats linked to no chapter, then a line, then every chapter's chats; the line shows " +
+      "only with chats on both sides of it. A chat row linked to a chapter names the chapter's title " +
       "before its second line; a chat linked to the whole book shows nothing extra. It learns which chat is open from " +
       "`conversations` and never decides it. Signed out it shows no rows, not even New chat, " +
       "only \"Sign in to chat.\", and signing in brings the account's chats back without a " +

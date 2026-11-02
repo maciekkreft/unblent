@@ -116,6 +116,38 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
+    test("a row the keyboard is on shows its time and, under it, its bin, at the same height as any row", async () => {
+      const { context, page, problems } = await open(false);
+      try {
+        await focusList(page);
+        assert.equal(await focusedTitle(page), "Second");
+        const box = await inList(page, (root) => {
+          const rect = (el) => el.getBoundingClientRect();
+          const seen = (el) => getComputedStyle(el).visibility === "visible" && rect(el).width > 0 && rect(el).height > 0;
+          const row = root.activeElement;
+          const other = [...root.querySelectorAll(".row:not(.draft)")].find((r) => r !== row);
+          const time = row.querySelector(".time");
+          const bin = row.querySelector(".bin");
+          return {
+            time: seen(time),
+            bin: seen(bin),
+            under: rect(bin).top >= rect(time).bottom - 0.5,
+            right: Math.abs(rect(bin).right - rect(time).right),
+            height: Math.abs(rect(row).height - rect(other).height),
+          };
+        });
+        assert.ok(box.time, "the time stays seen");
+        assert.ok(box.bin, "the bin shows");
+        assert.ok(box.under, "the bin is below the time");
+        assert.ok(box.right <= 1, `the bin is right-aligned under the time (${box.right}px off)`);
+        assert.ok(box.height <= 0.5, `the row keeps its height (${box.height}px off)`);
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: focus and keys.
     test("with Vim keys off, j does nothing", async () => {
       const { context, page, problems } = await open(false);

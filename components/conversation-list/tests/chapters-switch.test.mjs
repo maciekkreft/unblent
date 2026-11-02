@@ -61,7 +61,7 @@ for (const engine of ENGINES) {
         await until(
           async () =>
             (await reads(page)) ===
-            "This chapter | New chat | Loose chat |  | First chapter chat",
+            "This chapter | New chat | First chapter chat",
         );
         await page.locator("conversation-list .switch button", { hasText: "All chapters" }).click();
         const all = "All chapters | New chat | Loose chat |  | First chapter chat | Second chapter chat";

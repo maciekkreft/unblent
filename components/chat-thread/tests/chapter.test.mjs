@@ -42,6 +42,8 @@ for (const engine of ENGINES) {
         const problems = watch(page);
         await page.goto(`${BASE_URL}/`);
         await page.locator("dock-desk").getByRole("tab", { name: "Chats" }).click();
+        // The chat is linked to the whole book, which only All chapters lists.
+        await page.locator("conversation-list .switch button", { hasText: "All chapters" }).click();
         await page.locator("conversation-list").getByText("A chat", { exact: true }).click();
         await until(async () => (await label(page)) === "Whole book Link to Chapter One");
         const button = page.locator("#chats-thread .relink");

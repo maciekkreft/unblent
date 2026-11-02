@@ -86,15 +86,15 @@ const linkTo = (note, subject) =>
 
 // The chapter switch and its groups (plan step 3): only while following a subject that has
 // an open chapter; null otherwise, and then the list is `shown` with no switch. `all` is
-// the user's choice, This chapter by default. Under either choice the notes linked to no
-// chapter come first, because they belong to every chapter, then the open chapter's
-// (`here`) or every chapter's (`rest`).
+// the user's choice, This chapter by default. This chapter is the open chapter's notes
+// alone (`here`), so it reads as that chapter; All chapters is the whole book, so the notes
+// linked to no chapter come first there (`loose`), then every chapter's (`rest`).
 export const chaptered = (context) => {
   const { following, subject, allChapters } = context;
   if (!following || !subject?.chapter) return null;
   const notes = shown(context);
   const chapter = (n) => linkTo(n, subject)?.chapter ?? null;
-  const loose = notes.filter((n) => chapter(n) == null);
+  const loose = allChapters ? notes.filter((n) => chapter(n) == null) : [];
   const here = notes.filter((n) => chapter(n) === subject.chapter);
   const rest = notes.filter((n) => chapter(n) != null);
   return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest };
@@ -188,10 +188,10 @@ export const machine = setup({
       "chapter and the choice is kept in this browser. The switch is two equal halves across " +
       "the list in one rectangular box, and the top row of its keyboard path: k or the up " +
       "arrow on the first row reaches it, h and l or the left and right arrows change it, and " +
-      "j or the down arrow goes back to the first row. This chapter shows first the notes about " +
-      "the book linked to no chapter, under \"Not linked to a chapter\" when there are any, " +
-      "then, under the open chapter's title, its notes. All " +
-      "chapters lists every note about the book. A note row linked to a chapter names the " +
+      "j or the down arrow goes back to the first row. This chapter lists only the open " +
+      "chapter's notes (in the Journal, the open day's). All chapters lists every note about " +
+      "the book: first the notes linked to no chapter, then a line, then every chapter's " +
+      "notes; the line shows only with notes on both sides of it. A note row linked to a chapter names the " +
       "chapter's title before its second line; a note linked to the whole book shows nothing " +
       "extra. Highlights are never listed as notes: the book reader shows them. Signed out " +
       "it shows only \"Sign in to see your notes.\": no New note and no notes. The notes stay kept in " +

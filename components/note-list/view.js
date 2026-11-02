@@ -245,17 +245,15 @@ class NoteList extends LitElement {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    /* The time and the trash share one cell, so the trash appears in place on hover or
-       focus without shifting the row; the cell is as wide as the wider of the two. */
+    /* The time stays on the first line, also on a row the keyboard selected, and the trash
+       waits on the second line under it, so showing it on hover or focus shifts nothing. */
     .trailing {
       flex: none;
-      display: grid;
-      align-items: start;
-      justify-items: end;
-    }
-    .time,
-    .bin {
-      grid-area: 1 / 1;
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: flex-end;
     }
     .time {
       font-size: var(--text-caption);
@@ -269,6 +267,8 @@ class NoteList extends LitElement {
       padding: 0;
       margin: 0;
       font: inherit;
+      /* The icon is 1em: the subtitle's size keeps the row two lines tall. */
+      font-size: var(--text-sm);
       cursor: pointer;
       color: var(--color-body-mid);
       visibility: hidden;
@@ -280,10 +280,6 @@ class NoteList extends LitElement {
     .row:focus-within .bin {
       visibility: visible;
     }
-    .row:hover .time,
-    .row:focus-within .time {
-      visibility: hidden;
-    }
     .bin:hover {
       color: var(--color-danger);
     }
@@ -292,10 +288,6 @@ class NoteList extends LitElement {
     .row.cut .subtitle,
     .row.cut .cut-mark {
       color: var(--color-mute);
-    }
-    .row.cut:hover .time,
-    .row.cut:focus-within .time {
-      visibility: visible;
     }
     /* The chapter switch, the top row of the list: two equal halves across the list's
        width in one rectangular box, the pressed one raised. Its edges stand on the rows'
@@ -377,9 +369,9 @@ class NoteList extends LitElement {
   #swallowClick = false;
 
   #rows(snapshot) {
-    // While the subject has an open chapter the notes linked to no chapter come first, then
-    // the open chapter's (This chapter) or every chapter's (All chapters); render draws a
-    // line between them.
+    // While the subject has an open chapter: the open chapter's notes (This chapter), or the
+    // notes linked to no chapter and then every chapter's (All chapters), with a line
+    // between them drawn by render.
     const groups = chaptered(snapshot.context);
     const notes = groups ? [...groups.loose, ...(groups.all ? groups.rest : groups.here)] : shown(snapshot.context);
     const { draft } = snapshot.context;
@@ -653,9 +645,9 @@ class NoteList extends LitElement {
   }
 
   // While the subject has an open chapter: the fixed rows, then the notes linked to no
-  // chapter, then a line and the rest. Under This chapter the rest is the open chapter's
-  // notes; under All chapters it is every chapter's. The line shows only with something on
-  // both sides. The line is not an option, so the keyboard moves over the rows alone.
+  // chapter (All chapters only; `loose` is empty under This chapter), then a line and the
+  // linked notes. The line shows only with something on both sides. The line is not an
+  // option, so the keyboard moves over the rows alone.
   #grouped(rows, { all, loose, here, rest }, row) {
     const linked = all ? rest : here;
     const lead = rows.slice(0, rows.length - loose.length - linked.length);

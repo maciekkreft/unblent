@@ -7,12 +7,12 @@
       "book": {
         "type": "string",
         "minLength": 1,
-        "description": "A book's id, from listing the books or from checking what is open."
+        "description": "A book's id, from listing the books, from the chat's opening line or from checking what is open. When the reader asks about the book they have open, or about this chapter, pass the open book's id; leave book out only when they ask about their whole library or several books."
       },
       "chapter": {
         "type": "integer",
         "minimum": 0,
-        "description": "A chapter's number in the book, counted from 0, as the book's contents give it."
+        "description": "A chapter's number in the book, counted from 0, as the book's contents give it. When the reader asks about this chapter, pass the number of the chapter they are reading, from where you are in it."
       },
       "limit": {
         "type": "integer",
@@ -53,7 +53,7 @@
   },
   "supersededBy": ["note.changed", "note.deleted"],
   "tool": {
-    "description": "Lists the passages the reader highlighted in their books, newest first: each one's id, the start of the passage, the start of the reader's comment on it, its book's id and its chapter's number and title. At most 20 unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with book (a book's id, from listing the books or checking what is open) and chapter (the chapter's number, counted from 0). To read one highlight in full, read it by id with the note text lookup. What the reader marked and wrote shows what caught their attention.",
+    "description": "Lists the passages the reader highlighted in their books, newest first: each one's id, the start of the passage, the start of the reader's comment on it, its book's id and its chapter's number and title. At most 20 unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with book (a book's id, from listing the books or checking what is open) and chapter (the chapter's number, counted from 0). When the reader asks about the book they have open, pass its id as book (the chat's opening line names it), and for a question about this chapter also its number as chapter (from where you are in it); leave book out only when the reader asks about their whole library or several books. To read one highlight in full, read it by id with the note text lookup. What the reader marked and wrote shows what caught their attention.",
     "label": "Reading highlights", "title": "Highlights", "group": "Books", "order": 240,
     "items": "/highlights", "itemExcerpt": "/comment",
     "itemName": "/passage",

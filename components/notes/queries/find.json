@@ -7,12 +7,12 @@
       "book": {
         "type": "string",
         "minLength": 1,
-        "description": "A book's id, from listing the books; the Journal is a book too."
+        "description": "A book's id, from listing the books, from the chat's opening line or from checking what is open; the Journal is a book too. When the reader asks about the book they have open, or about this chapter, pass the open book's id; leave book out only when they ask about their whole library or several books."
       },
       "chapter": {
         "type": "string",
         "minLength": 1,
-        "description": "A chapter's title as the book's contents give it, or for the Journal the day, YYYY-MM-DD."
+        "description": "A chapter's title as the book's contents give it, or for the Journal the day, YYYY-MM-DD. When the reader asks about this chapter, pass the title of the chapter they are reading, from where you are in it."
       },
       "day": {
         "type": "string",
@@ -74,7 +74,7 @@
   },
   "supersededBy": ["note.changed", "note.deleted"],
   "tool": {
-    "description": "Lists the reader's notes, newest first, as short entries: each note's id, title, the line after the title and what it is about, never the full text. Highlights are left out; they have their own lookup. At most 20 notes unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with book (a book's id from listing the books; the Journal is a book too), chapter (a chapter's title as the book's contents give it, or a journal day as YYYY-MM-DD), day (YYYY-MM-DD, the notes made or changed on it) and contains (words the note holds, ignoring case). Then read the notes that matter in full, one by id, with the note text lookup.",
+    "description": "Lists the reader's notes, newest first, as short entries: each note's id, title, the line after the title and what it is about, never the full text. Highlights are left out; they have their own lookup. At most 20 notes unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. When the reader asks about the book they have open, pass its id as book (the chat's opening line names it), and for a question about this chapter also its title as chapter (from where you are in it); leave book out only when the reader asks about their whole library or several books. Narrow it with book (a book's id from listing the books; the Journal is a book too), chapter (a chapter's title as the book's contents give it, or a journal day as YYYY-MM-DD), day (YYYY-MM-DD, the notes made or changed on it) and contains (words the note holds, ignoring case). Then read the notes that matter in full, one by id, with the note text lookup.",
     "label": "Listing the notes", "title": "Note titles", "group": "Notes", "order": 410,
     "items": "/notes", "itemExcerpt": "/line",
     "itemName": "/title",

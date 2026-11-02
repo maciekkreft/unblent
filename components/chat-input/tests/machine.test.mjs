@@ -125,7 +125,7 @@ test("a new chat's first message carries the subject link and the start text", a
   assert.equal(e.turn.text, "what is this about?", "the text is trimmed");
   assert.deepEqual(e.about, [{ kind: "book", id: "b1" }]);
   assert.ok(e.start.startsWith("You are a thoughtful reading companion"));
-  assert.ok(e.start.includes('The reader currently has open: book "A Book".'));
+  assert.ok(e.start.includes('The reader currently has open: book "A Book" (id b1). To look only in it, pass this id as the book of a lookup.'));
   assert.match(e.conversationId, /^[0-9A-HJKMNP-TV-Z]{26}$/);
 });
 
@@ -136,6 +136,13 @@ test("a new chat's link takes the chapter open in the subject, with its title", 
   await flush();
   const e = emittedOf(h, "turn.submitted").at(-1);
   assert.deepEqual(e.about, [{ kind: "book", id: "b1", chapter: "chapter-one", chapterTitle: "Chapter One" }]);
+});
+
+test("the start names the open chapter, or the Journal's day by its date, with the book's id", () => {
+  const chapter = startText({ kind: "book", id: "b1", title: "A Book", view: "book-reader", chapter: "self-as-context", chapterTitle: "Self-as-context" });
+  assert.ok(chapter.endsWith('\n\nThe reader currently has open: book "A Book" (id b1), at the chapter "Self-as-context". To look only in it, pass this id as the book of a lookup.'));
+  const day = startText({ kind: "book", id: "J", title: "Journal", view: "book-reader", chapter: "2026-11-02", chapterTitle: "Monday, 2 November" });
+  assert.ok(day.endsWith('\n\nThe reader currently has open: book "Journal" (id J), at the day 2026-11-02. To look only in it, pass this id as the book of a lookup.'));
 });
 
 test("a new chat with no subject links to nothing", async () => {
@@ -361,7 +368,7 @@ test("events that arrive while starting are not lost: a new chat links to the bo
   const e = emitted.at(-1);
   assert.equal(e.conversationId, CHAT2, "the message goes to the chat opened while starting");
   assert.deepEqual(e.about, [{ kind: "book", id: "b9" }], "the new chat links to the book the event carried");
-  assert.ok(e.start.includes('The reader currently has open: book "Deep Book".'), "the start text names the book");
+  assert.ok(e.start.includes('The reader currently has open: book "Deep Book" (id '), "the start text names the book");
 });
 
 test("llm.changed enables or disables the box", async () => {

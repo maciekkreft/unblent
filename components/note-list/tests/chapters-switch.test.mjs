@@ -57,7 +57,7 @@ for (const engine of ENGINES) {
         await until(
           async () =>
             (await reads(page)) ===
-            "This chapter | New note | Loose note |  | First chapter note",
+            "This chapter | New note | First chapter note",
         );
         await page.locator("note-list .switch button", { hasText: "All chapters" }).click();
         const all = "All chapters | New note | Loose note |  | First chapter note | Second chapter note";

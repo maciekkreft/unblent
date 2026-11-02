@@ -415,6 +415,8 @@ for (const engine of ENGINES) {
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), seed(false));
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      // Lit is linked to the whole book, which only All chapters lists.
+      await page.locator("note-list .switch button", { hasText: "All chapters" }).click();
       await page.locator("note-list").getByText("Lit", { exact: true }).click();
       await page.locator("note-editor .cm-source-link").click();
       // The glowing mark is the passage, shown on the page in view, in Chapter Two.

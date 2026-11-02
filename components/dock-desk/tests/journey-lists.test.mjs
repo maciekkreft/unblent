@@ -43,7 +43,7 @@ const SHELF = 12;
 const shelfId = (k) => `01K00000000000000000000B${String(k).padStart(2, "0")}`;
 
 // A user set up straight through the server (5): the sample book open with one highlight,
-// which Notes never lists, three notes about it and thirty more, and twelve more
+// which Notes never lists, three notes about its first chapter, where it opens, and thirty more, and twelve more
 // copies of the book, so the Notes list and the Books shelf are longer than their panels.
 const seedUser = async () => {
   const cookie = forgeCookie("lists");
@@ -61,11 +61,11 @@ const seedUser = async () => {
   await json(`/api/notes/${ulid()}`, { title: "", body: "", baseVersion: null, about: [{ kind: "book", id: BOOK, place, quote }] });
   // The newest note is listed first: the extras go in first, so the three come on top.
   for (let k = 0; k < EXTRA; k += 1) {
-    await json(`/api/notes/${ulid()}`, { title: `Extra ${k}`, body: "", baseVersion: null, about: [{ kind: "book", id: BOOK }] });
+    await json(`/api/notes/${ulid()}`, { title: `Extra ${k}`, body: "", baseVersion: null, about: [{ kind: "book", id: BOOK, chapter: "chapter-one", chapterTitle: "Chapter One" }] });
     await pause(2);
   }
   for (const [k, title] of NOTES.entries()) {
-    await json(`/api/notes/${ulid()}`, { title, body: `${title} body ${k}`, baseVersion: null, about: [{ kind: "book", id: BOOK }] });
+    await json(`/api/notes/${ulid()}`, { title, body: `${title} body ${k}`, baseVersion: null, about: [{ kind: "book", id: BOOK, chapter: "chapter-one", chapterTitle: "Chapter One" }] });
     await pause(5);
   }
   return cookie;
