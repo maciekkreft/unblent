@@ -25,6 +25,12 @@ All notable changes to Unblent for Mac are listed here. The format follows
   is set up: Provider (Ollama on this Mac, or Jev with your own key), then Model, any model
   downloaded in Ollama, Kev first. Settings says when Ollama is not running or Kev is not
   downloaded, and how to fix it.
+- Hashtag checks in notes and journal days. Write a line such as
+  `Things on my mind tonight #in-my-control`, and every line you finish in the paragraph
+  or list below it gets the answer's icon and name at its end. A hashtag names one of your
+  evaluators by its name, with hyphens for spaces; several hashtags give several answers,
+  and a hashtag that names no evaluator stays grey. In my control, Thinking traps and
+  Fact or story come with the app.
 
 ## [0.4.1] — 2026-10-31
 
