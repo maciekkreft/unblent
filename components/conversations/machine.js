@@ -1,4 +1,5 @@
 import { setup, fromPromise, fromCallback, enqueueActions } from "xstate";
+import { ulid } from "ulid";
 
 // `conversations` owns the chats (architecture.md 3.1): remote-only, because every
 // turn needs the model and the model needs the server, so a chat cannot be made
@@ -753,6 +754,8 @@ const onRenamed = (context, event, enqueue, self) => {
 const clearMarks = (context, chat) => {
   if (!chat.marks) return;
   chat.marks = null;
+  // The comments are spent with the message, so no step brings them back.
+  stamp(context, chat.id, { markStep: null });
   context.unsentMarks.add(chat.id);
 };
 
@@ -1022,16 +1025,39 @@ const retitle = (context, chat, text, enqueue, self) => {
 // first message and the change is announced with the whole chat (4.3, third rule). A
 // title it already has changes nothing, so a result pulled from another device that
 // already named the chat costs no read.
-const onTitle = (context, id, text, enqueue, self) => {
+// True when the title changes; the chat's title is then stamped with `nameStep`, the
+// user's step that wrote it, or left unstamped for a generated title (12, Undo).
+const onTitle = (context, id, text, enqueue, self, nameStep) => {
   const chat = context.chats.get(id);
   if (chat) {
-    if (retitle(context, chat, text, enqueue, self)) enqueue.emit(changedPayload(context, chat));
-    return;
+    if (!retitle(context, chat, text, enqueue, self)) return false;
+    stamp(context, id, { nameStep });
+    enqueue.emit(changedPayload(context, chat));
+    return true;
   }
   const listed = context.headings.find((h) => h.id === id);
-  if (!listed || ((text ?? "").trim() !== "" && listed.title === text.trim())) return;
+  // A title still waiting for the chat to be read is the one it will have, so the
+  // generator's copy of a title the user just typed changes nothing.
+  const coming = context.retitle.has(id) ? (context.retitle.get(id) ?? "").trim() : listed?.title;
+  if (!listed || ((text ?? "").trim() !== "" && coming === text.trim())) return false;
+  stamp(context, id, { nameStep });
   context.retitle.set(id, text);
   enqueue(() => fireLoad(context, self, id));
+  return true;
+};
+
+// The user renamed a chat in the list: one step, whose Undo gives back the title it showed.
+const onRenamedByUser = (context, event, enqueue, self) => {
+  const before = context.chats.get(event.id)?.title ?? context.headings.find((h) => h.id === event.id)?.title;
+  const step = context.mint();
+  const prior = priorOf(stampOf(context, event.id).nameStep);
+  if (!onTitle(context, event.id, event.title, enqueue, self, step)) return;
+  record(context, enqueue, {
+    id: step,
+    label: `rename ${nameOf(before)}`,
+    undo: { kind: "title", id: event.id, title: before ?? "", ...prior },
+    redo: { kind: "title", id: event.id, title: event.title ?? "", ...prior },
+  });
 };
 
 // The user linked the open chat to another chapter, or unlinked it (conversation.relinked,
@@ -1041,14 +1067,34 @@ const onTitle = (context, id, text, enqueue, self) => {
 // announce.
 const onRelinked = (context, event, enqueue, self) => {
   const chat = context.chats.get(event.id);
-  if (!chat && !context.headings.some((h) => h.id === event.id)) return;
-  context.headings = context.headings.map((h) => (h.id === event.id ? { ...h, about: event.about } : h));
-  context.relinking.set(event.id, event.about);
-  enqueue(() => fireRename(context, self, event.id));
+  const listed = context.headings.find((h) => h.id === event.id);
+  if (!chat && !listed) return;
+  const before = chat?.about ?? listed.about ?? [];
+  if (sameLinks(before, event.about)) return;
+  // Linking or unlinking is one step (12, Undo), whose Undo gives back the links before.
+  const step = context.mint();
+  const prior = priorOf(stampOf(context, event.id).linkStep);
+  relink(context, enqueue, self, event.id, event.about, step);
+  record(context, enqueue, {
+    id: step,
+    label: `${event.about.some((a) => a.chapter) ? "link" : "unlink"} ${nameOf(chat?.title ?? listed.title)}`,
+    undo: { kind: "links", id: event.id, about: before, ...prior },
+    redo: { kind: "links", id: event.id, about: event.about, ...prior },
+  });
+};
+
+// Give a chat links and send them, stamped with the step that wrote them. A chat not in
+// memory is read, so its row learns of them from the whole chat (4.3, third rule).
+const relink = (context, enqueue, self, id, about, linkStep, announceLoad = false) => {
+  const chat = context.chats.get(id);
+  stamp(context, id, { linkStep });
+  context.headings = context.headings.map((h) => (h.id === id ? { ...h, about } : h));
+  context.relinking.set(id, about);
+  enqueue(() => fireRename(context, self, id));
   if (chat) {
-    chat.about = event.about;
+    chat.about = about;
     enqueue.emit(changedPayload(context, chat));
-  }
+  } else if (announceLoad) enqueue(() => fireLoad(context, self, id));
 };
 
 const onSelect = (context, event, enqueue, self) => {
@@ -1059,32 +1105,100 @@ const onSelect = (context, event, enqueue, self) => {
 
 // The user's comments on the last answer (marks.edited carries the whole list). A list for
 // any other answer is ignored, since only the last one may be commented on (lastAnswer).
+// Each change is a step (12, Undo); typing in one comment, which the thread sends while
+// the box is open, stays one step (answersStep).
 const onMarksEdited = (context, event, enqueue, self) => {
   const chat = context.chats.get(event.conversationId);
   const answered = lastAnswer(chat);
   if (!answered || answered.id !== event.answerId) return;
+  const before = answersOf(chat);
+  const was = chat.marks?.marks ?? [];
   chat.marks = event.marks.length ? { answerId: event.answerId, marks: event.marks } : null;
   context.unsentMarks.add(chat.id);
   enqueue(() => fireSave(context, self, chat.id));
   enqueue.emit(changedPayload(context, chat));
+  const ids = (list) => list.map((m) => m.id).sort().join(" ");
+  const added = event.marks.filter((m) => !was.some((w) => w.id === m.id));
+  const removed = was.filter((w) => !event.marks.some((m) => m.id === w.id));
+  const typed = ids(was) === ids(event.marks) ? event.marks.filter((m) => !was.some((w) => JSON.stringify(w) === JSON.stringify(m))) : [];
+  const touched = added[0]?.id ?? removed[0]?.id ?? typed[0]?.id ?? null;
+  const joins = typed.length === 1 && touched === context.stretch?.mark;
+  answersStep(context, enqueue, chat, before, removed.length ? "remove a comment" : "comment on an answer", touched, joins);
 };
 
 // The user's highlights on the answers (highlights.edited carries the chat's whole
 // list). Only finished answers with text keep one; the answer being written has none yet.
+// Each is a step; a comment box left empty becomes a highlight of its passage under the
+// same id, and that is part of the step that took the comment away.
 const onHighlightsEdited = (context, event, enqueue, self) => {
   const chat = context.chats.get(event.conversationId);
   if (!chat) return;
+  const before = answersOf(chat);
+  const was = chat.highlights ?? [];
   const answers = new Set(chat.turns.filter((t) => t.role === "assistant" && t.status === "done" && t.text).map((t) => t.id));
   const list = event.highlights.filter((h) => answers.has(h.answerId));
   chat.highlights = list.length ? list : null;
   context.unsentHighlights.add(chat.id);
   enqueue(() => fireSave(context, self, chat.id));
   enqueue.emit(changedPayload(context, chat));
+  const added = list.filter((h) => !was.some((w) => w.id === h.id));
+  const joins = added.length === 1 && list.length === was.length + 1 && added[0].id === context.stretch?.mark;
+  answersStep(context, enqueue, chat, before, added.length ? "highlight a passage" : "remove a highlight", null, joins);
 };
 
+// What the user wrote on a chat's answers: the comments on the last one and the
+// highlights on all of them, which one step writes back together.
+const answersOf = (chat) => ({ marks: chat.marks ?? null, highlights: chat.highlights?.length ? chat.highlights : null });
+
+// Record a change to the comments or highlights. It joins the step still open on the same
+// chat when `joins` says the change continues it (more typing in the same comment), as one
+// stretch of typing is one step; `mark` is the comment a following change may continue.
+const answersStep = (context, enqueue, chat, before, label, mark, joins) => {
+  const after = answersOf(chat);
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  const open = context.stretch;
+  const stamps = stampOf(context, chat.id);
+  if (joins && open && open.chat === chat.id && stamps.markStep === open.id) {
+    enqueue.emit({ type: "step.recorded", id: open.id, owner: "conversations", label: open.label, undo: open.undo, redo: { kind: "answers", id: chat.id, ...after, ...priorOf(open.undo.prior) } });
+    if (mark) context.stretch = { ...open, mark };
+    return;
+  }
+  const step = context.mint();
+  const prior = priorOf(stamps.markStep);
+  const undo = { kind: "answers", id: chat.id, ...before, ...prior };
+  stamp(context, chat.id, { markStep: step });
+  record(context, enqueue, { id: step, label, undo, redo: { kind: "answers", id: chat.id, ...after, ...prior } });
+  context.stretch = { id: step, chat: chat.id, mark, label, undo };
+};
+
+// The user deleted a chat in the list: it goes at once and is one step, shown with the
+// short notice (12, Undo). A removal.settled from the corner notice deletes the same way,
+// without a step.
 const onDiscard = (context, event, enqueue) => {
   const { id } = event;
+  const listed = context.headings.find((h) => h.id === id);
+  const name = context.chats.get(id)?.title ?? listed?.title;
+  const known = Boolean(listed) || context.chats.has(id);
+  const step = known && event.type === "conversation.discarded" ? context.mint() : null;
+  const prior = priorOf(stampOf(context, id).step);
+  remove(context, enqueue, id, step);
+  if (!step) return;
+  record(context, enqueue, {
+    id: step,
+    label: `delete ${nameOf(name)}`,
+    undo: { kind: "chat", id, deleted: false, ...prior },
+    redo: { kind: "chat", id, deleted: true, ...prior },
+    notice: true,
+  });
+};
+
+// A chat leaves the list and the server keeps it as a tombstone (5), so a restore write
+// can bring it back; what this browser held of it is kept for that until the page goes.
+const remove = (context, enqueue, id, step) => {
   const chat = context.chats.get(id);
+  const listed = context.headings.find((h) => h.id === id);
+  if (listed || chat) context.gone.set(id, { heading: listed ?? heading(chat), chat });
+  stamp(context, id, { step });
   context.unsentMarks.delete(id);
   context.unsentHighlights.delete(id);
   context.unsentPosition.delete(id);
@@ -1092,15 +1206,40 @@ const onDiscard = (context, event, enqueue) => {
   context.chats.delete(id);
   context.headings = context.headings.filter((h) => h.id !== id);
   if (context.openId === id) setOpen(context, enqueue, null);
-  enqueue(() => context.deleteChat(id).catch(() => {}));
+  enqueue(() => inOrder(context, id, () => context.deleteChat(id)).catch(() => {}));
   enqueue.emit({ type: "conversation.deleted", id });
+};
+
+// A deleted chat brought back with a restore write (5). A chat this page held is
+// announced at once; one only listed, or deleted before a reload, is read once the server
+// has it back, so its row comes back with the whole chat.
+const restore = (context, enqueue, self, id, step) => {
+  const gone = context.gone.get(id);
+  context.gone.delete(id);
+  stamp(context, id, { step });
+  if (gone) context.headings = [gone.heading, ...context.headings.filter((h) => h.id !== id)];
+  if (gone?.chat) context.chats.set(id, gone.chat);
+  enqueue(() =>
+    inOrder(context, id, () => context.restoreChat(id))
+      .then(() => self.send({ type: "_restored", id }))
+      .catch(() => {}),
+  );
+  if (gone?.chat) enqueue.emit(changedPayload(context, gone.chat));
+};
+
+// A delete and its restore go to the server one after the other, so an Undo made at once
+// never reaches it before the delete it takes back.
+const inOrder = (context, id, run) => {
+  const next = (context.requests.get(id) ?? Promise.resolve()).catch(() => {}).then(run);
+  context.requests.set(id, next);
+  return next;
 };
 
 // The user moved a chat in the list (conversation-list emits conversation.moved, 4.3
 // fifth rule): it takes a key between its new neighbours'. A place is last write wins (5):
 // it is saved alone, changes no time, and never conflicts. A chat in memory is announced
 // with its new place; one that is not is only listed in it, since its turns are not here
-// to announce.
+// to announce. Every move is one step (12, Undo), whose Undo puts back the place before.
 const onMoved = (context, event, enqueue, self) => {
   const current = context.headings.find((h) => h.id === event.id);
   if (!current) return;
@@ -1110,20 +1249,168 @@ const onMoved = (context, event, enqueue, self) => {
   };
   const position = between(neighbour(event.after), neighbour(event.before));
   if (position === current.position) return;
-  context.headings = context.headings.map((h) => (h.id === event.id ? { ...h, position } : h));
-  const chat = context.chats.get(event.id);
-  if (chat) chat.position = position;
-  context.unsentPosition.add(event.id);
-  enqueue(() => fireSave(context, self, event.id));
-  if (chat) enqueue.emit(changedPayload(context, chat));
+  const step = context.mint();
+  const prior = priorOf(stampOf(context, event.id).placeStep);
+  place(context, enqueue, self, event.id, position, step);
+  record(context, enqueue, {
+    id: step,
+    label: `move ${nameOf(current.title)}`,
+    undo: { kind: "place", id: event.id, position: positionOf(current), ...prior },
+    redo: { kind: "place", id: event.id, position, ...prior },
+  });
 };
 
+// Put a chat at a place and send it, stamped with the step that did. `announceLoad` reads
+// a chat not in memory, so the list, which placed it itself on a move, learns of an Undo.
+const place = (context, enqueue, self, id, position, placeStep, announceLoad = false) => {
+  stamp(context, id, { placeStep });
+  context.headings = context.headings.map((h) => (h.id === id ? { ...h, position } : h));
+  const chat = context.chats.get(id);
+  if (chat) chat.position = position;
+  context.unsentPosition.add(id);
+  enqueue(() => fireSave(context, self, id));
+  if (chat) enqueue.emit(changedPayload(context, chat));
+  else if (announceLoad) enqueue(() => fireLoad(context, self, id));
+};
+
+// A switch in Settings, under What the chat may read: one step per flip, the switch of a
+// group's heading flipping all its tools at once (12, Undo). A tool missing is on (7.7).
 const onToolsEdited = (context, event, enqueue) => {
-  if (event.tools) context.tools = { ...context.tools, ...event.tools };
-  if (event.approval) context.approval = event.approval;
+  const before = {};
+  if (event.tools) before.tools = Object.fromEntries(Object.keys(event.tools).map((k) => [k, context.tools[k] !== false]));
+  if (event.approval) before.approval = context.approval;
+  const after = { ...(event.tools ? { tools: event.tools } : {}), ...(event.approval ? { approval: event.approval } : {}) };
+  const on = (tools) => Object.fromEntries(Object.entries(tools).map(([k, v]) => [k, v !== false]));
+  const same = JSON.stringify(before) === JSON.stringify({ ...(event.tools ? { tools: on(event.tools) } : {}), ...(event.approval ? { approval: event.approval } : {}) });
+  const prior = priorOf(context.toolsStep);
+  const step = same ? null : context.mint();
+  writeTools(context, enqueue, after, step ?? context.toolsStep);
+  if (!step) return;
+  const off = Object.values(after.tools ?? {}).every((v) => v === false);
+  record(context, enqueue, {
+    id: step,
+    label: `${off ? "switch off" : "switch on"} what the chat may read`,
+    undo: { kind: "tools", ...before, ...prior },
+    redo: { kind: "tools", ...after, ...prior },
+  });
+};
+
+const writeTools = (context, enqueue, change, step) => {
+  context.toolsStep = step;
+  keepStamps(context);
+  if (change.tools) context.tools = { ...context.tools, ...change.tools };
+  if (change.approval) context.approval = change.approval;
   const value = { tools: context.tools, approval: context.approval };
   enqueue(() => context.saveTools(value).catch(() => {}));
   enqueue.emit({ type: "tools.changed", ...value });
+};
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// The steps that last wrote a chat in this browser, by chat id: `step` whether it is
+// listed, `nameStep` its title, `placeStep` its place, `linkStep` its links and `markStep`
+// what the user wrote on its answers; the server never has them. Anything else that writes
+// one of these (a generated title, a sent message taking the comments, another device's
+// write learned on a reload) takes its stamp away, so an Undo of it is refused.
+const stampOf = (context, id) => context.stamps.get(id) ?? {};
+const stamp = (context, id, fields) => {
+  const kept = { ...stampOf(context, id) };
+  for (const [k, v] of Object.entries(fields)) {
+    if (v) kept[k] = v;
+    else delete kept[k];
+  }
+  if (Object.keys(kept).length) context.stamps.set(id, kept);
+  else context.stamps.delete(id);
+  keepStamps(context);
+};
+
+// The stamps are kept in this browser for the account (store.js), so an Undo after a
+// reload is checked the same way; another account's are never read.
+const keepStamps = (context) =>
+  context.store?.writeSteps?.({ userId: context.userId, stamps: Object.fromEntries(context.stamps), toolsStep: context.toolsStep });
+
+// `prior` is the step that wrote a chat before this one, so an Undo leaves it as that step
+// left it and the step before can be undone next; a chat no step of this browser wrote is
+// left stamped with a mark of the step undone.
+const priorOf = (step) => (step ? { prior: step } : {});
+const priorStamp = (entry, step) => entry.prior ?? `^${step}`;
+
+// A new step ends any stretch of typing still open.
+const record = (context, enqueue, step) => {
+  context.stretch = null;
+  enqueue.emit({ type: "step.recorded", owner: "conversations", ...step });
+};
+
+// What a step is about, as people read it after "Undo:".
+const NAME_MAX = 40;
+const nameOf = (title) => {
+  const text = String(title ?? "").trim();
+  if (!text) return "a chat";
+  return `chat ${text.length > NAME_MAX ? `${text.slice(0, NAME_MAX).trimEnd()}…` : text}`;
+};
+
+// An Undo or Redo of one of this fact's steps. It is applied only while what it would
+// reverse is as the step left it: the part of the chat it wrote was last written in this
+// browser by that step. Anything written since refuses it.
+const applyStep = (context, event, enqueue, self) => {
+  if (event.owner !== "conversations") return;
+  context.stretch = null;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "conversations", outcome, ...(reason ? { reason } : {}) });
+  const p = event.payload ?? {};
+  const undoing = event.type === "step.undone";
+  const expected = undoing ? event.id : priorStamp(p, event.id);
+  const leaves = undoing ? priorStamp(p, event.id) : event.id;
+  const stamps = stampOf(context, p.id);
+  const chat = context.chats.get(p.id);
+  const live = context.headings.some((h) => h.id === p.id) || Boolean(chat);
+  if (p.kind === "chat" && typeof p.deleted === "boolean") {
+    if (stamps.step !== expected) return settle("refused", "changed");
+    if (p.deleted === !live) stamp(context, p.id, { step: leaves });
+    else if (p.deleted) remove(context, enqueue, p.id, leaves);
+    else restore(context, enqueue, self, p.id, leaves);
+    return settle("applied");
+  }
+  if (p.kind === "title" && live && typeof p.title === "string") {
+    if (stamps.nameStep !== expected) return settle("refused", "changed");
+    if (!onTitle(context, p.id, p.title, enqueue, self, leaves)) stamp(context, p.id, { nameStep: leaves });
+    return settle("applied");
+  }
+  if (p.kind === "place" && live && isPosition(p.position)) {
+    if (stamps.placeStep !== expected) return settle("refused", "changed");
+    place(context, enqueue, self, p.id, p.position, leaves, true);
+    return settle("applied");
+  }
+  if (p.kind === "links" && live && Array.isArray(p.about)) {
+    if (stamps.linkStep !== expected) return settle("refused", "changed");
+    relink(context, enqueue, self, p.id, p.about, leaves, true);
+    return settle("applied");
+  }
+  if (p.kind === "answers" && chat) {
+    if (stamps.markStep !== expected) return settle("refused", "changed");
+    if (p.marks && lastAnswer(chat)?.id !== p.marks.answerId) return settle("refused", "changed");
+    chat.marks = p.marks ?? null;
+    chat.highlights = p.highlights ?? null;
+    context.unsentMarks.add(chat.id);
+    context.unsentHighlights.add(chat.id);
+    stamp(context, chat.id, { markStep: leaves });
+    enqueue(() => fireSave(context, self, chat.id));
+    enqueue.emit(changedPayload(context, chat));
+    return settle("applied");
+  }
+  if (p.kind === "tools") {
+    if (context.toolsStep !== expected) return settle("refused", "changed");
+    const change = { ...(p.tools ? { tools: p.tools } : {}), ...(p.approval ? { approval: p.approval } : {}) };
+    writeTools(context, enqueue, change, leaves);
+    return settle("applied");
+  }
+  settle("refused", "changed");
+};
+
+// A restore write was answered: a chat this page did not hold is read now, so its row
+// comes back with the whole chat (onLoaded lists it again).
+const onRestored = (context, event, enqueue, self) => {
+  if (!context.chats.has(event.id)) enqueue(() => fireLoad(context, self, event.id));
 };
 
 // A chat has a message once it is listed or holds a turn; a new chat's id has neither
@@ -1190,9 +1477,12 @@ const onLoaded = (context, event, enqueue, self) => {
   context.loading.delete(event.id);
   const c = event.conversation;
   const chat = { id: c.id, title: c.title, about: c.about ?? [], start: c.start ?? "", turns: c.turns ?? [], updatedAt: c.updatedAt ?? 0, marks: c.marks ?? null, highlights: c.highlights ?? null };
+  const held = context.chats.get(event.id);
+  if (held && !hasUnsentMarks(context, event.id) && !hasUnsentHighlights(context, event.id) && JSON.stringify(answersOf(held)) !== JSON.stringify(answersOf(chat)))
+    stamp(context, event.id, { markStep: null });
   // The place this device holds wins over the server's while a move is unsent (5).
-  const held = context.headings.find((h) => h.id === event.id)?.position;
-  const position = context.unsentPosition.has(event.id) || !isPosition(c.position) ? held : c.position;
+  const heldPlace = context.headings.find((h) => h.id === event.id)?.position;
+  const position = context.unsentPosition.has(event.id) || !isPosition(c.position) ? heldPlace : c.position;
   if (isPosition(position)) chat.position = position;
   // A title not yet on the server is the latest write; one waiting for this read is given now.
   if (context.renaming.has(event.id)) chat.title = context.renaming.get(event.id);
@@ -1289,16 +1579,31 @@ const onListed = (context, event) => {
   const local = new Map(context.headings.map((h) => [h.id, h]));
   const placed = (h) => {
     const mine = local.get(h.id);
+    forgetOvertaken(context, mine, h);
     const kept = mine && context.unsentPosition.has(h.id) && isPosition(mine.position) ? { ...h, position: mine.position } : h;
     const named = context.renaming.has(h.id) ? { ...kept, title: context.renaming.get(h.id) } : kept;
     return context.relinking.has(h.id) ? { ...named, about: context.relinking.get(h.id) } : named;
   };
   context.headings = [...result.conversations.map(fromServer).map(placed), ...keptLocal];
+  for (const h of result.conversations) if (context.gone.has(h.id)) stamp(context, h.id, { step: null });
   if (result.tools) {
+    if (JSON.stringify({ tools: context.tools, approval: context.approval }) !== JSON.stringify({ tools: result.tools.tools || {}, approval: result.tools.approval || "auto" })) {
+      context.toolsStep = null;
+      keepStamps(context);
+    }
     context.tools = result.tools.tools || {};
     context.approval = result.tools.approval || "auto";
   }
   context.unavailable = false;
+};
+
+// A chat another device or tab wrote since this browser's last step on it: what it wrote
+// takes that step's stamp away (12, Undo). A change this browser has not sent yet is its own.
+const forgetOvertaken = (context, mine, h) => {
+  if (!mine) return;
+  if (!context.renaming.has(h.id) && mine.title !== h.title) stamp(context, h.id, { nameStep: null });
+  if (!context.relinking.has(h.id) && !sameLinks(mine.about, h.about)) stamp(context, h.id, { linkStep: null });
+  if (!context.unsentPosition.has(h.id) && isPosition(h.position) && mine.position !== h.position) stamp(context, h.id, { placeStep: null });
 };
 
 const onFocus = (context, enqueue, self) => {
@@ -1328,7 +1633,7 @@ const onOnline = (context, enqueue, self) => {
 // views ask for (4.3), so it announces nothing.
 const applyBoot = (context, out, enqueue, self) => {
   const before = context.openId;
-  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentHighlights: new Set(), highlightsInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), renaming: new Map(), relinking: new Map(), titleInFlight: new Set(), retitle: new Map(), reading: new Map(), loading: new Set(), running: null };
+  const base = { stamps: new Map(), gone: new Map(), stretch: null, toolsStep: null, chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentHighlights: new Set(), highlightsInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), renaming: new Map(), relinking: new Map(), titleInFlight: new Set(), retitle: new Map(), reading: new Map(), loading: new Set(), running: null };
   if (out.userId == null) {
     Object.assign(context, base, { userId: null, signedIn: false, unavailable: false, headings: [], openId: null, lastSubject: null, tools: {}, approval: "auto" });
   } else if (out.failed) {
@@ -1340,6 +1645,11 @@ const applyBoot = (context, out, enqueue, self) => {
     const stored = context.store.read();
     const openId = stored != null ? stored : mostRecentAbout(headings, sub);
     Object.assign(context, base, { userId: out.userId, signedIn: true, unavailable: false, headings, openId, lastSubject: sub, tools: toolsValue.tools || {}, approval: toolsValue.approval || "auto" });
+  }
+  const kept = context.store?.readSteps?.();
+  if (out.userId != null && kept && kept.userId === out.userId) {
+    context.stamps = new Map(Object.entries(kept.stamps ?? {}));
+    context.toolsStep = kept.toolsStep ?? null;
   }
   if (context.booted && context.openId !== before) enqueue.emit({ type: "conversation.opened", id: context.openId });
   context.booted = true;
@@ -1412,8 +1722,16 @@ export const machine = setup({
       "in the list, kept on the account and the same on every device: a new chat goes first, " +
       "a new message never moves a chat, and a move from the list puts it between its new " +
       "neighbours. A place is last write wins and changes nothing else. A chat from before " +
-      "places keeps the order it had, newest first, until it changes or is moved. A delete " +
-      "handed to the corner notice happens when that notice's undo window ends. A chat is " +
+      "places keeps the order it had, newest first, until it changes or is moved. Deleting a " +
+      "chat, renaming it, moving it, linking or unlinking it, a change to the comments or the " +
+      "highlights on its answers, and a flip of a switch under What the chat may read are each " +
+      "a step Undo and Redo reverse (section 12); typing in one comment is one step, and a " +
+      "comment box left empty becomes its highlight in the same step. A delete happens at once " +
+      "and asks for the short notice; the server keeps the chat, and a restore write brings it " +
+      "back. A step is refused when that part of the chat was written since by anything else: " +
+      "a generated title, a message that sent the comments, or another device. Sending a " +
+      "message, a lookup and a generated title are not steps. A delete from the corner " +
+      "notice, when its Undo runs out, is no step. A chat is " +
       "titled at first with the first line of its first message; the chat-title generator's " +
       "text replaces it, and so does a title the user types in the list, where an empty one " +
       "gives the first line back. A rename keeps the chat's links and its place and does not " +
@@ -1430,17 +1748,17 @@ export const machine = setup({
       "turn.submitted": "spends",
       "turn.steered": "spends",
       "conversation.selected": "navigation",
-      "conversation.discarded": "pending",
-      "conversation.moved": "pending",
+      "conversation.discarded": "step",
+      "conversation.moved": "step",
       "removal.settled": "pending",
-      "tools.edited": "pending",
-      "marks.edited": "pending",
-      "highlights.edited": "pending",
-      "conversation.renamed": "pending",
-      "conversation.relinked": "pending",
+      "tools.edited": "step",
+      "marks.edited": "step",
+      "highlights.edited": "step",
+      "conversation.renamed": "step",
+      "conversation.relinked": "step",
       "lookup.followed": "navigation",
     },
-    emits: ["conversation.changed", "conversation.deleted", "conversation.opened", "tools.changed"],
+    emits: ["conversation.changed", "conversation.deleted", "conversation.opened", "tools.changed", "step.recorded", "step.settled"],
     // `*: tool` lets the loop ask any query its owner marked as a tool (7.7).
     asks: ["session: read", "subject: read", "settings: read", "llm: complete", "catalog: contracts", "flags: read", "*: tool"],
   },
@@ -1459,6 +1777,8 @@ export const machine = setup({
     read: input.read,
     saveChat: input.saveChat,
     deleteChat: input.deleteChat,
+    restoreChat: input.restoreChat,
+    mint: input.mint ?? ulid,
     saveTools: input.saveTools,
     store: input.store,
     ulid: input.ulid,
@@ -1497,6 +1817,16 @@ export const machine = setup({
     entriesAsked: false,
     running: null, // { chatId, turnId, phase, tools, meta, rounds } while a question is being answered
     queued: [],
+    // The steps that last wrote each chat (stampOf), and the one that last wrote the tool
+    // switches; null when none of this browser's did.
+    stamps: new Map(),
+    toolsStep: null,
+    // The chats deleted on this page, as they were, so an Undo can bring them back.
+    gone: new Map(),
+    // The deletes and restores on their way to the server, one chain per chat (inOrder).
+    requests: new Map(),
+    // The comment step still open (answersStep): { id, chat, mark, label, undo }; null when none.
+    stretch: null,
   }),
   initial: "loading",
   // `settings`' news (4.3, fourth rule), in any state.
@@ -1553,6 +1883,8 @@ export const machine = setup({
         "generation.changed": { guard: ({ event }) => event.result.generator === "chat-title", actions: queue },
         "conversation.renamed": { actions: queue },
         "conversation.relinked": { actions: queue },
+        "step.undone": { actions: queue },
+        "step.redone": { actions: queue },
       },
     },
     ready: {
@@ -1572,6 +1904,9 @@ export const machine = setup({
         "completion.progressed": { actions: enqueueActions(({ context, event, enqueue, self }) => onProgress(context, event, enqueue, self)) },
         "conversation.selected": { actions: enqueueActions(({ context, event, enqueue, self }) => onSelect(context, event, enqueue, self)) },
         "conversation.discarded": { actions: enqueueActions(({ context, event, enqueue }) => onDiscard(context, event, enqueue)) },
+        "step.undone": { actions: enqueueActions(({ context, event, enqueue, self }) => applyStep(context, event, enqueue, self)) },
+        "step.redone": { actions: enqueueActions(({ context, event, enqueue, self }) => applyStep(context, event, enqueue, self)) },
+        _restored: { actions: enqueueActions(({ context, event, enqueue, self }) => onRestored(context, event, enqueue, self)) },
         "conversation.moved": { actions: enqueueActions(({ context, event, enqueue, self }) => onMoved(context, event, enqueue, self)) },
         // A delete the list handed to the corner notice when the keyboard left it: the
         // notice's undo window ran out, so the chat goes, as on conversation.discarded.
@@ -1591,7 +1926,7 @@ export const machine = setup({
           guard: ({ event }) => event.result.generator === "chat-title",
           actions: enqueueActions(({ context, event, enqueue, self }) => onTitle(context, event.result.item, event.result.text, enqueue, self)),
         },
-        "conversation.renamed": { actions: enqueueActions(({ context, event, enqueue, self }) => onTitle(context, event.id, event.title, enqueue, self)) },
+        "conversation.renamed": { actions: enqueueActions(({ context, event, enqueue, self }) => onRenamedByUser(context, event, enqueue, self)) },
         // The chat's chapter label (12): the user linked it to the open chapter or unlinked it.
         "conversation.relinked": { actions: enqueueActions(({ context, event, enqueue, self }) => onRelinked(context, event, enqueue, self)) },
         // The fact's own news about who is signed in (4.3): a different user re-boots

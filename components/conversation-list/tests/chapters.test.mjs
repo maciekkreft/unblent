@@ -23,7 +23,7 @@ const chats = [
   chat(OTHER, "e", [{ kind: "book", id: "01ARZ3NDEKTSV4RRFFQ69G5BK2" }]),
 ];
 const subject = (chapter, chapterTitle) => ({ kind: "book", id: BOOK, title: "Book", ...(chapter ? { chapter, chapterTitle } : {}) });
-const context = (over = {}) => ({ chats, following: true, subject: subject("chapter-two", "Chapter Two"), handed: new Set(), open: null, allChapters: false, cut: null, ...over });
+const context = (over = {}) => ({ chats, following: true, subject: subject("chapter-two", "Chapter Two"), open: null, allChapters: false, cut: null, ...over });
 const idsOf = (rows) => rows.map((n) => n.id);
 
 test("under This chapter the chats linked to no chapter come first, then the open chapter's", () => {
@@ -55,7 +55,7 @@ test("there is no switch without an open chapter, or when the list does not foll
 
 test("the switch starts on This chapter, comes back from input, and _chapters turns it", () => {
   const ask = () => Promise.resolve({});
-  const start = (input) => createActor(machine, { input: { ask, mint: () => LOOSE, undoMs: 100, following: true, ...input } }).start();
+  const start = (input) => createActor(machine, { input: { ask, mint: () => LOOSE, following: true, ...input } }).start();
   const actor = start({});
   assert.equal(actor.getSnapshot().context.allChapters, false);
   actor.send({ type: "_chapters", all: true });

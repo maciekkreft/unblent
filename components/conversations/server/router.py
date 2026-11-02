@@ -3,7 +3,7 @@ remote-only chats fact. Every route needs a signed-in user (require_user) and re
 that user's own SQLite file, so isolation holds by construction. A chat cannot be made
 offline, so there is no version and no conflict: a finished turn is added by id and
 never rewritten (5), while the chat row, a delete and the tool preferences are last
-write wins.
+write wins. A delete keeps the chat as a tombstone, which a restore write clears.
 """
 
 import json
@@ -45,6 +45,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.executescript("ALTER TABLE conversations ADD COLUMN position TEXT")
     if "highlights" not in columns:
         connection.executescript("ALTER TABLE conversations ADD COLUMN highlights TEXT")
+    if "deleted" not in columns:
+        connection.executescript("ALTER TABLE conversations ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
     try:
         with connection:
             yield connection
@@ -89,6 +91,7 @@ def list_conversations(user_id: str = Depends(require_user)):
                        AND trim(json_extract(t.body, '$.text'), char(9, 10, 13, 32)) <> ''
                      ORDER BY t.id DESC LIMIT 1) AS answer
               FROM conversations c
+             WHERE c.deleted = 0
              ORDER BY c.updated_at DESC, c.id DESC
             """
         ).fetchall()
@@ -125,7 +128,7 @@ async def save_tools(request: Request, user_id: str = Depends(require_user)):
 @router.get("/{conversation_id}")
 def read_conversation(conversation_id: str, user_id: str = Depends(require_user)):
     with _connect(user_id) as connection:
-        row = connection.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        row = connection.execute("SELECT * FROM conversations WHERE id = ? AND deleted = 0", (conversation_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404)
         # Turns sort by when they were saved, not by id: a question is always saved
@@ -174,7 +177,9 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
     # relink, and like a move neither is news, so updated_at stays.
     if payload.get("rename") is True:
         with _connect(user_id) as connection:
-            row = connection.execute("SELECT updated_at FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+            row = connection.execute(
+                "SELECT updated_at FROM conversations WHERE id = ? AND deleted = 0", (conversation_id,)
+            ).fetchone()
             if row is None:
                 return {"missing": True}
             if "title" in payload:
@@ -188,7 +193,9 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
         return {"updatedAt": row["updated_at"]}
     if "title" not in payload:
         with _connect(user_id) as connection:
-            row = connection.execute("SELECT updated_at FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+            row = connection.execute(
+                "SELECT updated_at FROM conversations WHERE id = ? AND deleted = 0", (conversation_id,)
+            ).fetchone()
             if row is None:
                 return {"missing": True}
             if position is not None:
@@ -205,6 +212,10 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
     now = int(time.time() * 1000)
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        # A delete wins over a save that reaches the server after it (5); only a restore
+        # write brings the chat back.
+        if row is not None and row["deleted"]:
+            return {"missing": True}
         changed = False
         if row is None:
             connection.execute(
@@ -244,9 +255,21 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
 
 @router.delete("/{conversation_id}")
 def delete_conversation(conversation_id: str, user_id: str = Depends(require_user)):
-    # A delete removes the chat and its turns (5); it is idempotent, so deleting a chat
-    # that is already gone is not an error.
+    # A delete leaves the chat a tombstone with its turns (5), so a restore write can bring
+    # it back; it is idempotent, so deleting a chat that is already gone is not an error.
     with _connect(user_id) as connection:
-        connection.execute("DELETE FROM turns WHERE conversation_id = ?", (conversation_id,))
-        connection.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        connection.execute("UPDATE conversations SET deleted = 1 WHERE id = ?", (conversation_id,))
     return {"deleted": conversation_id}
+
+
+@router.put("/{conversation_id}/restored")
+def restore_conversation(conversation_id: str, user_id: str = Depends(require_user)):
+    # A restore write (5, 12 Undo): a chat has no version, and a delete is last write wins,
+    # so the restore clears the tombstone; its time and place stay, so the chat comes back
+    # where it was. A chat the server never had is not found.
+    with _connect(user_id) as connection:
+        row = connection.execute("SELECT updated_at FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404)
+        connection.execute("UPDATE conversations SET deleted = 0 WHERE id = ?", (conversation_id,))
+    return {"updatedAt": row["updated_at"]}

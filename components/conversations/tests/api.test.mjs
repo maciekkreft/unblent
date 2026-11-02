@@ -110,6 +110,19 @@ test("a delete removes the chat and its turns", async () => {
   assert.equal(list.conversations.find((c) => c.id === CHAT), undefined);
 });
 
+test("a restore write brings a deleted chat back with its turns, and a save never revives it", async () => {
+  const cookie = cookieFor(freshUser());
+  await put(CHAT, chat(), cookie);
+  const before = await (await get(`/${CHAT}`, cookie)).json();
+  await del(CHAT, cookie);
+  assert.deepEqual(await (await put(CHAT, chat({ title: "late" }), cookie)).json(), { missing: true }, "a delete wins over a later save");
+  const restored = await fetch(`${BASE_URL}/api/conversations/${CHAT}/restored`, { method: "PUT", headers: { Cookie: cookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(restored.status, 200);
+  assert.deepEqual(await (await get(`/${CHAT}`, cookie)).json(), before, "the chat comes back as it was");
+  const unknown = await fetch(`${BASE_URL}/api/conversations/${U("Z9")}/restored`, { method: "PUT", headers: { Cookie: cookie, "content-type": "application/json" }, body: "{}" });
+  assert.equal(unknown.status, 404);
+});
+
 test("the list returns headings newest first, with the tool preferences", async () => {
   const cookie = cookieFor(freshUser());
   await put(U("B1"), chat({ title: "older" }), cookie);

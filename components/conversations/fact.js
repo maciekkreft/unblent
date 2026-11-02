@@ -6,6 +6,8 @@ import changed from "./events/conversation.changed.json" with { type: "json" };
 import deleted from "./events/conversation.deleted.json" with { type: "json" };
 import opened from "./events/conversation.opened.json" with { type: "json" };
 import toolsChanged from "./events/tools.changed.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import open from "./queries/open.json" with { type: "json" };
@@ -69,6 +71,8 @@ mount(machine, {
       const res = await fetch(`${BASE}/${id}`, { method: "DELETE", credentials: "same-origin", headers: json });
       if (!res.ok) throw new Error(String(res.status));
     },
+    // A restore write (5): brings back a chat deleted on this page, for an Undo.
+    restoreChat: (id) => putJson(`${BASE}/${id}/restored`, {}),
     saveTools: (body) => putJson(`${BASE}/tools`, body),
     store: openStore("conversations"),
     ulid: monotonicFactory(),
@@ -80,6 +84,8 @@ mount(machine, {
     "conversation.deleted": deleted,
     "conversation.opened": opened,
     "tools.changed": toolsChanged,
+    "step.recorded": recorded,
+    "step.settled": settled,
   },
   queries: { list, read, open, tools },
 });
