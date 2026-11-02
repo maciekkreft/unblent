@@ -564,6 +564,9 @@ export function ask(machine, target, name, payload = {}, instance) {
         record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "unanswered", reason: "no reply in 5s", cid, payload: null });
         release(from, cid); // 4.2: no reply is coming for now, so stop holding; the promise stays pending.
       }, UNANSWERED_MS);
+      // In Node a pending "unanswered" timer must not keep a test process alive; a
+      // browser's timer id has no unref, so nothing changes there.
+      timer.unref?.();
       const reply = (value) => {
         if (answered) return;
         answered = true;
