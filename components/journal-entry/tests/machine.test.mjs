@@ -158,6 +158,16 @@ test("a conflict shows both copies, and Keep yours saves the user's copy in one 
   assert.equal(actor.getSnapshot().context.draft.text, "Mine.");
 });
 
+test("a change that settled the conflict shown hides the two copies, as after a Redo of keeping one", async () => {
+  const today = day(TODAY, "2026-10-12", "Theirs.", { version: 3 });
+  const { actor } = await start(picture({ days: [today], open: TODAY }));
+  actor.send({ type: "journal.conflicted", id: TODAY, mine: { text: "Mine.", baseVersion: 2 }, theirs: { text: "Theirs.", version: 3, editedAt: at(12, 20) } });
+  actor.send({ type: "journal.changed", ...picture({ days: [today], open: TODAY }) });
+  assert.ok(actor.getSnapshot().context.conflict, "an ordinary change leaves the copies");
+  actor.send({ type: "journal.changed", ...picture({ days: [{ ...today, text: "Mine.", version: 4 }], open: TODAY }), settled: TODAY });
+  assert.equal(actor.getSnapshot().context.conflict, null);
+});
+
 test("on a closed day either copy can be kept, each as a save of its exact text", async () => {
   const sunday = day(SUNDAY, "2026-10-11", "Theirs.");
   const conflicted = { type: "journal.conflicted", id: SUNDAY, mine: { text: "Mine.", baseVersion: 1 }, theirs: { text: "Theirs.", version: 2, editedAt: at(11, 20) } };

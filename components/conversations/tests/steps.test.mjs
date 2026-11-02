@@ -256,6 +256,26 @@ test("typing in one comment is one step, and a second comment is another", async
   assert.deepEqual((await read(actor, A)).conversation.marks.marks, [mark(M1, "Why so?"), second]);
 });
 
+test("leaving a comment box ends its stretch: typing in it again after coming back is another step", async () => {
+  const { actor, steps, settled } = await start();
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [mark(M1, "Why")] });
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [mark(M1, "Why")], left: true });
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [mark(M1, "Why so")] });
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [mark(M1, "Why so?")], left: true });
+  await flush();
+  const ids = [...new Set(steps.map((s) => s.id))];
+  assert.equal(ids.length, 2);
+  const [one, two] = ids.map((id) => steps.findLast((s) => s.id === id));
+  assert.deepEqual(two.undo.marks.marks, [mark(M1, "Why")]);
+  actor.send(undo(two));
+  await flush();
+  assert.deepEqual((await read(actor, A)).conversation.marks.marks, [mark(M1, "Why")], "one Undo takes back the second visit");
+  actor.send(undo(one));
+  await flush();
+  assert.deepEqual(settled.map((s) => s.outcome), ["applied", "applied"]);
+  assert.equal((await read(actor, A)).conversation.marks, undefined);
+});
+
 test("a comment box left empty becomes its highlight in the same step", async () => {
   const { actor, steps } = await start();
   actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [mark(M1, "Hm")] });

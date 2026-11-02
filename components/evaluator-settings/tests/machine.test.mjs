@@ -136,6 +136,8 @@ test("New evaluator is at the top, kept with the Journal, and saved only once so
   actor.send({ type: "_edit", evaluator: next, patch: { name: "Fresh" } });
   clock.increment(200);
   assert.deepEqual(saves(emitted).filter((e) => e.id === next).map((e) => [e.book, e.name]), [[JOURNAL, "Fresh"]]);
+  actor.send({ type: "_blur" });
+  assert.deepEqual(saves(emitted).at(-1), { ...saves(emitted).at(-2), left: true }, "leaving the field says so, with what was saved");
 });
 
 test("a change from the fact while typing keeps what is typed; once saved it is taken as it is", async () => {

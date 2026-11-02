@@ -130,8 +130,14 @@ test("every edit leaves as the whole evaluator, without the evaluator's on/off o
   actor.send({ type: "_edit", patch: { name: "GV" } });
   actor.send({ type: "_blur" });
   assert.equal(saves(emitted).at(-1).name, "GV");
+  assert.equal(saves(emitted).at(-1).left, true, "leaving a field says so");
   clock.increment(400);
   assert.equal(emitted.length, 2);
+  // Typed, saved at the throttle, then left: the leave is said again with what was saved.
+  actor.send({ type: "_edit", patch: { name: "GVX" } });
+  clock.increment(200);
+  actor.send({ type: "_blur" });
+  assert.deepEqual(saves(emitted).slice(-2).map((e) => [e.name, e.left]), [["GVX", undefined], ["GVX", true]]);
 });
 
 test("the description is saved with the evaluator, cleared too, and alone makes a new evaluator worth saving", async () => {

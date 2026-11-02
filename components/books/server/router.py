@@ -5,7 +5,8 @@ The row (a few KB) holds what rides the bus; the chapters and images are files u
 books/<id>/, served immutable under a URL carrying the content version so a re-import
 never serves a stale cache. A position is last write wins and never refused (Decision
 4); a delete tombstones the row and keeps the directory, so a restore write (5) can bring
-the book back without importing it again.
+the book back without importing it again, until the delete's step leaves the undo list
+(12) and the browser asks for the files to go (purge).
 """
 
 import json
@@ -266,7 +267,8 @@ async def delete_book(book_id: str, user_id: str = Depends(require_user)):
 async def restore_book(book_id: str, request: Request, user_id: str = Depends(require_user)):
     # A restore write (5): it names the tombstone's own version, so only the delete it
     # undoes is taken back; any later write there, or a live book, answers the row as it
-    # is. A tombstone from before deletes kept the files cannot come back without them.
+    # is. A tombstone whose files went (purged, or from before deletes kept them) cannot
+    # come back without them: 409, as session answers for a purged guest.
     payload = await request.json()
     base = payload.get("baseVersion")
     now = int(time.time() * 1000)
@@ -275,13 +277,30 @@ async def restore_book(book_id: str, request: Request, user_id: str = Depends(re
         if row is None:
             raise HTTPException(status_code=404)
         kept = (_book_dir(user_id, book_id) / "chapters").is_dir()
-        if not row["deleted"] or base != row["version"] or not kept:
+        if not row["deleted"] or base != row["version"]:
             return _record(row)
+        if not kept:
+            raise HTTPException(status_code=409, detail="changed")
         connection.execute(
             "UPDATE books SET version = ?, updated_at = ?, seq = ?, deleted = 0 WHERE id = ?",
             (row["version"] + 1, now, _next_seq(connection), book_id),
         )
         return _reread(connection, book_id)
+
+
+@router.post("/{book_id}/purge")
+def purge_book(book_id: str, user_id: str = Depends(require_user)):
+    # The step of a book's delete left the undo list (12): it can never come back, so its
+    # files go. The tombstone stays (5); a live book's files never go. Copies already in
+    # the online backup stay, as for a deleted guest (3.4).
+    if not _ID.match(book_id):
+        raise HTTPException(status_code=404)
+    with _connect(user_id) as connection:
+        row = connection.execute("SELECT deleted FROM books WHERE id = ?", (book_id,)).fetchone()
+    if row is None or not row["deleted"]:
+        raise HTTPException(status_code=404, detail="no-such-book")
+    shutil.rmtree(_book_dir(user_id, book_id), ignore_errors=True)
+    return {"id": book_id}
 
 
 @router.put("/{book_id}/opened")

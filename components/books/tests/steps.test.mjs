@@ -73,9 +73,16 @@ function server(initial = []) {
     rows.set(id, r);
     return out(r);
   };
+  const purged = [];
   return {
     rows,
     restores,
+    purged,
+    // The files of a deleted book go; a restore after that is refused as changed (409).
+    purge: async (id) => {
+      if (!rows.get(id)?.deleted) throw new Error("books purge 404");
+      purged.push(id);
+    },
     upload: async (id) => {
       rows.set(id, { ...row(id), userTitle: null, userAuthor: null });
       return { row: out(rows.get(id)) };
@@ -85,6 +92,7 @@ function server(initial = []) {
       restores.push([id, base]);
       const r = rows.get(id);
       if (!r) return { error: "not-found" };
+      if (r.deleted && r.version === base && purged.includes(id)) return { error: "changed" };
       return r.deleted && r.version === base ? bump(id, { deleted: false }) : out(r);
     },
     title: async (id, t, a) =>
@@ -244,6 +252,36 @@ test("a delete happens at once as one step with the notice; Undo restores it, Re
   // The first restore found the book live, since its delete was never sent, and changed nothing.
   assert.deepEqual(h.api.restores, [[A, 1], [A, 2]]);
   assert.ok(h.settled.every((s) => s.outcome === "applied"));
+});
+
+test("a deleted book's files go only when its delete step leaves the undo list; a restore after that leaves it deleted", async () => {
+  const h = await start({ store: memory([row(A), row(B, { title: "Emma", fileTitle: "Emma" })]), api: server([row(A), row(B, { title: "Emma", fileTitle: "Emma" })]) });
+  h.actor.send({ type: "book.discarded", id: A });
+  await h.sync();
+  const [step] = h.steps;
+  const dropped = (s, payload = s.redo, owner = "books") => ({ type: "step.dropped", id: s.id, owner, payload });
+  assert.deepEqual(h.api.purged, [], "nothing is erased while the step can be undone");
+  h.actor.send(dropped(step, step.redo, "notes"));
+  h.actor.send(dropped({ ...step, id: "01ARZ3NDEKTSV4RRFFQ69G9999" }));
+  await flush();
+  assert.deepEqual(h.api.purged, [], "another owner's step, or a step that did not write the book, erases nothing");
+  h.actor.send(dropped(step));
+  await flush();
+  assert.deepEqual(h.api.purged, [A]);
+
+  // A live book's step leaving the list erases nothing: its rename names no delete.
+  h.actor.send({ type: "book.renamed", id: B, title: "Persuasion" });
+  h.actor.send(dropped(h.steps.at(-1)));
+  await flush();
+  assert.deepEqual(h.api.purged, [A]);
+
+  // A restore that reaches the server after the files went is refused, and the book stays deleted.
+  h.actor.send(undo(step));
+  assert.ok(await shown(h.actor, A), "Undo shows it at once (5)");
+  await h.sync();
+  assert.equal(await shown(h.actor, A), null);
+  assert.equal(h.deleted.at(-1), A);
+  assert.equal(h.api.rows.get(A).deleted, true);
 });
 
 test("Undo of a delete while it is on its way still brings the book back", async () => {

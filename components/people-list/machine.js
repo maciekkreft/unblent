@@ -107,6 +107,9 @@ export const rowsOf = (people, spending, now) =>
 
 const ok = (reply) => reply && !reply.error;
 
+// The guest's name as the row shows it rides Block and Reset use, so Undo can name it.
+const named = (event) => (typeof event.name === "string" && event.name ? { name: event.name } : {});
+
 // The accounts to show: a guest being deleted is left out until session's new list
 // says it is gone, so the row and the Guests count read as gone at once (12).
 export const shownOf = (people, deleting) => people && people.filter((p) => !deleting.includes(p.userId));
@@ -171,8 +174,8 @@ export const machine = setup({
     // rule): session hands the browser over or deletes, llm blocks or resets, and the fact
     // records each as a step (12, Undo); View as is reversed by Back to you.
     _viewAs: { actions: emit(({ event }) => ({ type: "viewas.requested", user: event.user })) },
-    _reset: { actions: emit(({ event }) => ({ type: "use.reset", user: event.user })) },
-    _block: { actions: emit(({ event }) => ({ type: "guest.blocked", user: event.user, blocked: event.blocked })) },
+    _reset: { actions: emit(({ event }) => ({ type: "use.reset", user: event.user, ...named(event) })) },
+    _block: { actions: emit(({ event }) => ({ type: "guest.blocked", user: event.user, blocked: event.blocked, ...named(event) })) },
     // Can sync (3.4): the switch moves at once, and session's new list confirms it or,
     // if the change could not be saved, puts it back. Pressing it again is the undo.
     _sync: {

@@ -134,6 +134,12 @@ const save = enqueueActions(({ context, enqueue }) => {
   if (savable(context)) enqueue.emit({ type: "evaluator.saved", ...wire(context.draft) });
 });
 
+// Leaving a field saves with `left`, also when the throttle already saved what it holds,
+// so `evaluators` ends that field's stretch of typing (12, Undo).
+const leave = enqueueActions(({ context, enqueue }) => {
+  if (savable(context)) enqueue.emit({ type: "evaluator.saved", ...wire(context.draft), left: true });
+});
+
 const patchQuestion = (draft, id, patch) => ({
   ...draft,
   questions: draft.questions.map((q) => (q.id === id ? { ...q, ...patch } : q)),
@@ -422,6 +428,7 @@ export const machine = setup({
             clean: {
               on: {
                 ...edits("dirty"),
+                _blur: { actions: leave },
                 "evaluator.changed": follow(false),
                 "evaluator.deleted": follow(false),
               },
@@ -431,7 +438,7 @@ export const machine = setup({
             dirty: {
               on: {
                 ...edits(undefined),
-                _blur: { target: "clean", actions: save },
+                _blur: { target: "clean", actions: leave },
                 "evaluator.changed": follow(true),
                 "evaluator.deleted": follow(true),
               },

@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { machine, levelOf, percentOf } from "./machine.js";
-import removalStarted from "./events/removal.started.json" with { type: "json" };
+import trialRestarted from "./events/trial.restarted.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -13,7 +13,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
-      events: { "removal.started": removalStarted },
+      events: { "trial.restarted": trialRestarted },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

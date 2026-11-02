@@ -91,6 +91,8 @@ async function start({ store = fakeStore(), time = at(12, 10), ask, api } = {}) 
     settled.push(p);
   });
   actor.on("journal.conflicted", (e) => conflicted.push(e));
+  const changed = [];
+  actor.on("journal.changed", (e) => changed.push(e));
   actor.start();
   await flush();
   const write = (id, text, left) => {
@@ -109,7 +111,7 @@ async function start({ store = fakeStore(), time = at(12, 10), ask, api } = {}) 
     now += ms;
     clock.increment(ms);
   };
-  return { actor, store, steps, settled, conflicted, write, read, text, advance };
+  return { actor, store, steps, settled, conflicted, changed, write, read, text, advance };
 }
 
 const undo = (step) => ({ type: "step.undone", id: step.id, owner: "journal", payload: step.undo });
@@ -209,14 +211,17 @@ test("keeping one copy is one step with the notice; Undo brings both copies back
   s.write(D2, "From the Mac");
   const step = s.steps.at(-1);
   assert.deepEqual([step.label, step.notice], ["keep one copy of the day", true]);
+  assert.equal(s.changed.at(-1).settled, D2, "the change names the day it settled");
   assert.equal(store.tables.days.get(D1).deleted, true);
   s.actor.send(undo(step));
   assert.equal(s.settled.at(-1).outcome, "applied", "a closed day's choice can be taken back");
+  assert.equal(s.changed.at(-1).settled, undefined, "an Undo settles nothing");
   assert.equal(store.tables.days.get(D1).deleted, undefined, "the other record is back under its own id");
   assert.equal(s.text(D2), "From the phone");
   assert.equal(s.conflicted.length, 2, "both copies are put to the page again");
   s.actor.send(redo(step));
   assert.equal(s.settled.at(-1).outcome, "applied");
+  assert.equal(s.changed.at(-1).settled, D2, "a Redo settles the conflict again, so the page hides the copies");
   assert.equal(store.tables.days.get(D1).deleted, true);
   assert.deepEqual(s.read().days.map((d) => [d.id, d.text]), [[D2, "From the Mac"]]);
 });
@@ -260,4 +265,6 @@ test("Undo of a copy kept after a conflict with another device puts that conflic
   assert.equal(s.text(), "Morning\nPhone");
   assert.equal(s.conflicted.length, 2);
   assert.deepEqual(s.conflicted.at(-1).mine.text, "Morning\nLaptop");
+  s.actor.send(redo(step));
+  assert.equal(s.changed.at(-1).settled, D1, "a Redo settles the conflict again");
 });

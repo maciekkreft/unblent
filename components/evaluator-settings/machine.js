@@ -159,6 +159,12 @@ const save = enqueueActions(({ context, enqueue }) => {
   if (savable(context)) enqueue.emit({ type: "evaluator.saved", ...wire(context.draft) });
 });
 
+// Leaving a field saves with `left`, also when the throttle already saved what it holds,
+// so `evaluators` ends that field's stretch of typing (12, Undo).
+const leave = enqueueActions(({ context, enqueue }) => {
+  if (savable(context)) enqueue.emit({ type: "evaluator.saved", ...wire(context.draft), left: true });
+});
+
 // A gesture names the evaluator it is on. On another than the draft, what was typed in the
 // draft is saved first (while typing waits, `pending`), and that evaluator becomes the draft.
 const take = (pending) =>
@@ -535,6 +541,7 @@ export const machine = setup({
           on: {
             ...edits("dirty", false),
             ...presses(false),
+            _blur: { actions: leave },
             "evaluator.changed": { actions: changed(false) },
             "evaluator.deleted": { actions: changed(false) },
           },
@@ -545,7 +552,7 @@ export const machine = setup({
           on: {
             ...edits(undefined, true),
             ...presses(true),
-            _blur: { target: "clean", actions: save },
+            _blur: { target: "clean", actions: leave },
             "evaluator.changed": { actions: changed(true) },
             "evaluator.deleted": { actions: changed(true) },
           },

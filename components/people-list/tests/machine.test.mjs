@@ -104,12 +104,14 @@ test("a guest row offers its actions, and each is the admin's gesture on the bus
   for (const type of ["viewas.requested", "use.reset", "guest.blocked"]) actor.on(type, (e) => out.push(e));
   actor.start();
   actor.send({ type: "_viewAs", user: "g14" });
-  actor.send({ type: "_reset", user: "g14" });
-  actor.send({ type: "_block", user: "g14", blocked: true });
+  actor.send({ type: "_reset", user: "g14", name: "Guest 14" });
+  actor.send({ type: "_block", user: "g14", blocked: true, name: "Guest 14" });
+  actor.send({ type: "_block", user: "g14", blocked: false });
   assert.deepEqual(out, [
     { type: "viewas.requested", user: "g14" },
-    { type: "use.reset", user: "g14" },
-    { type: "guest.blocked", user: "g14", blocked: true },
+    { type: "use.reset", user: "g14", name: "Guest 14" },
+    { type: "guest.blocked", user: "g14", blocked: true, name: "Guest 14" },
+    { type: "guest.blocked", user: "g14", blocked: false },
   ]);
 });
 

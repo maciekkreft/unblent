@@ -19,7 +19,8 @@
         "required": ["id", "start", "end", "quote", "comment"],
         "additionalProperties": false
       }
-    }
+    },
+    "left": { "type": "boolean", "description": "True when the user left the comment box: its stretch of typing ends (12, Undo)." }
   },
   "required": ["conversationId", "answerId", "marks"],
   "additionalProperties": false

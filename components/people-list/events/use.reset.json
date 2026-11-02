@@ -6,6 +6,10 @@
     "user": {
       "type": "string"
     },
+    "name": {
+      "type": "string",
+      "description": "The guest's name as People shows it, such as Guest 12, so Undo can name it."
+    },
     "undone": {
       "type": "boolean"
     }

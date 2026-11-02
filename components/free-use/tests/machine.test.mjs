@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, shareOf, levelOf, percentOf, blockedOf, TRIAL } from "../machine.js";
+import { machine, shareOf, levelOf, percentOf, blockedOf } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -39,14 +39,10 @@ test("a blocked guest's bar reads ended, whatever share is left", async () => {
   assert.equal(actor.getSnapshot().context.blocked, false, "unblocked, the share shows again");
 });
 
-test("Start over leaves as a removal of the trial, with one fixed id", () => {
+test("Start over leaves as one gesture, trial.restarted, with nothing in it", () => {
   const actor = createActor(machine, { input: { ask: async () => ({ signedIn: false }) } }).start();
   const emitted = [];
-  actor.on("removal.started", (e) => emitted.push(e));
+  actor.on("trial.restarted", (e) => emitted.push(e));
   actor.send({ type: "_startOver" });
-  actor.send({ type: "_startOver" });
-  assert.deepEqual(emitted, [
-    { type: "removal.started", kind: "trial", id: TRIAL, name: "" },
-    { type: "removal.started", kind: "trial", id: TRIAL, name: "" },
-  ]);
+  assert.deepEqual(emitted, [{ type: "trial.restarted" }]);
 });

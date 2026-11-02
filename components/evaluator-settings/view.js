@@ -863,9 +863,7 @@ class EvaluatorSettings extends LitElement {
         aria-label=${name}
         @mousedown=${(e) => this.#pressed(e)}
         @focusin=${(e) => (this.#last = e.composedPath()[0])}
-        @focusout=${(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget)) this.#send({ type: "_blur" });
-        }}
+        @focusout=${() => this.#send({ type: "_blur" })}
       >
         ${this.#heading(d, name, open)}
         ${open ? this.#body(d, name, kept, questions) : nothing}

@@ -419,7 +419,8 @@ test("a selection opens a comment; typing saves the whole list at a throttle", a
   });
   assert.deepEqual(ctx().conversation.marks, { answerId: ANSWER.id, marks: emitted[0].marks }, "shown at once, before the echo");
   actor.send({ type: "_closed" });
-  assert.equal(emitted.length, 1, "closing what was saved saves nothing more");
+  assert.equal(emitted.length, 2);
+  assert.deepEqual(emitted[1], { ...emitted[0], left: true }, "closing what was saved only says the box was left");
   assert.ok(state().matches({ showing: "idle" }));
 });
 
@@ -488,6 +489,7 @@ test("selecting elsewhere while writing saves the open comment first", async () 
   actor.send({ type: "_typed", text: "one" });
   actor.send({ type: "_selected", ...at("path") });
   assert.equal(emitted.at(-1).marks.length, 1);
+  assert.equal(emitted.at(-1).left, true, "the first box was left");
   assert.equal(ctx().draft.quote, "path");
 });
 

@@ -315,10 +315,12 @@ const tell = (enqueue, c, again = false) => {
   enqueue.emit({ type: "journal.conflicted", ...told });
 };
 
-const announce = (enqueue, c) => {
+// `settled` names the day whose conflict this change settled, so a page still showing the
+// two copies hides them, as after a Redo of keeping one (12, Undo).
+const announce = (enqueue, c, settled = null) => {
   const picture = body(c);
   enqueue.assign({ open: picture.open, today: picture.today });
-  enqueue.emit({ type: "journal.changed", ...picture });
+  enqueue.emit({ type: "journal.changed", ...picture, ...(settled ? { settled } : {}) });
   tell(enqueue, c);
 };
 
@@ -375,7 +377,7 @@ const adopt = (c, enqueue, userId) => {
 // is queued in the outbox signed in or not, so its row keeps the last version the server
 // gave as its base; only signed in is a drain asked for. Signed in, the versions are the
 // server's: a change keeps the version it was made on until the server acknowledges it.
-const update = (context, enqueue, next) => {
+const update = (context, enqueue, next, settled = null) => {
   if (same(next, context.days)) return;
   let days = next;
   if (context.userId) {
@@ -387,7 +389,7 @@ const update = (context, enqueue, next) => {
   persist(context.store, context.days, days, enqueue);
   arm(enqueue, days, context.now());
   enqueue.assign({ days });
-  announce(enqueue, { ...context, days });
+  announce(enqueue, { ...context, days }, settled);
 };
 
 // Applies a sync's summary: the acknowledged days, the conflicts, what was pulled, the
@@ -506,7 +508,7 @@ const saved = enqueueActions(({ context, event, enqueue }) => {
     const touched = new Set(was.map((d) => d.id));
     const next = choice.map((d) => (touched.has(d.id) ? { ...d, step } : d));
     enqueue.assign({ pending, undo, stretch: null });
-    update({ ...context, pending }, enqueue, next);
+    update({ ...context, pending }, enqueue, next, event.id);
     enqueue.emit({
       type: "step.recorded",
       id: step,
@@ -582,9 +584,10 @@ const applyStep = enqueueActions(({ context, event, enqueue }) => {
   const pending = new Map(context.pending);
   const told = undoing && p.conflict && isId(p.conflict.id) ? p.conflict : null;
   if (told) pending.set(told.id, { copies: [told.mine.text, told.theirs.text], other: null, told });
-  else for (const e of entries) pending.delete(e.id);
+  const settled = told ? null : (entries.find((e) => pending.has(e.id))?.id ?? null);
+  if (!told) for (const e of entries) pending.delete(e.id);
   enqueue.assign({ pending });
-  update({ ...context, pending }, enqueue, mint(context.days, next));
+  update({ ...context, pending }, enqueue, mint(context.days, next), settled);
   if (told) enqueue.emit({ type: "journal.conflicted", ...told });
   settle("applied");
 });

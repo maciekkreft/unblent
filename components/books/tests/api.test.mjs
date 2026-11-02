@@ -64,6 +64,8 @@ const restore = (id, baseVersion, cookie) =>
     headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
     body: JSON.stringify({ baseVersion }),
   });
+const purge = (id, cookie) =>
+  fetch(`${BASE_URL}/api/books/${id}/purge`, { method: "POST", headers: cookie ? { Cookie: cookie } : {} });
 const opened = (id, cookie) =>
   fetch(`${BASE_URL}/api/books/${id}/opened`, {
     method: "PUT",
@@ -427,6 +429,19 @@ test("a delete tombstones the row, and a restore write naming its version brings
   assert.equal((await getImage(ID, 1, name, cookie)).status, 200);
   // A restore of a live book answers it as it is.
   assert.equal((await (await restore(ID, back.version, cookie)).json()).version, 3);
+});
+
+test("a deleted book's files go only on purge, and a restore after that is refused as changed (12)", async () => {
+  const cookie = cookieFor(freshUser());
+  await importBook(ID, SAMPLE, cookie);
+  assert.equal((await purge(ID, cookie)).status, 404, "a live book's files never go");
+  const gone = await (await remove(ID, cookie)).json();
+  assert.equal((await purge(ID, cookie)).status, 200);
+  const refused = await restore(ID, gone.version, cookie);
+  assert.equal(refused.status, 409);
+  assert.equal((await refused.json()).detail, "changed");
+  assert.equal((await (await pull(0, cookie)).json()).books.find((b) => b.id === ID).deleted, true, "the tombstone stays");
+  assert.equal((await getChapter(ID, 1, 0, cookie)).status, 404);
 });
 
 test("a delete for an unknown id is born a tombstone", async () => {

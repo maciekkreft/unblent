@@ -273,15 +273,29 @@ test("a step is refused when the evaluator changed since, here or on another dev
   assert.equal((await h.undo(h.steps.at(-1))).reason, "changed", "another device switched it since");
 });
 
+test("leaving a field ends its stretch: typing in it again after coming back is another step", async () => {
+  const h = await start({ store: memory([row(A)]) });
+  h.actor.send(saved(A, { name: "Goals!" }));
+  h.actor.send({ ...saved(A, { name: "Goals!" }), left: true });
+  h.actor.send(saved(A, { name: "Goals!!" }));
+  h.actor.send({ ...saved(A, { name: "Goals!!!" }), left: true });
+  assert.equal(new Set(h.steps.map((s) => s.id)).size, 2);
+  assert.equal((await h.undo(h.step(-1))).outcome, "applied");
+  assert.equal((await h.listed())[0].name, "Goals!", "one Undo takes back the second visit");
+  assert.equal((await h.undo(h.step(0))).outcome, "applied");
+  assert.equal((await h.listed())[0].name, "Goals");
+});
+
 test("Start over on a try page is one step: Undo brings back what was there and deletes the copies", async () => {
   const store = memory([row(A, { book: JOURNAL, name: "Mine" }), row(B, { book: JOURNAL, name: "Other" })]);
   const h = await start({ store, api: server(), tryPage: "evaluators" });
-  h.actor.send({ type: "removal.settled", kind: "trial", id: "00000000000000000000000RST" });
+  h.actor.send({ type: "trial.restarted" });
   await flush();
   assert.deepEqual((await h.listed()).map((e) => e.name), ["Clear goal"]);
   assert.equal(h.steps.length, 1);
   const s = h.step(0);
   assert.equal(s.label, "start over");
+  assert.equal(s.notice, true, "it shows the short notice");
   assert.equal((await h.undo(s)).outcome, "applied");
   assert.deepEqual((await h.listed()).map((e) => e.name).sort(), ["Mine", "Other"]);
   assert.equal((await h.redo(s)).outcome, "applied");

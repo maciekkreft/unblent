@@ -191,17 +191,13 @@ test("the Journal arriving after the list is waited for; without it the page sho
   }
 });
 
-const TRIAL = "00000000000000000000000RST";
-
-test("Start over, once its window ends, deletes what is here and copies the starters again", async () => {
+test("Start over deletes what is here and copies the starters again, at once", async () => {
   const store = fakeStore([{ id: ID, book: JOURNAL, name: "", on: false, questions: [], version: 3 }]);
   const api = fakeApi([STARTER]);
   const { actor, clock } = start(store, { api, ask: askAs("guest-1"), tryPage: "evaluators" });
   await flush();
   assert.deepEqual(api.asked, [], "a browser that holds an evaluator gets no copies at load");
-  actor.send({ type: "removal.undone", kind: "trial", id: TRIAL });
-  assert.deepEqual((await list(actor)).map((e) => e.id), [ID], "the window and an Undo change nothing");
-  actor.send({ type: "removal.settled", kind: "trial", id: TRIAL });
+  actor.send({ type: "trial.restarted" });
   await flush();
   assert.deepEqual(api.asked, ["evaluators"]);
   assert.deepEqual((await list(actor)).map((e) => [e.name, e.book, e.on]), [["Clear goal", JOURNAL, true]]);
@@ -219,7 +215,7 @@ test("Start over means nothing off a try page", async () => {
   const api = fakeApi([STARTER]);
   const { actor } = start(store, { api, ask: askAs("guest-1") });
   await flush();
-  actor.send({ type: "removal.settled", kind: "trial", id: TRIAL });
+  actor.send({ type: "trial.restarted" });
   await flush();
   assert.deepEqual(api.asked, []);
   assert.deepEqual((await list(actor)).map((e) => e.name), ["Mine"]);

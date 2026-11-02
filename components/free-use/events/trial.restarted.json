@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The visitor pressed Start over on a try page (8): every fact that keeps starters starts over at once, as one step Undo takes back (12).",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

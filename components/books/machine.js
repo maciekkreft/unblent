@@ -614,6 +614,18 @@ function applyStep(context, event, enqueue) {
   settle("refused", "changed");
 }
 
+// A book's delete step left the undo list (12, Undo): it can never come back now, so its
+// files on the server go (5). Only while the book is still the tombstone that step made.
+function purge(context, event) {
+  const p = event.payload ?? {};
+  if (event.owner !== "books" || p.kind !== "book" || p.deleted !== true || typeof p.id !== "string") return;
+  const current = context.books.get(p.id);
+  if (!current?.deleted || current.step !== event.id || context.userId == null || !context.api?.purge) return;
+  Promise.resolve()
+    .then(() => context.api.purge(p.id))
+    .catch(() => {});
+}
+
 // The session ended, however it ended (a deliberate sign-out, a cookie gone across a
 // restart, or a 401 from any call): the one routine every such path funnels through, so
 // signed out always means the same thing. Signed out hides the account's work, it does
@@ -867,7 +879,8 @@ export const machine = setup({
       "are each a step Undo and Redo reverse (section 12); a delete happens at once and asks for " +
       "the short notice. Undo of an added book deletes it, and a deleted book comes back with a " +
       "restore write the server accepts, its files kept on the server, so nothing is imported " +
-      "again. A step is refused when the book was written since by anything else; turning a " +
+      "again. Once a delete's step leaves the undo list (`step.dropped`), the book's files on " +
+      "the server are erased; a restore after that is refused and the book stays deleted. A step is refused when the book was written since by anything else; turning a " +
       "page is not a step and refuses nothing. A delete from the corner notice, when its Undo " +
       "runs out, is no step. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
@@ -1083,6 +1096,7 @@ export const machine = setup({
         "book.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
+        "step.dropped": { actions: ({ context, event }) => purge(context, event) },
         // A delete the shelf handed to the corner notice when the keyboard left it: the
         // notice's undo window ran out, so the book goes, as on book.discarded.
         "removal.settled": {
@@ -1348,6 +1362,15 @@ function applySync(context, output, enqueue) {
 function applyRestored(context, ack, enqueue) {
   context.outbox.delete(ack.id);
   const held = context.books.get(ack.book);
+  // Its files went before the restore arrived (purge): the book stays deleted.
+  if (visible(held) && ack.row?.error === "changed") {
+    const record = { ...held, deleted: true };
+    context.books.set(ack.book, record);
+    enqueue(() => context.store.put(record).catch(() => {}));
+    enqueue.emit({ type: "book.deleted", id: ack.book });
+    if (context.open.id === ack.book) forgetOpen(context, enqueue);
+    return;
+  }
   if (!held || !ack.row || ack.row.error) return;
   if (!visible(held)) {
     context.books.set(ack.book, { ...held, version: Math.max(held.version, ack.row.version) });

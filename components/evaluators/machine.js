@@ -505,8 +505,16 @@ const live = (context, id) => {
 // A `journal` field in a save or a stored row is no longer read: the schemas keep it
 // because contracts only grow (7.1), and a write leaving it out keeps the server's.
 // Every save is a step (12, Undo); typing on in the one field the step last wrote joins
-// it (textStep).
+// it (textStep). A save that says the user left its field (`left`) ends the stretch after
+// it, so typing there again is a step of its own.
 function applySave(context, event, enqueue) {
+  saveOnce(context, event, enqueue);
+  if (!event.left || !context.stretch) return;
+  context.stretch = null;
+  enqueue.assign({ stretch: null });
+}
+
+function saveOnce(context, event, enqueue) {
   // Your values' name and questions come from the values; a save changes nothing of it.
   if (event.id === YOURS) return;
   if (!isId(event.id) || context.evaluators.get(event.id)?.deleted) return;
@@ -600,6 +608,7 @@ function seed(context, enqueue) {
     label: "start over",
     undo: { kind: "evaluators", items: [...over.gone, ...fresh.map((r) => ({ id: r.id, deleted: true }))] },
     redo: { kind: "evaluators", items: [...over.gone.map(({ id, prior }) => ({ id, deleted: true, ...priorOf(prior) })), ...fresh.map((r) => ({ ...r, deleted: false }))] },
+    notice: true,
   });
 }
 
@@ -704,7 +713,7 @@ function applySettle(context, { kind, id }, enqueue) {
   }
 }
 
-// Start over on a try page (8), once its Undo window ended: every evaluator here becomes
+// Start over on a try page (8), at once (trial.restarted): every evaluator here becomes
 // a tombstone, uploaded like any delete, and _restart fetches the starters again and
 // copies them in as on a first visit. The whole of it is one step (12, Undo), recorded
 // once the copies are made (seed), whose Undo brings back what was there and deletes the
@@ -792,8 +801,8 @@ function typedFields(was, next) {
 
 // The step a save makes. A save that only types on in the field the open stretch last
 // wrote, while that stretch last wrote the evaluator, joins it: the same id, its undo kept
-// by `undo`. evaluator.saved says nothing of leaving a field, so a stretch ends at any
-// other change or any other step. A new evaluator's undo deletes it again.
+// by `undo`. A stretch ends when the editor says the user left the field (applySave), at
+// any other change or at any other step. A new evaluator's undo deletes it again.
 function textStep(context, was, next) {
   const blank = { name: "", description: "", questions: next.questions.map((q) => ({ ...q, text: "", yes: "", no: "", options: q.options.map((o) => ({ ...o, name: "", description: "" })) })) };
   const fields = typedFields(was ?? blank, next);
@@ -893,9 +902,6 @@ function applyStep(context, event, enqueue) {
   settle("refused", "changed");
 }
 
-const settled = (context, message, enqueue) =>
-  message.kind === "trial" ? startOver(context, enqueue) : applySettle(context, message, enqueue);
-
 // At load no tab can undo anything any more, because the tab that showed the undo
 // notice is gone, so every leftover mark settles.
 function settleAll(context, enqueue) {
@@ -919,7 +925,8 @@ function flush(context, message, enqueue) {
   else if (message.type === "evaluator.moved") applyMove(context, message, enqueue);
   else if (message.type === "starter.ticked") applyTick(context, message, enqueue);
   else if (message.type === "removal.undone") applyMark(context, message, false, enqueue);
-  else if (message.type === "removal.settled") settled(context, message, enqueue);
+  else if (message.type === "removal.settled") applySettle(context, message, enqueue);
+  else if (message.type === "trial.restarted") startOver(context, enqueue);
   else if (message.type === "evaluator.discarded") applyDiscard(context, message, enqueue);
   else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
@@ -932,7 +939,7 @@ function unanswerable(message) {
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "active?", "evaluate?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.undone", "removal.settled", "evaluator.discarded", "step.undone", "step.redone"].map((t) => [t, { actions: queue }]),
+  ["list?", "active?", "evaluate?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.undone", "removal.settled", "trial.restarted", "evaluator.discarded", "step.undone", "step.redone"].map((t) => [t, { actions: queue }]),
 );
 
 // A visitor on a try page (8) with nothing in this browser yet gets the page's
@@ -1116,7 +1123,8 @@ export const machine = setup({
       "deleted evaluator is kept as a tombstone, which always wins. Each save, switch, move, " +
       "delete and starter tick is a step Undo and Redo reverse (section 12); typing on in one " +
       "field (the name, the description, a question's text, what yes or no means, an option's " +
-      "name or description) stays one step until anything else changes, and removing a question " +
+      "name or description) stays one step until the user leaves the field (`evaluator.saved` " +
+      "with `left`) or anything else changes, and removing a question " +
       "or an option is a save of its own step. A new evaluator the list places where it was " +
       "started with o or O is added and placed in one step. A delete (`evaluator.discarded`) happens at once " +
       "and asks for the short notice; Undo brings the evaluator back with a restore write the " +
@@ -1143,8 +1151,8 @@ export const machine = setup({
       "each of that page's starters before anything is listed, with new ids, switched on and " +
       "kept with the Journal; the copies are the visitor's own and upload with the rest once " +
       "the guest is made, and later changes by the admin do not reach them. Start over on a " +
-      "try page, once its Undo window ends, deletes every evaluator in the browser and " +
-      "copies the starters in again the same way, and the whole of it is one step, whose Undo " +
+      "try page (`trial.restarted`) at once deletes every evaluator in the browser and " +
+      "copies the starters in again the same way, and the whole of it is one step, shown with the short notice, whose Undo " +
       "brings back what was there and deletes the copies. Your values has a fixed description. The chat " +
       "may use two of its queries as tools, each with its own switch in Settings under What the chat " +
       "may read: `evaluators: active` (\"Listing your evaluators\") lists every " +
@@ -1168,6 +1176,7 @@ export const machine = setup({
       "starter.ticked": "step",
       "removal.undone": "pending",
       "removal.settled": "pending",
+      "trial.restarted": "step",
       "evaluator.discarded": "step",
     },
     asks: ["session: read", "books: list", "values: read", "llm: decide", "flags: read"],
@@ -1343,7 +1352,8 @@ export const machine = setup({
         "evaluator.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
         "starter.ticked": { actions: enqueueActions(({ context, event, enqueue }) => applyTick(context, event, enqueue)) },
         "removal.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, false, enqueue)) },
-        "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => settled(context, event, enqueue)) },
+        "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => applySettle(context, event, enqueue)) },
+        "trial.restarted": { actions: enqueueActions(({ context, enqueue }) => startOver(context, enqueue)) },
         "evaluator.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },

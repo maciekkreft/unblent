@@ -163,7 +163,11 @@ const keep = (side) =>
     enqueue.emit({ type: "day.saved", id, text: side === "mine" ? mine.text : theirs.text });
   });
 
-const follow = (dirty) => [assign(({ context, event }) => settle(context, picture(event), dirty)), announce];
+// A change that settled the conflict shown (journal.changed's `settled`), as a Redo of
+// keeping one copy does, hides the two copies at once.
+const settledConflict = assign(({ context, event }) => (context.conflict && event.settled === context.conflict.id ? { conflict: null } : {}));
+
+const follow = (dirty) => [assign(({ context, event }) => settle(context, picture(event), dirty)), settledConflict, announce];
 
 // What a pick asks the entry to show: a day from the Days list, or a chapter of the
 // journal book (null is today's page).
@@ -317,7 +321,7 @@ export const machine = setup({
       "journal holds two records of the shown date, the entry shows both copies, also on an " +
       "earlier day, labelled Yours and The other device's, or for two records of a date by when " +
       "each was last written (Written at 09:14, with the date when the two differ and the seconds when both fall in one minute), and the user keeps one; the journal makes that one " +
-      "step, so Undo brings both copies back. It announces which day it shows and whether " +
+      "step, so Undo brings both copies back, and a Redo hides them again at once. It announces which day it shows and whether " +
       "it can still be written, when the page has loaded and whenever either changes, also at " +
       "2:00, when the journal's day ends, and it holds a view a page nests in it under the day's text, which scrolls with " +
       "the text and follows the announced day. With Vim keys on, typing :q or :quit in the " +

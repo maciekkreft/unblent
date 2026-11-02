@@ -231,13 +231,13 @@ class PeopleList extends LitElement {
     return html`<span class="actions">
       <button type="button" aria-label="View as ${who}" @click=${() => send("_viewAs")}>View as</button>
       <span aria-hidden="true">·</span>
-      <button type="button" aria-label="Reset use of ${who}" @click=${() => send("_reset")}>Reset use</button>
+      <button type="button" aria-label="Reset use of ${who}" @click=${() => send("_reset", { name: who })}>Reset use</button>
       <span aria-hidden="true">·</span>
       <button
         type="button"
         class=${r.blocked ? "" : "danger"}
         aria-label="${r.blocked ? "Unblock" : "Block"} ${who}"
-        @click=${() => send("_block", { blocked: !r.blocked })}
+        @click=${() => send("_block", { blocked: !r.blocked, name: who })}
       >${r.blocked ? "Unblock" : "Block"}</button>
       <span aria-hidden="true">·</span>
       <button type="button" class="danger" aria-label="Delete ${who}" @click=${() => send("_delete")}>Delete</button>

@@ -449,12 +449,12 @@ const store = (enqueue, context, list) => {
 // What closing saves, in one change of the chat on screen: the comments, then the
 // highlight an empty box leaves, once. While the box is still open (the throttle) only
 // the comments are saved, since an empty box may yet be typed in.
-const keep = (enqueue, context, next, withHighlight = true) => {
+const keep = (enqueue, context, next, withHighlight = true, left = false) => {
   if (!next) return;
   let { conversation } = context;
   if (next.marks) {
     conversation = markedChat(conversation, next.marks);
-    enqueue.emit({ type: "marks.edited", conversationId: conversation.id, answerId: lastAnswer(conversation).id, marks: next.marks });
+    enqueue.emit({ type: "marks.edited", conversationId: conversation.id, answerId: lastAnswer(conversation).id, marks: next.marks, ...(left ? { left: true } : {}) });
   }
   const made = withHighlight && next.highlight && !(conversation.highlights ?? []).some((h) => h.id === next.highlight.id);
   if (made) {
@@ -467,8 +467,13 @@ const keep = (enqueue, context, next, withHighlight = true) => {
 
 const save = enqueueActions(({ context, enqueue }) => keep(enqueue, context, closing(context), false));
 // Close the open comment, saving what it holds.
+// Leaving the box says so (`left`), which ends its stretch of typing in `conversations`
+// (12, Undo), also when the last save already holds what the box says.
 const closeDraft = enqueueActions(({ context, enqueue }) => {
-  keep(enqueue, context, closing(context));
+  const { conversation, draft } = context;
+  const saved = savedMarks(conversation);
+  const typedIn = draft && lastAnswer(conversation)?.id === draft.answerId && saved.some((m) => m.id === draft.id);
+  keep(enqueue, context, closing(context) ?? (typedIn ? { marks: saved, highlight: null } : null), true, true);
   enqueue.assign({ draft: null });
 });
 const openSelection = assign({

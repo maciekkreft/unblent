@@ -135,13 +135,16 @@ const blockedOf = (ledger, user) => Boolean(guestIn(ledger, user)?.blocked);
 // A total read twice is summed the same way, but not always in the same order.
 const sameMoney = (a, b) => Math.abs(a - b) < 1e-9;
 
+// The guest as People names it, for the step's label (12, Undo).
+const guestName = (event) => (typeof event.name === "string" && event.name.trim() ? event.name.trim() : "a guest");
+
 // What a gesture changes, as the ledger held it before the gesture was sent; null when
 // the ledger was never read, or the gesture is no step (a guest key).
 function draftOf(ledger, event) {
   if (!ledger) return null;
   if (event.type === "limits.edited") return { kind: "limits", before: limitsIn(ledger, EDITS[event.type](event).fields) };
-  if (event.type === "guest.blocked") return { kind: "blocked", user: event.user, before: blockedOf(ledger, event.user) };
-  if (event.type === "use.reset" && !event.undone) return { kind: "reset", user: event.user, before: spentOf(ledger, event.user) };
+  if (event.type === "guest.blocked") return { kind: "blocked", user: event.user, name: guestName(event), before: blockedOf(ledger, event.user) };
+  if (event.type === "use.reset" && !event.undone) return { kind: "reset", user: event.user, name: guestName(event), before: spentOf(ledger, event.user) };
   return null;
 }
 
@@ -177,7 +180,7 @@ function stepOfDraft(draft, after) {
     const now = blockedOf(after, draft.user);
     if (now === draft.before) return null;
     return {
-      label: now ? "block a guest" : "unblock a guest",
+      label: `${now ? "block" : "unblock"} ${draft.name}`,
       notice: true,
       undo: { kind: "blocked", user: draft.user, blocked: draft.before, expect: now },
       redo: { kind: "blocked", user: draft.user, blocked: now, expect: draft.before },
@@ -186,7 +189,7 @@ function stepOfDraft(draft, after) {
   // Reset use on a guest who spent nothing changes nothing.
   if (draft.before <= 0) return null;
   return {
-    label: "reset the use of a guest",
+    label: `reset the use of ${draft.name}`,
     notice: true,
     undo: { kind: "reset", user: draft.user, undone: true, expect: spentOf(after, draft.user) },
     redo: { kind: "reset", user: draft.user, expect: draft.before },
@@ -456,7 +459,8 @@ export const machine = setup({
       "an amount, and is read again after each of its requests. Only the admin reads what guests spent and changes the " +
       "limits and guest keys; a change made while what guests spent is being read is still " +
       "saved. Each change of a limit, each Block or Unblock and each Reset use is a step Undo and Redo " +
-      "reverse, Block and Reset use with the short notice; Undo of a Reset use brings back the totals from " +
+      "reverse, Block and Reset use with the short notice naming the guest as People does, such as " +
+      "Block Guest 12; Undo of a Reset use brings back the totals from " +
       "before it, and a step is refused when a fresh read shows the limit, the block or what the guest spent " +
       "changed since. When the admin deletes a guest, what it spent stops counting toward every limit once " +
       "that delete can no longer be undone. The settings belong to the account, so they are the " +

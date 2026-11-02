@@ -104,6 +104,10 @@
         ],
         "additionalProperties": false
       }
+    },
+    "left": {
+      "type": "boolean",
+      "description": "True when the user left the field this save comes from: its stretch of typing ends (12, Undo)."
     }
   },
   "required": [

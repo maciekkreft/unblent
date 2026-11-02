@@ -202,15 +202,15 @@ test("a limit, a Block and a Reset use are one step each, and Undo then Redo bri
   await spendingRead(actor);
   await edit(actor, { type: "limits.edited", guest: 2 });
   await edit(actor, { type: "limits.edited", providers: { jev: 0.5 } });
-  await edit(actor, { type: "guest.blocked", user: "g1", blocked: true });
-  await edit(actor, { type: "use.reset", user: "g1" });
+  await edit(actor, { type: "guest.blocked", user: "g1", blocked: true, name: "Guest 12" });
+  await edit(actor, { type: "use.reset", user: "g1", name: "Guest 12" });
   assert.deepEqual(
     steps.map((s) => [s.label, s.notice ?? false]),
     [
       ["change the limit for each guest", false],
       ["change the limit of Jev by typesafe.ai", false],
-      ["block a guest", true],
-      ["reset the use of a guest", true],
+      ["block Guest 12", true],
+      ["reset the use of Guest 12", true],
     ],
   );
   for (const step of [...steps].reverse()) await undo(actor, step);
@@ -221,6 +221,17 @@ test("a limit, a Block and a Reset use are one step each, and Undo then Redo bri
   assert.ok(settled.every((s) => s.outcome === "applied"), JSON.stringify(settled));
   assert.equal(steps.length, 4, "an Undo or Redo records no step of its own");
   assert.ok(!book.writes.some(([what]) => what === "guestkeys"), "a guest key is never part of a step");
+});
+
+test("a Block or Reset use without the guest's name says a guest", async () => {
+  const book = ledger();
+  const { actor, steps } = startAdmin(book);
+  await flush();
+  await spendingRead(actor);
+  await edit(actor, { type: "guest.blocked", user: "g1", blocked: true });
+  await edit(actor, { type: "guest.blocked", user: "g1", blocked: false, name: "Guest 12" });
+  await edit(actor, { type: "use.reset", user: "g1" });
+  assert.deepEqual(steps.map((s) => s.label), ["block a guest", "unblock Guest 12", "reset the use of a guest"]);
 });
 
 test("a guest key is no step, and neither is a Reset use on a guest who spent nothing", async () => {

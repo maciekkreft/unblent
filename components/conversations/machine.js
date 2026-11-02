@@ -1113,6 +1113,8 @@ const onMarksEdited = (context, event, enqueue, self) => {
   if (!answered || answered.id !== event.answerId) return;
   const before = answersOf(chat);
   const was = chat.marks?.marks ?? [];
+  // The user left a comment box whose words were already saved: only its stretch ends.
+  if (event.left && JSON.stringify(was) === JSON.stringify(event.marks)) return leave(context);
   chat.marks = event.marks.length ? { answerId: event.answerId, marks: event.marks } : null;
   context.unsentMarks.add(chat.id);
   enqueue(() => fireSave(context, self, chat.id));
@@ -1122,8 +1124,15 @@ const onMarksEdited = (context, event, enqueue, self) => {
   const removed = was.filter((w) => !event.marks.some((m) => m.id === w.id));
   const typed = ids(was) === ids(event.marks) ? event.marks.filter((m) => !was.some((w) => JSON.stringify(w) === JSON.stringify(m))) : [];
   const touched = added[0]?.id ?? removed[0]?.id ?? typed[0]?.id ?? null;
-  const joins = typed.length === 1 && touched === context.stretch?.mark;
+  const joins = typed.length === 1 && touched === context.stretch?.mark && !context.stretch?.left;
   answersStep(context, enqueue, chat, before, removed.length ? "remove a comment" : "comment on an answer", touched, joins);
+  if (event.left) leave(context);
+};
+
+// The comment box was left (marks.edited's `left`): typing in it again is a new step.
+// Only the highlight an emptied box leaves, sent with the same close, still joins.
+const leave = (context) => {
+  if (context.stretch) context.stretch = { ...context.stretch, left: true };
 };
 
 // The user's highlights on the answers (highlights.edited carries the chat's whole
@@ -1725,7 +1734,8 @@ export const machine = setup({
       "places keeps the order it had, newest first, until it changes or is moved. Deleting a " +
       "chat, renaming it, moving it, linking or unlinking it, a change to the comments or the " +
       "highlights on its answers, and a flip of a switch under What the chat may read are each " +
-      "a step Undo and Redo reverse (section 12); typing in one comment is one step, and a " +
+      "a step Undo and Redo reverse (section 12); typing in one comment is one step until the user leaves its box " +
+      "(`marks.edited` with `left`), so typing in it again after coming back is another, and a " +
       "comment box left empty becomes its highlight in the same step. A delete happens at once " +
       "and asks for the short notice; the server keeps the chat, and a restore write brings it " +
       "back. A step is refused when that part of the chat was written since by anything else: " +

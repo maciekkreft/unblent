@@ -140,7 +140,7 @@ const api = {
   },
   // A restore write (5): brings back a deleted book, naming its tombstone's version; the
   // server answers the row, still a tombstone when the delete stands. A book the server
-  // never had is not-found.
+  // never had is not-found; one whose files went (purge) is changed.
   async restore(id, baseVersion) {
     const res = await fetch(`/api/books/${id}/restored`, {
       method: "PUT",
@@ -151,8 +151,15 @@ const api = {
     });
     if (res.status === 401) return { error: "unauthorized" };
     if (res.status === 404) return { error: "not-found" };
+    if (res.status === 409) return { error: "changed" };
     if (!res.ok) throw new Error(`books restore ${res.status}`);
     return await res.json();
+  },
+  // A deleted book's step left the undo list (12): its files on the server go. Nothing
+  // waits on the answer.
+  async purge(id) {
+    const res = await fetch(`/api/books/${id}/purge`, { method: "POST", credentials: "same-origin" });
+    if (!res.ok) throw new Error(`books purge ${res.status}`);
   },
   // The open book, last write wins and never refused (like a position): the server
   // stamps its own time and replies { id, at }. A 401 drops the session.
