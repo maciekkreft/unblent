@@ -179,7 +179,7 @@ for (const engine of ENGINES) {
       await until(async () => (await stored())[0] === "# Monday\nRun");
     });
 
-    run("Enter starts a paragraph drawn as a gap, Shift+Enter breaks the line, and the gap is Body", async (page) => {
+    run("after a Title, Enter starts a Body paragraph, and Shift+Enter a Body line, saved with the Title's marker", async (page) => {
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
       await editor(page).click();
       await page.keyboard.type("Monday");
@@ -199,11 +199,6 @@ for (const engine of ENGINES) {
         ["Ran", "body", false],
         ["Rested", "body", false],
       ]);
-      const gap = await entry(page).evaluate((el) => {
-        const [, gap, ran] = el.shadowRoot.querySelectorAll(".cm-line");
-        return { gap: gap.getBoundingClientRect().height, line: ran.getBoundingClientRect().height };
-      });
-      assert.ok(gap.gap > 0 && gap.gap < gap.line, `a gap is shorter than a line, saw ${gap.gap} vs ${gap.line}`);
       await editor(page).blur();
       const stored = () =>
         page.evaluate(async () => {
@@ -242,7 +237,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: rendering and layout.
-    run("a source link in the day is drawn as one tag, grey when its highlight is gone, and saved as typed", async (page) => {
+    run("a source link in the day is grey when its highlight is gone, and saved as typed", async (page) => {
       // The product page, where notes answers which highlights exist.
       const link = "[A quote](note:01K7TEST0000000000000000H1)";
       await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
@@ -251,9 +246,6 @@ for (const engine of ENGINES) {
       await page.keyboard.type(`see ${link} end`);
       const tag = entry(page).locator(".cm-source-link");
       await tag.waitFor();
-      assert.equal(await tag.count(), 1);
-      assert.equal(await tag.locator(".cm-source-label").textContent(), "A quote");
-      assert.equal(await tag.locator("svg").count(), 1, "the link icon");
       await until(async () => (await tag.getAttribute("class")).includes("removed"));
       assert.equal(await tag.evaluate((el) => getComputedStyle(el).textDecorationLine), "line-through");
       await editor(page).blur();

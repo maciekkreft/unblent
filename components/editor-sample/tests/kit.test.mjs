@@ -1,0 +1,290 @@
+import { test, describe, before, after } from "node:test";
+import assert from "node:assert/strict";
+
+// The kit (10): the helpers every browser suite shares, reached by the path the check sets.
+assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
+const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
+
+const BASE_URL = process.env.UNBLENT_URL;
+assert.ok(BASE_URL, "UNBLENT_URL must be set");
+
+// The editor kit's own browser tests (9): what every editor built from it draws and does
+// with the keys, on the bare editor of its stem page, so no editor's own behavior is in
+// the way.
+const PAGE = "/workshop/design/editor";
+
+// A source link as book-reader's Copy link writes it. The id must be a whole ULID, or
+// the kit leaves the text plain.
+const LINK = "[The quote](note:01ARZ3NDEKTSV4RRFFQ69G5FC0)";
+
+// The document as the user sees it: each line's text and classes.
+const lines = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-line")].map((l) => ({ text: l.textContent, className: l.className })),
+  );
+
+const text = (page) => page.evaluate(() => document.querySelector("editor-sample").text);
+
+const head = (page) =>
+  page.evaluate(() => document.querySelector("editor-sample").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.selection.main.head);
+
+// The line the normal-mode cursor sits on: the .cm-line whose box holds the top of the
+// Vim block cursor.
+const caretLine = (page) =>
+  page.evaluate(() => {
+    const root = document.querySelector("editor-sample").shadowRoot;
+    const fat = root.querySelector(".cm-fat-cursor")?.getBoundingClientRect();
+    return [...root.querySelectorAll(".cm-line")].findIndex((l) => {
+      const r = l.getBoundingClientRect();
+      return fat && fat.top >= r.top - 1 && fat.top < r.bottom;
+    });
+  });
+
+const fatVisibility = (page) =>
+  page.evaluate(() => {
+    const fat = document.querySelector("editor-sample").shadowRoot.querySelector(".cm-fat-cursor");
+    return fat ? getComputedStyle(fat).visibility : null;
+  });
+
+for (const engine of ENGINES) {
+  describe(`the editor kit in ${engine.name}`, { timeout: 60000 }, () => {
+    let browser;
+    before(async () => {
+      browser = await engine.launch();
+    });
+    after(async () => {
+      await browser?.close();
+    });
+
+    // Each test gets a fresh context on the sample editor, with Vim keys on or off as the
+    // settings fact stores them, and the keyboard in the editor. With Vim on, the block
+    // cursor shows once the settings reply has switched Vim on.
+    const run = (name, { vim = false, viewport } = {}, body) =>
+      test(name, async () => {
+        const context = await browser.newContext(viewport ? { viewport } : {});
+        context.setDefaultTimeout(4000);
+        try {
+          const page = await context.newPage();
+          const problems = watch(page);
+          await page.addInitScript((v) => localStorage.setItem("settings", JSON.stringify({ vimKeys: v })), vim);
+          await page.goto(`${BASE_URL}${PAGE}`);
+          await page.waitForFunction(() => document.querySelector("editor-sample")?.shadowRoot?.querySelector(".cm-content"));
+          await page.locator("editor-sample .cm-content").click();
+          if (vim) await until(async () => (await page.locator("editor-sample .cm-fat-cursor").count()) > 0);
+          await body(page, context);
+          assert.deepEqual(problems, [], problems.join("; "));
+        } finally {
+          await context.close();
+        }
+      });
+
+    // Browser: rendering and layout.
+    run("a \"- \" item is drawn as a dash with a hanging indent, its marker kept in the text", { viewport: { width: 700, height: 600 } }, async (page) => {
+      await page.keyboard.type("- one item long enough to wrap onto a second line in this narrow editor, and on again past it");
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("two");
+      await until(async () => (await lines(page)).filter((l) => l.className.includes("cm-item")).length === 2);
+      const shape = await page.evaluate(() => {
+        const line = document.querySelector("editor-sample").shadowRoot.querySelector(".cm-line.cm-item");
+        const dot = line.querySelector(".cm-item-dot");
+        const node = [...line.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rows = [...range.getClientRects()].map((r) => Math.round(r.left));
+        return { dot: dot.textContent, dotRight: dot.getBoundingClientRect().right, rows, text: node.textContent.slice(0, 3) };
+      });
+      assert.equal(shape.dot, "–", "the marker is drawn as a dash");
+      assert.equal(shape.text, "one", "the dash stands in for the marker; the text follows it");
+      assert.ok(shape.rows.length >= 2, `the item wraps, saw ${shape.rows.length} rows`);
+      assert.ok(shape.dotRight <= shape.rows[0] + 1, "the dash stands left of the text");
+      assert.ok(shape.rows.every((left) => Math.abs(left - shape.rows[0]) <= 1), `every row of the item starts under the first, saw ${shape.rows}`);
+      // The text keeps the markdown marker, Enter putting the next item directly below.
+      assert.match(await text(page), /^- one item .*\n- two$/);
+    });
+
+    // Browser: rendering and layout.
+    run("Enter starts a paragraph drawn as a gap shorter than a line, and Shift+Enter breaks the line", {}, async (page) => {
+      await page.keyboard.type("Plan");
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("One");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.type("Two");
+      const shown = async () => (await lines(page)).map((l) => [l.text, l.className.includes("cm-gap")]);
+      await until(async () => (await shown()).length === 4);
+      assert.deepEqual(await shown(), [["Plan", false], ["", true], ["One", false], ["Two", false]]);
+      assert.equal(await text(page), "Plan\n\nOne\nTwo");
+      const heights = await page.evaluate(() => {
+        const [, gap, one] = document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-line");
+        return { gap: gap.getBoundingClientRect().height, line: one.getBoundingClientRect().height };
+      });
+      assert.ok(heights.gap > 0 && heights.gap < heights.line, `a gap is shorter than a line, saw ${heights.gap} vs ${heights.line}`);
+    });
+
+    // Browser: focus and keys.
+    run("with Vim keys o and O open a paragraph a gap apart, and on an item the next item", { vim: true }, async (page) => {
+      await page.keyboard.press("i");
+      await page.keyboard.type("Plan");
+      await page.keyboard.press("Escape");
+      // o opens a paragraph a gap below the line.
+      await page.keyboard.press("o");
+      await page.keyboard.type("One");
+      await page.keyboard.press("Escape");
+      // O opens one a gap above, between the two.
+      await page.keyboard.press("O");
+      await page.keyboard.type("Zero");
+      await page.keyboard.press("Escape");
+      // On an item, o opens the next item directly below it.
+      await page.keyboard.press("j");
+      await page.keyboard.press("o");
+      await page.keyboard.type("- a");
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("o");
+      await page.keyboard.type("b");
+      await page.keyboard.press("Escape");
+      const shown = async () => (await lines(page)).map((l) => [l.text, l.className.includes("cm-gap"), l.className.includes("cm-item")]);
+      const want = [
+        ["Plan", false, false],
+        ["", true, false],
+        ["Zero", false, false],
+        ["", true, false],
+        ["One", false, false],
+        ["", true, false],
+        ["–a", false, true],
+        ["–b", false, true],
+      ];
+      await until(async () => (await shown()).length === want.length);
+      assert.deepEqual(await shown(), want);
+    });
+
+    // Browser: focus and keys.
+    run("with Vim keys j stops on an extra blank line, dd removes it, and J joins two paragraphs in one u", { vim: true }, async (page) => {
+      await page.keyboard.press("i");
+      await page.keyboard.type("One");
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("o");
+      await page.keyboard.type("Two");
+      await page.keyboard.press("Escape");
+      // O left empty between two paragraphs leaves two blank lines past the gap.
+      await page.keyboard.press("O");
+      await page.keyboard.press("Escape");
+      await until(async () => (await text(page)) === "One\n\n\n\nTwo");
+      await page.keyboard.press("g");
+      await page.keyboard.press("g");
+      await page.keyboard.press("j");
+      await until(async () => (await caretLine(page)) === 2);
+      for (const want of ["One\n\n\nTwo", "One\n\nTwo"]) {
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        await until(async () => (await text(page)) === want);
+      }
+      await page.keyboard.press("g");
+      await page.keyboard.press("g");
+      await page.keyboard.press("Shift+J");
+      await until(async () => (await text(page)) === "One Two");
+      await page.keyboard.press("u");
+      await until(async () => (await text(page)) === "One\n\nTwo");
+    });
+
+    // Browser: focus and keys.
+    run("with Vim keys one u takes back o and what was typed after it, and Ctrl+r brings it back", { vim: true }, async (page) => {
+      await page.keyboard.press("i");
+      await page.keyboard.type("Plan");
+      await page.keyboard.press("Escape");
+      // Pauses longer than CodeMirror's own grouping, so only the insert session joins them.
+      await page.keyboard.press("o");
+      await page.keyboard.type("Ab", { delay: 600 });
+      await page.keyboard.press("Escape");
+      await until(async () => (await text(page)) === "Plan\n\nAb");
+      await page.keyboard.press("u");
+      await until(async () => (await text(page)) === "Plan");
+      await page.keyboard.press("Control+r");
+      await until(async () => (await text(page)) === "Plan\n\nAb");
+      assert.deepEqual((await lines(page)).map((l) => l.text), ["Plan", "", "Ab"]);
+    });
+
+    // Browser: focus and keys.
+    run("with Vim keys the block cursor shows only while the editor has the keyboard", { vim: true }, async (page) => {
+      // A page of many boxes shows one cursor, in the box with the keyboard.
+      await until(async () => (await fatVisibility(page)) === "visible");
+      await page.evaluate(() => document.querySelector("editor-sample").shadowRoot.querySelector(".cm-content").blur());
+      await until(async () => (await fatVisibility(page)) === "hidden");
+      await page.locator("editor-sample .cm-content").click();
+      await until(async () => (await fatVisibility(page)) === "visible");
+    });
+
+    // Browser: rendering and layout.
+    run("a source link is drawn as one tag, the link icon and its label, its text kept as stored", {}, async (page) => {
+      await page.keyboard.insertText(`see ${LINK} end`);
+      await page.waitForFunction(() => document.querySelector("editor-sample").shadowRoot.querySelector(".cm-source-link"));
+      const tag = await page.evaluate(() => {
+        const root = document.querySelector("editor-sample").shadowRoot;
+        const el = root.querySelector(".cm-source-link");
+        const s = getComputedStyle(el);
+        return {
+          count: root.querySelectorAll(".cm-source-link").length,
+          label: el.textContent.trim(),
+          icon: Boolean(el.querySelector("svg path")),
+          line: root.querySelector(".cm-line").textContent.replace(/\s+/g, " "),
+          tinted: s.backgroundColor !== "rgba(0, 0, 0, 0)",
+          struck: s.textDecorationLine.includes("line-through"),
+        };
+      });
+      assert.deepEqual(tag, { count: 1, label: "The quote", icon: true, line: "see The quote end", tinted: true, struck: false });
+      assert.equal(await text(page), `see ${LINK} end`);
+    });
+
+    // Browser: focus and keys.
+    run("the cursor steps over a source link as one character, p on it pastes after it, and x or Backspace removes it whole", { vim: true }, async (page) => {
+      await page.keyboard.press("i");
+      await page.keyboard.insertText(`see ${LINK} end`);
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => document.querySelector("editor-sample").shadowRoot.querySelector(".cm-source-link"));
+      const after = 4 + LINK.length;
+      // 0 then four l's: on the tag; one more l: past it; h: back on it.
+      await page.keyboard.type("0llll");
+      await until(async () => (await head(page)) === 4);
+      await page.keyboard.type("l");
+      await until(async () => (await head(page)) === after);
+      await page.keyboard.type("h");
+      await until(async () => (await head(page)) === 4);
+      await page.keyboard.type("x");
+      await until(async () => (await text(page)) === "see  end");
+      await page.keyboard.type("u");
+      await until(async () => (await text(page)) === `see ${LINK} end`);
+      // p on the tag pastes after the whole tag, never inside its text.
+      await page.keyboard.type("0yl");
+      await page.keyboard.type("llll");
+      await until(async () => (await head(page)) === 4);
+      await page.keyboard.type("p");
+      await until(async () => (await text(page)) === `see ${LINK}s end`);
+      await page.keyboard.type("u");
+      await until(async () => (await text(page)) === `see ${LINK} end`);
+      // Backspace just after the tag, in insert mode.
+      await page.keyboard.type("0lllll");
+      await until(async () => (await head(page)) === after);
+      await page.keyboard.press("i");
+      await page.keyboard.press("Backspace");
+      await until(async () => (await text(page)) === "see  end");
+      assert.equal(await head(page), 4);
+    });
+
+    // Browser: a gesture.
+    run("a web link shows its label off the cursor's line, and a click opens it in a new tab", {}, async (page, context) => {
+      // The new tab gets an empty page, so the test never leaves this host.
+      await context.route("https://example.com/**", (route) => route.fulfill({ body: "ok", contentType: "text/plain" }));
+      await page.keyboard.insertText("Read [the site](https://example.com/a) now");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.insertText("next");
+      const link = page.locator("editor-sample .cm-web-link");
+      await until(async () => (await link.textContent()) === "the site");
+      assert.equal((await lines(page))[0].text, "Read the site now");
+      const opened = context.waitForEvent("page");
+      await link.click();
+      const tab = await opened;
+      await tab.waitForLoadState();
+      assert.equal(tab.url(), "https://example.com/a");
+      assert.equal(page.url(), `${BASE_URL}${PAGE}`, "the app stays where it was");
+      assert.equal(await text(page), "Read [the site](https://example.com/a) now\nnext", "the text stays as typed");
+    });
+  });
+}

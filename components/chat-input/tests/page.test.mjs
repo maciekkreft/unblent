@@ -143,7 +143,6 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Shift+Enter");
       await page.keyboard.type("third");
       assert.equal(await draftText(page), "first\nsecond\n\nthird", "Shift+Enter makes a line, two a paragraph, never a send");
-      assert.equal(await page.locator("chat-input .cm-line.cm-gap").count(), 1, "the blank line is drawn as a gap");
 
       await page.keyboard.press("Enter");
       await until(async () => (await transcript(page)).includes("first"), 4000);

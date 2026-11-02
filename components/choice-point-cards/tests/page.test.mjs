@@ -301,9 +301,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const box = () =>
           inCards(page, (root) => {
             const content = root.querySelector('.box[data-field="situation"] .cm-content');
-            return { text: content.cmView.view.state.doc.toString(), gaps: content.querySelectorAll(".cm-line.cm-gap").length };
+            return content.cmView.view.state.doc.toString();
           });
-        assert.deepEqual(await box(), { text: "Dinner\n\nLate\nTired", gaps: 1 });
+        assert.equal(await box(), "Dinner\n\nLate\nTired");
         await page.keyboard.press("Escape");
         const card = () => inCards(page, (root) => root.querySelector(".card .sit")?.innerText.trim() ?? null);
         await until(async () => (await card()) === "Dinner · Late · Tired");

@@ -132,21 +132,14 @@ const insertCaret = (page) =>
     return caret ? { left: caret.left, height: caret.height, scrollerLeft: scroller.left } : null;
   });
 
-// How the fat cursor and the level lines are drawn: the parts a screenshot cannot
-// assert deterministically.
-const drawn = (page) =>
-  page.evaluate(() => {
-    const root = document.querySelector("note-editor").shadowRoot;
-    const fat = root.querySelector(".cm-fat-cursor");
-    const fatStyle = fat && getComputedStyle(fat);
-    return {
-      fat: fatStyle ? { visibility: fatStyle.visibility } : null,
-      levelMargins: [...root.querySelectorAll('.cm-line[class*="cm-level-"]')].map((l) => {
-        const s = getComputedStyle(l);
-        return [s.marginTop, s.marginBottom];
-      }),
-    };
-  });
+// The level lines' margins: what a screenshot cannot assert deterministically.
+const levelMargins = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("note-editor").shadowRoot.querySelectorAll('.cm-line[class*="cm-level-"]')].map((l) => {
+      const s = getComputedStyle(l);
+      return [s.marginTop, s.marginBottom];
+    }),
+  );
 
 // A source link as book-reader's Copy link writes it, to a highlight this browser does not
 // hold, so its tag is grey from the start and following it finds the highlight gone.
@@ -157,25 +150,8 @@ const LINK = `[The quote](note:${GONE})`;
 const docText = (page) =>
   page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
 
-// The id of the one note this browser holds, once notes has stored it.
-const storedId = (page) =>
-  page.evaluate(async () => {
-    const db = await new Promise((ok, no) => {
-      const r = indexedDB.open("notes");
-      r.onsuccess = () => ok(r.result);
-      r.onerror = () => no(r.error);
-    });
-    const all = await new Promise((ok) => {
-      const q = db.transaction("notes").objectStore("notes").getAll();
-      q.onsuccess = () => ok(q.result);
-    });
-    db.close();
-    return all[0]?.id ?? null;
-  });
-
-// An editor on the notes stem page, holding `see <link> end`, typed without Vim. With
-// `existing`, the link names the note itself, a note notes lists, so its tag is not grey.
-async function withLink(browser, vimKeys, existing = false) {
+// An editor on the notes stem page, holding `see <link> end`, typed without Vim.
+async function withLink(browser, vimKeys) {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   const problems = [];
@@ -187,17 +163,10 @@ async function withLink(browser, vimKeys, existing = false) {
   if (vimKeys) await vimReady(page);
   await page.locator("note-editor .cm-content").click();
   if (vimKeys) await page.keyboard.press("i");
-  let link = LINK;
-  if (existing) {
-    await page.keyboard.insertText("x");
-    await until(async () => (await storedId(page)) != null);
-    link = `[The quote](note:${await storedId(page)})`;
-    await page.keyboard.press("Backspace");
-  }
-  await page.keyboard.insertText(`see ${link} end`);
+  await page.keyboard.insertText(`see ${LINK} end`);
   if (vimKeys) await page.keyboard.press("Escape");
   await page.waitForFunction(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-source-link"));
-  return { context, page, problems, link };
+  return { context, page, problems };
 }
 
 const ENGINES = [
@@ -271,46 +240,6 @@ for (const engine of ENGINES) {
       assert.ok(!(await lines(page)).slice(2).some((l) => l.className.includes("cm-level-")), "new lines are Body");
 
       await until(() => stored(page));
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await context.close();
-    });
-
-    // Browser: rendering and layout.
-    test("a \"- \" item is drawn as a dash with a hanging indent, its marker kept in the text", async () => {
-      const context = await browser.newContext({ viewport: { width: 700, height: 600 } });
-      context.setDefaultTimeout(4000);
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), NO_VIM);
-      await page.goto(`${BASE_URL}${STEM}`);
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
-      await page.locator("note-editor .cm-content").click();
-      await page.keyboard.type("- one item long enough to wrap onto a second line in this narrow editor, and on again past it");
-      await page.keyboard.press("Enter");
-      await page.keyboard.type("two");
-
-      await until(async () => (await lines(page)).filter((l) => l.className.includes("cm-item")).length === 2);
-      const shape = await page.evaluate(() => {
-        const root = document.querySelector("note-editor").shadowRoot;
-        const line = root.querySelector(".cm-line.cm-item");
-        const dot = line.querySelector(".cm-item-dot");
-        const text = [...line.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
-        const range = document.createRange();
-        range.selectNodeContents(text);
-        const rows = [...range.getClientRects()].map((r) => Math.round(r.left));
-        return { dot: dot.textContent, dotRight: dot.getBoundingClientRect().right, rows, text: text.textContent.slice(0, 3) };
-      });
-      assert.equal(shape.dot, "\u2013", "the marker is drawn as a dash");
-      assert.equal(shape.text, "one", "the dash stands in for the marker; the text follows it");
-      assert.ok(shape.rows.length >= 2, `the item wraps, saw ${shape.rows.length} rows`);
-      assert.ok(shape.dotRight <= shape.rows[0] + 1, "the dash stands left of the text");
-      assert.ok(shape.rows.every((left) => Math.abs(left - shape.rows[0]) <= 1), `every row of the item starts under the first, saw ${shape.rows}`);
-
-      // The text keeps the markdown marker, Enter putting the next item directly below.
-      await until(() => stored(page));
-      const body = await page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
-      assert.match(body, /^- one item .*\n- two$/);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
@@ -427,7 +356,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("levels keep Vim motions exact and the cursor shows only with the keyboard", async () => {
+    test("levels keep Vim motions exact, and o opens a line the caret shows in", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       const problems = [];
@@ -464,9 +393,9 @@ for (const engine of ENGINES) {
       from = await restLine(page, from);
       landed.push([2, from]);
       assert.deepEqual(landed.map(([, got]) => got), landed.map(([want]) => want), `j/k landed on ${JSON.stringify(landed)}`);
-      const before = await drawn(page);
-      assert.ok(before.levelMargins.length >= 3, "three leveled lines");
-      assert.ok(before.levelMargins.every(([t, b]) => t === "0px" && b === "0px"), `level lines carry no margin, saw ${JSON.stringify(before.levelMargins)}`);
+      const margins = await levelMargins(page);
+      assert.ok(margins.length >= 3, "three leveled lines");
+      assert.ok(margins.every(([t, b]) => t === "0px" && b === "0px"), `level lines carry no margin, saw ${JSON.stringify(margins)}`);
 
       // o opens a line at column 0: the caret must lie inside the scroller's clip.
       await page.keyboard.press("G");
@@ -474,15 +403,6 @@ for (const engine of ENGINES) {
       await until(async () => (await insertCaret(page))?.height > 0);
       const caret = await insertCaret(page);
       assert.ok(caret.left >= caret.scrollerLeft, `insert caret clipped: left ${caret.left} < scroller ${caret.scrollerLeft}`);
-
-      // An unfocused editor hides the fat cursor, so a page of many boxes shows one
-      // cursor, in the box with the keyboard; a focused one shows it again.
-      await page.keyboard.press("Escape");
-      await until(async () => (await drawn(page)).fat?.visibility === "visible");
-      await page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").blur());
-      await until(async () => (await drawn(page)).fat?.visibility === "hidden");
-      await page.locator("note-editor .cm-content").click();
-      await until(async () => (await drawn(page)).fat?.visibility === "visible");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
@@ -573,7 +493,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a reload against real storage.
-    test("Enter starts a paragraph drawn as a gap, Shift+Enter breaks the line, and a reload shows the gap again", async () => {
+    test("a Heading and a paragraph are stored with the Heading's marker, and a reload draws them again", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       const problems = [];
@@ -597,7 +517,6 @@ for (const engine of ENGINES) {
         ["Two", false, false],
       ];
       await until(async () => (await shown()).length === 4);
-      assert.deepEqual(await shown(), want);
       await until(() => stored(page));
       const body = await page.evaluate(
         () =>
@@ -658,7 +577,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("with Vim keys o and O open a paragraph a gap apart, and on an item the next item", async () => {
+    test("with Vim keys o under a Heading opens a Body line, and dd on blank lines above a Heading keeps its level", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       const problems = [];
@@ -670,71 +589,22 @@ for (const engine of ENGINES) {
       await vimReady(page);
       await page.locator("note-editor .cm-content").click();
       await page.keyboard.press("i");
-      await page.keyboard.type("Plan");
+      await page.keyboard.type("One");
       await page.keyboard.press("Escape");
       await page.keyboard.type("\\2");
-      await until(async () => (await lines(page))[0]?.className.includes("cm-level-heading"));
-      // o under a heading opens a body paragraph a gap below it.
-      await page.keyboard.press("o");
-      await page.keyboard.type("One");
-      await page.keyboard.press("Escape");
-      // O opens one a gap above, between the heading and the line.
-      await page.keyboard.press("O");
-      await page.keyboard.type("Zero");
-      await page.keyboard.press("Escape");
-      // On an item, o opens the next item directly below it.
-      await page.keyboard.press("j");
-      await page.keyboard.press("o");
-      await page.keyboard.type("- a");
-      await page.keyboard.press("Escape");
-      await page.keyboard.press("o");
-      await page.keyboard.type("b");
-      await page.keyboard.press("Escape");
-      const shown = async () =>
-        (await lines(page)).map((l) => [l.text, l.className.includes("cm-level-"), l.className.includes("cm-gap"), l.className.includes("cm-item")]);
-      const want = [
-        ["Plan", true, false, false],
-        ["", false, true, false],
-        ["Zero", false, false, false],
-        ["", false, true, false],
-        ["One", false, false, false],
-        ["", false, true, false],
-        ["\u2013a", false, false, true],
-        ["\u2013b", false, false, true],
-      ];
-      await until(async () => (await shown()).length === want.length);
-      assert.deepEqual(await shown(), want);
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await context.close();
-    });
-
-    // Browser: focus and keys.
-    test("with Vim keys j stops on an extra blank line, dd removes it, and J joins two paragraphs in one u", async () => {
-      const context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
-      await page.goto(`${BASE_URL}${STEM}`);
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
-      await vimReady(page);
-      await page.locator("note-editor .cm-content").click();
-      await page.keyboard.press("i");
-      await page.keyboard.type("One");
-      await page.keyboard.press("Escape");
+      const level = async (text) => (await lines(page)).find((l) => l.text === text)?.className.match(/cm-level-(\w+)/)?.[1] ?? "body";
+      await until(async () => (await level("One")) === "heading");
       await page.keyboard.press("o");
       await page.keyboard.type("Two");
       await page.keyboard.press("Escape");
-      // O left empty between two paragraphs leaves two blank lines past the gap.
+      await until(async () => (await docText(page)) === "One\n\nTwo");
+      assert.equal(await level("Two"), "body", "o under a Heading opens a Body line");
+      await page.keyboard.type("\\2");
+      await until(async () => (await level("Two")) === "heading");
+      // O left empty between the two leaves two blank lines past the gap.
       await page.keyboard.press("O");
       await page.keyboard.press("Escape");
       await until(async () => (await docText(page)) === "One\n\n\n\nTwo");
-      // A Heading under the blank lines keeps its level while the lines above it go.
-      await page.keyboard.press("Shift+G");
-      await page.keyboard.type("\\2");
-      const heading = async () => (await lines(page)).find((l) => l.text === "Two")?.className.includes("cm-level-heading");
-      await until(heading);
       await page.keyboard.press("g");
       await page.keyboard.press("g");
       await page.keyboard.press("j");
@@ -743,107 +613,8 @@ for (const engine of ENGINES) {
         await page.keyboard.press("d");
         await page.keyboard.press("d");
         await until(async () => (await docText(page)) === want);
-        assert.ok(await heading(), `Two is still a Heading after dd, in ${JSON.stringify(want)}`);
+        assert.equal(await level("Two"), "heading", `Two is still a Heading after dd, in ${JSON.stringify(want)}`);
       }
-      await page.keyboard.press("g");
-      await page.keyboard.press("g");
-      await page.keyboard.press("Shift+J");
-      await until(async () => (await docText(page)) === "One Two");
-      await page.keyboard.press("u");
-      await until(async () => (await docText(page)) === "One\n\nTwo");
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await context.close();
-    });
-
-    // Browser: focus and keys.
-    test("with Vim keys one u takes back o and what was typed after it, and Ctrl+r brings it back", async () => {
-      const context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
-      await page.goto(`${BASE_URL}${STEM}`);
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
-      await vimReady(page);
-      await page.locator("note-editor .cm-content").click();
-      await page.keyboard.press("i");
-      await page.keyboard.type("Plan");
-      await page.keyboard.press("Escape");
-      await page.keyboard.type("\\2");
-      await until(async () => (await lines(page))[0]?.className.includes("cm-level-heading"));
-      const shown = async () => (await lines(page)).map((l) => [l.text, l.className.includes("cm-level-heading")]);
-      // Pauses longer than CodeMirror's own grouping, so only the insert session joins them.
-      await page.keyboard.press("o");
-      await page.keyboard.type("Ab", { delay: 600 });
-      await page.keyboard.press("Escape");
-      const opened = [["Plan", true], ["", false], ["Ab", false]];
-      assert.deepEqual(await shown(), opened);
-      await page.keyboard.press("u");
-      await until(async () => (await lines(page)).length === 1);
-      assert.deepEqual(await shown(), [["Plan", true]]);
-      await page.keyboard.press("Control+r");
-      await until(async () => (await lines(page)).length === 3);
-      assert.deepEqual(await shown(), opened);
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await context.close();
-    });
-
-    // Browser: rendering and layout.
-    test("a source link is drawn as one tag, the link icon and its label, its text kept as stored", async () => {
-      const { context, page, problems, link } = await withLink(browser, false, true);
-      const tag = await page.evaluate(() => {
-        const root = document.querySelector("note-editor").shadowRoot;
-        const el = root.querySelector(".cm-source-link");
-        const s = getComputedStyle(el);
-        return {
-          count: root.querySelectorAll(".cm-source-link").length,
-          label: el.textContent.trim(),
-          icon: Boolean(el.querySelector("svg path")),
-          line: root.querySelector(".cm-line").textContent.replace(/\s+/g, " "),
-          tinted: s.backgroundColor !== "rgba(0, 0, 0, 0)",
-          struck: s.textDecorationLine.includes("line-through"),
-        };
-      });
-      assert.deepEqual(tag, { count: 1, label: "The quote", icon: true, line: "see The quote end", tinted: true, struck: false });
-      assert.equal(await docText(page), `see ${link} end`);
-      await until(() => stored(page));
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await context.close();
-    });
-
-    // Browser: focus and keys.
-    test("the cursor steps over a source link as one character, p on it pastes after it, and x or Backspace removes it whole", async () => {
-      const { context, page, problems } = await withLink(browser, true);
-      const head = () =>
-        page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.selection.main.head);
-      const after = 4 + LINK.length;
-      // 0 then four l's: on the tag; one more l: past it; h: back on it.
-      await page.keyboard.type("0llll");
-      await until(async () => (await head()) === 4);
-      await page.keyboard.type("l");
-      await until(async () => (await head()) === after);
-      await page.keyboard.type("h");
-      await until(async () => (await head()) === 4);
-      await page.keyboard.type("x");
-      await until(async () => (await docText(page)) === "see  end");
-      await page.keyboard.type("u");
-      await until(async () => (await docText(page)) === `see ${LINK} end`);
-      // p on the tag pastes after the whole tag, never inside its text.
-      await page.keyboard.type("0yl");
-      await page.keyboard.type("llll");
-      await until(async () => (await head()) === 4);
-      await page.keyboard.type("p");
-      await until(async () => (await docText(page)) === `see ${LINK}s end`);
-      await page.keyboard.type("u");
-      await until(async () => (await docText(page)) === `see ${LINK} end`);
-      // Backspace just after the tag, in insert mode.
-      await page.keyboard.type("0lllll");
-      await until(async () => (await head()) === after);
-      await page.keyboard.press("i");
-      await page.keyboard.press("Backspace");
-      await until(async () => (await docText(page)) === "see  end");
-      assert.equal(await head(), 4);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
@@ -867,37 +638,6 @@ for (const engine of ENGINES) {
       await page.locator("note-editor .cm-source-link").click();
       assert.equal(await struck(), true);
       assert.equal(await docText(page), `see ${LINK} end`, "following changes nothing in the text");
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await context.close();
-    });
-
-    // Browser: a gesture.
-    test("a web link shows its label off the cursor's line, and a click opens it in a new tab", async () => {
-      const context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      // The new tab gets an empty page, so the test never leaves this host.
-      await context.route("https://example.com/**", (route) => route.fulfill({ body: "ok", contentType: "text/plain" }));
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), NO_VIM);
-      await page.goto(`${BASE_URL}${STEM}`);
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
-      await page.locator("note-editor .cm-content").click();
-      await page.keyboard.insertText("Read [the site](https://example.com/a) now");
-      await page.keyboard.press("Shift+Enter");
-      await page.keyboard.insertText("next");
-      const link = page.locator("note-editor .cm-web-link");
-      await until(async () => (await link.textContent()) === "the site");
-      assert.equal((await lines(page))[0].text, "Read the site now");
-      const opened = context.waitForEvent("page");
-      await link.click();
-      const tab = await opened;
-      await tab.waitForLoadState();
-      assert.equal(tab.url(), "https://example.com/a");
-      assert.equal(page.url(), `${BASE_URL}${STEM}`, "the app stays where it was");
-      assert.equal(await docText(page), "Read [the site](https://example.com/a) now\nnext", "the text stays as typed");
-      await until(() => stored(page));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
