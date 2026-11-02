@@ -150,7 +150,9 @@ const save = (left) =>
   enqueueActions(({ context, enqueue }) => {
     if (!savable(context)) return;
     const { id, text } = context.draft;
-    enqueue.emit(left ? { type: "day.saved", id, text, left: true } : { type: "day.saved", id, text });
+    const finished = context.finished.length ? { finished: context.finished } : {};
+    enqueue.assign({ finished: [], ...(id === context.checkedId ? { checkedText: text } : {}) });
+    enqueue.emit(left ? { type: "day.saved", id, text, left: true, ...finished } : { type: "day.saved", id, text, ...finished });
   });
 
 const edit = assign(({ context, event }) => ({ draft: { ...context.draft, text: event.text }, editing: true }));
@@ -282,6 +284,81 @@ export const flagShown = (flag, hidden) => !flag || (hidden !== null && !hidden.
 // an error) hides nothing.
 const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
 
+// --- Hashtag checks (line-checks) ------------------------------------------------------
+// line-checks owns Jev's answers about the lines a hashtag line names (13, Hashtag check);
+// the entry asks it for the day it shows, follows text.checked for that day, and turns the
+// report into what the view draws. Copied from note-editor/machine.js, because components
+// never import each other (11.2).
+
+// Why a line could not be checked, in one plain sentence, shown as the mark's tooltip.
+export const CHECK_ERRORS = {
+  "signed-out": "Could not check: sign in to have your lines checked.",
+  "no-key": "Could not check: add your Jev key in Settings.",
+  "bad-key": "Could not check: your Jev key was refused. Check it in Settings.",
+  "rate-limited": "Could not check: too many requests. It tries again when you next finish a line.",
+  overloaded: "Could not check: busy right now. It tries again when you next finish a line.",
+  busy: "Could not check: busy right now. It tries again when you next finish a line.",
+  invalid: "Could not check: the evaluator's questions could not be asked.",
+  unavailable: "Could not check right now. It tries again when you next finish a line.",
+  "local-off": "Could not check: Ollama isn't running on this Mac. Open Ollama; it tries again when you next finish a line.",
+  "no-model": "Could not check: Kev isn't downloaded. In Terminal, run ollama pull kev:0.8b-mlx-bf16; it tries again when you next finish a line.",
+};
+
+// The hashtags of the report that name one of the account's evaluators, drawn in the
+// accent colour; any other is drawn muted.
+export const knownTags = (checks) => new Set((checks?.tags ?? []).filter((t) => t.evaluator != null).map((t) => t.tag));
+
+// What each checked line shows at its end, by its text as the editor shows it (a level's
+// marker off): a dot while Jev is asked, a warning with the reason when it could not be,
+// and otherwise each answer's icon and name, a check where the option has no icon.
+export function lineMarksOf(checks) {
+  const out = new Map();
+  for (const line of checks?.lines ?? []) {
+    const text = line.text.trim().replace(/^#{1,3} /, "");
+    if (line.status === "pending") out.set(text, [{ pending: true }]);
+    else if (line.status === "failed") out.set(text, [{ failed: true, error: CHECK_ERRORS[checks.error] ?? CHECK_ERRORS.unavailable }]);
+    else if (line.marks.length) out.set(text, line.marks.map((m) => ({ name: m.name, icon: m.icon ?? "check" })));
+  }
+  return out;
+}
+
+const union = (a, b) => [...new Set([...(a ?? []), ...(Array.isArray(b) ? b : [])])];
+
+// The day shown and the text the box holds; `kept` when that text is what the journal
+// holds for the day (nothing typed waits to be saved). A partner's test mounts the entry
+// without a clock; the clock only dates a new page, which no check reads.
+const checkSource = (context) => {
+  const view = shown(context.picture, selectedOf(context), context.fresh, context.now?.() ?? 0);
+  const text = view.editable && context.draft?.id === view.day.id ? context.draft.text : view.day.text;
+  return { id: view.day.id, text, kept: text === view.day.text, editable: view.editable };
+};
+
+// When to ask line-checks for the day shown: when another day is shown, and when its text
+// changed other than by typing here (another device, an Undo), which line-checks learns
+// from no save. While the user types, the save tells it. Null when nothing needs asking.
+export function checksDue(context) {
+  const source = checkSource(context);
+  if (source.id !== context.checkedId) return { id: source.id, text: source.text, reset: true };
+  if (source.kept && source.text !== context.checkedText) return { id: source.id, text: source.text, reset: false };
+  return null;
+}
+
+// A finished line that nothing would save soon goes to line-checks at once, in a save of
+// the text the journal already holds, which it takes as no change; never while two copies
+// wait to be settled, where a save of one copy keeps it. Otherwise it waits for the next
+// save. An earlier day takes no typing and checks nothing.
+function finish(context, enqueue, lines) {
+  const source = checkSource(context);
+  if (!source.editable || !context.draft || context.draft.id !== source.id) return;
+  const finished = union(context.finished, lines);
+  if (finished.length === context.finished.length) return;
+  const known = context.picture.days.some((d) => d.id === source.id);
+  if (known && source.kept && !context.conflict) {
+    enqueue.assign({ finished: [] });
+    enqueue.emit({ type: "day.saved", id: source.id, text: source.text, finished });
+  } else enqueue.assign({ finished });
+}
+
 export const machine = setup({
   actors: {
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
@@ -292,6 +369,14 @@ export const machine = setup({
     // Which notes exist, for the day's source links; note.changed and note.deleted are held
     // for this ask until its reply lands.
     notes: fromPromise(({ input }) => input.ask("notes", "list", {})),
+    // line-checks' report for the day shown, from the answers it keeps (it never asks Jev
+    // for a read); text.checked is held for us until the reply lands (read supersededBy).
+    checks: fromCallback(({ input, sendBack }) => {
+      Promise.resolve(input.ask("line-checks", "read", { kind: "day", id: input.id, text: input.text })).then(
+        (reply) => sendBack({ type: "_checks", id: input.id, reply }),
+        () => {},
+      );
+    }),
     // Following a source link asks notes for the highlight beside whatever the entry is
     // doing, so the draft is untouched; the reply comes back as _followed.
     follow: fromCallback(({ input, sendBack }) => {
@@ -303,6 +388,17 @@ export const machine = setup({
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
+  },
+  actions: {
+    // Ask line-checks for the day shown (checksDue); a text without a "#" has no hashtag
+    // line, so there is nothing to ask and nothing to show.
+    readChecks: enqueueActions(({ context, enqueue }) => {
+      const due = checksDue(context);
+      const hashed = due.text.includes("#");
+      enqueue.assign({ checkedId: due.id, checkedText: due.text, ...(due.reset || !hashed ? { checks: null } : {}) });
+      enqueue.stopChild("checks");
+      if (hashed) enqueue.spawnChild("checks", { id: "checks", input: { ask: context.ask, id: due.id, text: due.text } });
+    }),
   },
 }).createMachine({
   id: "journal-entry",
@@ -345,11 +441,18 @@ export const machine = setup({
       "comes back to the start of the text's last line. On an earlier day, whose text takes no " +
       "keyboard, the keyboard lands on the first nested view instead. A nested view the page " +
       "gives `flag` naming a feature is not shown while `flags` reports the feature hidden, " +
-      "and until `flags` answers; a page without `flags` hides nothing.",
+      "and until `flags` answers; a page without `flags` hides nothing. A hashtag, such as " +
+      "#in-my-control, is drawn in the accent color when it names one of the account's " +
+      "evaluators and muted when it names none; each line it names (the lines after it in the " +
+      "same paragraph or list) is checked by line-checks once the user finishes it on today's " +
+      "page (moves off it, presses Enter, pastes, or leaves the box), and its answer shows at " +
+      "the line's end as the option's icon and name, several joined in one row: a pulsing dot " +
+      "while Jev is asked, and a warning whose tooltip says why when it could not be. An " +
+      "earlier day shows the answers already kept and asks nothing.",
     kind: "view",
     emits: ["day.saved", "day.shown", "book.closed", "passage.selected"],
     attributes: ["height"],
-    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read", "flags: read"],
+    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read", "flags: read", "line-checks: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -393,7 +496,17 @@ export const machine = setup({
     // The features `flags` reports hidden, for the nested views' `flag` (8); null until it
     // answers.
     hidden: null,
+    // line-checks' report for the day shown (text.checked's shape), null while there is none.
+    checks: null,
+    // The day and the text line-checks last learned from this entry, by a read or a save.
+    checkedId: null,
+    checkedText: null,
+    // The lines the user finished that no save has carried yet (day.saved's finished).
+    finished: [],
   }),
+  // Asked after any change that shows another day or another text (checksDue), so no
+  // state can forget it.
+  always: { guard: ({ context }) => checksDue(context) != null, actions: "readChecks" },
   // Each fact's starting picture is asked on its own, so an event that follows one
   // reply is never overwritten by that reply arriving with the other.
   invoke: [
@@ -494,6 +607,17 @@ export const machine = setup({
   // The facts' news (4.3, fourth rule). Each read is superseded by its fact's event (4.2),
   // so none arrives before the starting picture it updates.
   on: {
+    // Lines the user finished (the view sends them before the blur that also finishes them).
+    _finished: { actions: enqueueActions(({ context, event, enqueue }) => finish(context, enqueue, event.lines)) },
+    // line-checks' report for the day shown: from the read, or announced after a check.
+    _checks: {
+      guard: ({ context, event }) => event.id === context.checkedId && event.reply?.source != null,
+      actions: assign({ checks: ({ event }) => event.reply }),
+    },
+    "text.checked": {
+      guard: ({ context, event }) => event.source.kind === "day" && event.source.id === context.checkedId,
+      actions: assign({ checks: ({ event }) => event }),
+    },
     "journal.changed": { actions: assign(({ event }) => ({ picture: picture(event) })) },
     "journal.conflicted": { actions: assign(({ event }) => ({ conflict: { id: event.id, mine: event.mine, theirs: event.theirs } })) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },

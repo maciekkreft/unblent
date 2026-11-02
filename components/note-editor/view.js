@@ -6,8 +6,8 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, showing, startsTyping, linkMissing, notSynced } from "./machine.js";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
+import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, showing, startsTyping, linkMissing, notSynced, knownTags, lineMarksOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
@@ -230,6 +230,48 @@ const levelTheme = EditorView.theme({
     paddingTop: "var(--space-xs)",
   },
 });
+
+// The icons an evaluator's option may carry (7.6), drawn at a checked line's end. The
+// names are literals so the icon check sees each one (11.2).
+const MARK_ICONS = {
+  check: () => icon("check"),
+  warning: () => icon("warning"),
+  gavel: () => icon("gavel"),
+  prohibit: () => icon("prohibit"),
+  lightning: () => icon("lightning"),
+  "calendar-blank": () => icon("calendar-blank"),
+  "share-fat": () => icon("share-fat"),
+  "trash-simple": () => icon("trash-simple"),
+  "person-simple-walk": () => icon("person-simple-walk"),
+  brain: () => icon("brain"),
+  heart: () => icon("heart"),
+  trophy: () => icon("trophy"),
+  "hand-palm": () => icon("hand-palm"),
+  footprints: () => icon("footprints"),
+  question: () => icon("question"),
+  compass: () => icon("compass"),
+};
+
+// One line's marks (machine.js: lineMarksOf), drawn into the element the editor kit gives.
+const drawMarks = (into, marks) => {
+  const [first] = marks;
+  if (first?.pending) render(html`<span class="marks pending" role="img" aria-label="Checking"><i></i></span>`, into);
+  else if (first?.failed) render(html`<span class="marks failed" role="img" aria-label=${first.error} title=${first.error}>${icon("warning")}</span>`, into);
+  else
+    render(
+      html`<span class="marks">${marks.map(
+        (m, i) => html`${i ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}<span class="mark">${(MARK_ICONS[m.icon] ?? MARK_ICONS.check)()}${m.name}</span>`,
+      )}</span>`,
+      into,
+    );
+};
+
+// The lines of `doc` a hashtag line names (the editor kit's hashtagScopes), of those given.
+const named = (doc, lines) => {
+  if (!lines.length) return lines;
+  const scoped = new Set(hashtagScopes(doc).flatMap((s) => s.lines));
+  return lines.filter((l) => scoped.has(l));
+};
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -532,6 +574,58 @@ class NoteEditor extends LitElement {
       font: inherit;
       color: var(--color-body);
     }
+    /* Jev's answers at a checked line's end (the editor kit places them): each the
+       option's icon and name, several in one row, on a soft tint. */
+    .marks {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 var(--space-xs);
+      border-radius: var(--radius-sm);
+      background: var(--color-canvas-soft);
+      font-size: var(--text-caption);
+      font-weight: var(--weight-normal);
+      line-height: calc(var(--text-sm) * var(--leading-normal));
+      min-height: calc(var(--text-sm) * var(--leading-normal));
+      color: var(--color-body-mid);
+      white-space: nowrap;
+    }
+    .marks .mark {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2xs);
+    }
+    .marks svg {
+      display: block;
+      flex: none;
+    }
+    .marks .sep {
+      color: var(--color-mute);
+      padding: 0 var(--space-xs);
+    }
+    .marks.failed {
+      color: var(--color-warning);
+      background: var(--color-warning-subtle);
+    }
+    .marks.pending {
+      background: none;
+    }
+    .marks.pending i {
+      width: calc(var(--space-xs) * 1.5);
+      height: calc(var(--space-xs) * 1.5);
+      border-radius: var(--radius-full);
+      background: var(--color-mute);
+      animation: pulse calc(var(--duration-slide) * 4) ease-in-out infinite;
+    }
+    @keyframes pulse {
+      50% {
+        opacity: 0.3;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .marks.pending i {
+        animation: none;
+      }
+    }
   `;
 
   #actor = new ActorController(this);
@@ -552,6 +646,9 @@ class NoteEditor extends LitElement {
   // actor's facts it was made from.
   #missing = () => false;
   #missingFrom = null;
+  // The hashtags that name an evaluator, and the report they and the marks were drawn from.
+  #known = new Set();
+  #checksFrom = undefined;
 
   #extensions() {
     return [
@@ -571,10 +668,16 @@ class NoteEditor extends LitElement {
       }),
       // A web address is drawn as a link that opens in a new tab (the editor kit, 10).
       webLinks(),
+      // Hashtags and Jev's answers at the lines they name (the editor kit, 10).
+      hashtags({ known: (name) => this.#known.has(name) }),
+      lineMarks({ render: drawMarks }),
       this.#history.of(history()),
       EditorView.updateListener.of(this.#onUpdate),
       EditorView.domEventHandlers({
-        blur: () => {
+        // Leaving the editor finishes every line.
+        blur: (_e, view) => {
+          const doc = view.state.doc.toString();
+          this.#actor.send({ type: "_finished", lines: named(doc, doc.split("\n").map((l) => l.trim()).filter(Boolean)) });
           this.#actor.send({ type: "_blurred" });
         },
         focus: () => {
@@ -605,11 +708,20 @@ class NoteEditor extends LitElement {
       }
     }
     if (update.selectionSet || update.docChanged || leveled) this.#syncLevel(update.state);
-    if (!update.docChanged && !leveled) return;
-    const body = serialize(update.state.doc.toString(), levelsOf(update.state));
-    if (body === this.#shown) return; // our own load echoing back, or an unchanged serialization
-    this.#shown = body;
-    this.#actor.send({ type: "_typed", body });
+    if (update.docChanged || leveled) {
+      const body = serialize(update.state.doc.toString(), levelsOf(update.state));
+      // Not our own load echoing back, nor an unchanged serialization.
+      if (body !== this.#shown) {
+        this.#shown = body;
+        this.#actor.send({ type: "_typed", body });
+      }
+    }
+    // After the text, so a line finished by Enter goes out with the save of that text. A
+    // note loaded into the editor (setAllLevels) is not the user finishing a line.
+    const loaded = update.transactions.some((t) => t.effects.some((e) => e.is(setAllLevels)));
+    if (loaded || !update.view.hasFocus || !(update.selectionSet || update.docChanged)) return;
+    const lines = named(update.state.doc.toString(), finishedLines(update));
+    if (lines.length) this.#actor.send({ type: "_finished", lines });
   };
 
   // The caret line's level, mirrored to a private field so the status reflects it.
@@ -653,6 +765,7 @@ class NoteEditor extends LitElement {
       state: EditorState.create({ doc, extensions: this.#extensions() }),
     });
     this.#shown = body; // before the leveling dispatch, so #onUpdate sees no change
+    this.#checksFrom = undefined;
     this.#view.dispatch({ effects: setAllLevels.of(levels) });
     this.#syncLevel(this.#view.state);
   }
@@ -674,8 +787,14 @@ class NoteEditor extends LitElement {
     if (!this.#view) this.#build(region);
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !this.#view) return;
-    const { body, vimKeys, notes, removed } = snapshot.context;
+    const { body, vimKeys, notes, removed, checks } = snapshot.context;
     setVim(this.#view, vimKeys);
+    if (checks !== this.#checksFrom) {
+      this.#checksFrom = checks;
+      this.#known = knownTags(checks);
+      refreshHashtags(this.#view);
+      this.#view.dispatch({ effects: setLineMarks.of(lineMarksOf(checks)) });
+    }
     if (notes !== this.#missingFrom?.notes || removed !== this.#missingFrom?.removed) {
       this.#missingFrom = { notes, removed };
       this.#missing = linkMissing(snapshot.context);

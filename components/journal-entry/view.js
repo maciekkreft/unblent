@@ -5,8 +5,8 @@ import { icon } from "icons";
 import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode, Prec } from "@codemirror/state";
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
-import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, flagShown } from "./machine.js";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
+import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, flagShown, knownTags, lineMarksOf } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
@@ -171,6 +171,48 @@ const editability = (on) => [
   EditorView.contentAttributes.of({ "aria-label": on ? "Today's entry" : "The entry" }),
   on ? placeholder("What is on your mind? Enter starts a new paragraph; Shift+Enter breaks the line.") : [],
 ];
+
+// The icons an evaluator's option may carry (7.6), drawn at a checked line's end. The
+// names are literals so the icon check sees each one (11.2).
+const MARK_ICONS = {
+  check: () => icon("check"),
+  warning: () => icon("warning"),
+  gavel: () => icon("gavel"),
+  prohibit: () => icon("prohibit"),
+  lightning: () => icon("lightning"),
+  "calendar-blank": () => icon("calendar-blank"),
+  "share-fat": () => icon("share-fat"),
+  "trash-simple": () => icon("trash-simple"),
+  "person-simple-walk": () => icon("person-simple-walk"),
+  brain: () => icon("brain"),
+  heart: () => icon("heart"),
+  trophy: () => icon("trophy"),
+  "hand-palm": () => icon("hand-palm"),
+  footprints: () => icon("footprints"),
+  question: () => icon("question"),
+  compass: () => icon("compass"),
+};
+
+// One line's marks (machine.js: lineMarksOf), drawn into the element the editor kit gives.
+const drawMarks = (into, marks) => {
+  const [first] = marks;
+  if (first?.pending) render(html`<span class="marks pending" role="img" aria-label="Checking"><i></i></span>`, into);
+  else if (first?.failed) render(html`<span class="marks failed" role="img" aria-label=${first.error} title=${first.error}>${icon("warning")}</span>`, into);
+  else
+    render(
+      html`<span class="marks">${marks.map(
+        (m, i) => html`${i ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}<span class="mark">${(MARK_ICONS[m.icon] ?? MARK_ICONS.check)()}${m.name}</span>`,
+      )}</span>`,
+      into,
+    );
+};
+
+// The lines of `doc` a hashtag line names (the editor kit's hashtagScopes), of those given.
+const named = (doc, lines) => {
+  if (!lines.length) return lines;
+  const scoped = new Set(hashtagScopes(doc).flatMap((s) => s.lines));
+  return lines.filter((l) => scoped.has(l));
+};
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -436,6 +478,58 @@ class JournalEntry extends LitElement {
         grid-template-columns: minmax(0, 1fr);
       }
     }
+    /* Jev's answers at a checked line's end (the editor kit places them): each the
+       option's icon and name, several in one row, on a soft tint. */
+    .marks {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 var(--space-xs);
+      border-radius: var(--radius-sm);
+      background: var(--color-canvas-soft);
+      font-size: var(--text-caption);
+      font-weight: var(--weight-normal);
+      line-height: calc(var(--text-sm) * var(--leading-normal));
+      min-height: calc(var(--text-sm) * var(--leading-normal));
+      color: var(--color-body-mid);
+      white-space: nowrap;
+    }
+    .marks .mark {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2xs);
+    }
+    .marks svg {
+      display: block;
+      flex: none;
+    }
+    .marks .sep {
+      color: var(--color-mute);
+      padding: 0 var(--space-xs);
+    }
+    .marks.failed {
+      color: var(--color-warning);
+      background: var(--color-warning-subtle);
+    }
+    .marks.pending {
+      background: none;
+    }
+    .marks.pending i {
+      width: calc(var(--space-xs) * 1.5);
+      height: calc(var(--space-xs) * 1.5);
+      border-radius: var(--radius-full);
+      background: var(--color-mute);
+      animation: pulse calc(var(--duration-slide) * 4) ease-in-out infinite;
+    }
+    @keyframes pulse {
+      50% {
+        opacity: 0.3;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .marks.pending i {
+        animation: none;
+      }
+    }
   `;
 
   #actor = new ActorController(this);
@@ -461,6 +555,9 @@ class JournalEntry extends LitElement {
   // actor's facts it was made from.
   #missing = () => false;
   #missingFrom = null;
+  // The hashtags that name an evaluator, and the report they and the marks were drawn from.
+  #known = new Set();
+  #checksFrom = undefined;
 
   #send(event) {
     this.#actor.send(event);
@@ -560,6 +657,10 @@ class JournalEntry extends LitElement {
       // A web address is drawn as a link that opens in a new tab (the editor kit, 10),
       // also on an earlier day.
       webLinks(),
+      // Hashtags and Jev's answers at the lines they name (the editor kit, 10), also on an
+      // earlier day.
+      hashtags({ known: (name) => this.#known.has(name) }),
+      lineMarks({ render: drawMarks }),
       EditorView.updateListener.of((update) => {
         const leveled = update.transactions.some((t) => t.effects.some((e) => e.is(setLevel) || e.is(setAllLevels)));
         for (const t of update.transactions) {
@@ -577,9 +678,18 @@ class JournalEntry extends LitElement {
             this.#send({ type: "_edit", text });
           }
         }
+        // After the text, so a line finished by Enter goes out with the save of that text.
+        // A day put into the editor (setAllLevels) is not the user finishing a line.
+        const loaded = update.transactions.some((t) => t.effects.some((e) => e.is(setAllLevels)));
+        if (loaded || !this.#editableOn || !update.view.hasFocus || !(update.selectionSet || update.docChanged)) return;
+        const lines = named(update.state.doc.toString(), finishedLines(update));
+        if (lines.length) this.#send({ type: "_finished", lines });
       }),
       EditorView.domEventHandlers({
-        blur: () => {
+        // Leaving the box finishes every line.
+        blur: (_e, view) => {
+          const doc = view.state.doc.toString();
+          if (this.#editableOn) this.#send({ type: "_finished", lines: named(doc, doc.split("\n").map((l) => l.trim()).filter(Boolean)) });
           this.#send({ type: "_blur" });
         },
         // The page-wide Vim level keys arrive here as a "level" event (setLineLevel); an
@@ -624,8 +734,16 @@ class JournalEntry extends LitElement {
       });
       this.#view.dispatch({ effects: setAllLevels.of(levels) });
       this.#syncLevel(this.#view.state);
+      this.#checksFrom = undefined;
     }
     setVim(this.#view, vimKeys);
+    const { checks } = snapshot.context;
+    if (checks !== this.#checksFrom) {
+      this.#checksFrom = checks;
+      this.#known = knownTags(checks);
+      refreshHashtags(this.#view);
+      this.#view.dispatch({ effects: setLineMarks.of(lineMarksOf(checks)) });
+    }
     const { notes, removed } = snapshot.context;
     if (notes !== this.#missingFrom?.notes || removed !== this.#missingFrom?.removed) {
       this.#missingFrom = { notes, removed };

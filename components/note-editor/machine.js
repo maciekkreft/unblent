@@ -295,6 +295,7 @@ const savedEvent = (context) => {
     body: context.body,
     baseVersion: context.baseVersion,
   };
+  if (context.finished?.length) event.finished = context.finished;
   if (context.subjecting && context.baseVersion === null) {
     event.about = context.subject ? [{ kind: context.subject.kind, id: context.subject.id, ...chapterPart(context.subject) }] : [];
   }
@@ -322,6 +323,71 @@ export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn =
 // editor, which shows only notes that exist.
 export const startsTyping = (snapshot) => snapshot.matches("blank") && !snapshot.context.staged;
 
+// --- Hashtag checks (line-checks) ------------------------------------------------------
+// line-checks owns Jev's answers about the lines a hashtag line names (13, Hashtag check);
+// the editor asks it for the note it shows, follows text.checked for that note, and turns
+// the report into what the view draws. The same functions sit in journal-entry/machine.js,
+// copied because components never import each other (11.2).
+
+// Why a line could not be checked, in one plain sentence, shown as the mark's tooltip.
+export const CHECK_ERRORS = {
+  "signed-out": "Could not check: sign in to have your lines checked.",
+  "no-key": "Could not check: add your Jev key in Settings.",
+  "bad-key": "Could not check: your Jev key was refused. Check it in Settings.",
+  "rate-limited": "Could not check: too many requests. It tries again when you next finish a line.",
+  overloaded: "Could not check: busy right now. It tries again when you next finish a line.",
+  busy: "Could not check: busy right now. It tries again when you next finish a line.",
+  invalid: "Could not check: the evaluator's questions could not be asked.",
+  unavailable: "Could not check right now. It tries again when you next finish a line.",
+  "local-off": "Could not check: Ollama isn't running on this Mac. Open Ollama; it tries again when you next finish a line.",
+  "no-model": "Could not check: Kev isn't downloaded. In Terminal, run ollama pull kev:0.8b-mlx-bf16; it tries again when you next finish a line.",
+};
+
+// The hashtags of the report that name one of the account's evaluators, drawn in the
+// accent colour; any other is drawn muted.
+export const knownTags = (checks) => new Set((checks?.tags ?? []).filter((t) => t.evaluator != null).map((t) => t.tag));
+
+// What each checked line shows at its end, by its text as the editor shows it (a level's
+// marker off): a dot while Jev is asked, a warning with the reason when it could not be,
+// and otherwise each answer's icon and name, a check where the option has no icon. A line
+// whose answers all say nothing (a yes / no answered no) shows nothing.
+export function lineMarksOf(checks) {
+  const out = new Map();
+  for (const line of checks?.lines ?? []) {
+    const text = line.text.trim().replace(/^#{1,3} /, "");
+    if (line.status === "pending") out.set(text, [{ pending: true }]);
+    else if (line.status === "failed") out.set(text, [{ failed: true, error: CHECK_ERRORS[checks.error] ?? CHECK_ERRORS.unavailable }]);
+    else if (line.marks.length) out.set(text, line.marks.map((m) => ({ name: m.name, icon: m.icon ?? "check" })));
+  }
+  return out;
+}
+
+// The lines the user finished, gathered until a save carries them to line-checks, each once.
+const union = (a, b) => [...new Set([...(a ?? []), ...(Array.isArray(b) ? b : [])])];
+
+// When to ask line-checks for the note shown: when another note (or none) is shown, and
+// when the note's text changed other than by typing here (a load, a change from another
+// device, an Undo), which line-checks learns from no save. While the user types, the save
+// tells it. Null when nothing needs asking.
+export function checksDue(context) {
+  const { id, body, sent, checkedId, checkedText } = context;
+  if (id !== checkedId) return { id, text: id == null ? null : body, reset: true };
+  if (id != null && sent != null && sent.body === body && body !== checkedText) return { id, text: body, reset: false };
+  return null;
+}
+
+// A finished line that nothing would save soon (the cursor moved off it with nothing left
+// to save) goes to line-checks at once, in a save of the text notes already holds, which
+// notes takes as no change. Otherwise it waits for the next save.
+function finish(context, enqueue, lines) {
+  const finished = union(context.finished, lines);
+  if (finished.length === context.finished.length) return;
+  if (context.id != null && context.baseVersion !== null && !dirty(context)) {
+    enqueue.assign({ finished: [] });
+    enqueue.emit(savedEvent({ ...context, finished }));
+  } else enqueue.assign({ finished });
+}
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): every note, and — only while following the stage —
@@ -348,6 +414,14 @@ export const machine = setup({
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
+    // line-checks' report for the note shown, from the answers it keeps (it never asks Jev
+    // for a read); text.checked is held for us until the reply lands (read supersededBy).
+    checks: fromCallback(({ input, sendBack }) => {
+      Promise.resolve(input.ask("line-checks", "read", { kind: "note", id: input.id, text: input.text })).then(
+        (reply) => sendBack({ type: "_checks", id: input.id, reply }),
+        () => {},
+      );
+    }),
     // Following a source link asks notes for the highlight beside whatever the editor is
     // doing, so the draft and its state are untouched; the reply comes back as _followed.
     follow: fromCallback(({ input, sendBack }) => {
@@ -372,7 +446,7 @@ export const machine = setup({
       // What was sent, so the echo of this save (a note.changed carrying it back)
       // is told apart from a real change from elsewhere, and a later pause that
       // ends on the same text saves nothing.
-      enqueue.assign({ sent: { body: context.body }, typed: true });
+      enqueue.assign({ sent: { body: context.body }, typed: true, finished: [], checkedText: context.body });
       enqueue.emit(savedEvent(context));
     }),
     // The user left the note (the keyboard left the editor, or another note opens): one
@@ -380,7 +454,7 @@ export const machine = setup({
     // carries the draft when it is dirty, and the text notes holds otherwise.
     leave: enqueueActions(({ context, enqueue }) => {
       if (context.id == null || !(context.typed || dirty(context))) return;
-      enqueue.assign({ sent: { body: context.body }, typed: false });
+      enqueue.assign({ sent: { body: context.body }, typed: false, finished: [], checkedText: context.body });
       enqueue.emit({ ...savedEvent(context), left: true });
     }),
     // Take the subject the stage holds, from the start reply or from subject.changed, and
@@ -403,6 +477,15 @@ export const machine = setup({
       const titles = withTitle(context.titles, subject);
       enqueue.assign({ subject, titles });
       if (titles !== context.titles) enqueue(() => context.rememberTitles?.(titles));
+    }),
+    // Ask line-checks for the note shown (checksDue); a text without a "#" has no hashtag
+    // line, so there is nothing to ask and nothing to show.
+    readChecks: enqueueActions(({ context, enqueue }) => {
+      const due = checksDue(context);
+      const hashed = due.text?.includes("#") === true;
+      enqueue.assign({ checkedId: due.id, checkedText: due.text, ...(due.reset || !hashed ? { checks: null } : {}) });
+      enqueue.stopChild("checks");
+      if (hashed) enqueue.spawnChild("checks", { id: "checks", input: { ask: context.ask, id: due.id, text: due.text } });
     }),
     // A pick opens its note, also while keepOpen is on; the note open before is left.
     open: enqueueActions(({ event, enqueue }) => {
@@ -477,11 +560,17 @@ export const machine = setup({
       "in, without a reload. On a try page a visitor not yet signed in still sees the editor." +
       " A web address, bare or written as [label](https://…), is drawn as an underlined link in " +
       "the accent color, a markdown link showing only its label except on the line being " +
-      "edited; a click on it, or gx with Vim keys on, opens it in a new browser tab.",
+      "edited; a click on it, or gx with Vim keys on, opens it in a new browser tab. A " +
+      "hashtag, such as #in-my-control, is drawn in the accent color when it names one of the " +
+      "account's evaluators and muted when it names none; each line it names (the lines after " +
+      "it in the same paragraph or list) is checked by line-checks once the user finishes it " +
+      "(moves off it, presses Enter, pastes, or leaves the editor), and its answer shows at " +
+      "the line's end as the option's icon and name, several joined in one row: a pulsing dot " +
+      "while Jev is asked, and a warning whose tooltip says why when it could not be.",
     kind: "view",
     emits: ["note.saved", "note.opened", "passage.selected", "note.staged", "note.closed"],
     attributes: ["height", "follows", "subject", "stage"],
-    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read", "line-checks: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -557,8 +646,18 @@ export const machine = setup({
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
     tryPage: Boolean(input.tryPage),
+    // line-checks' report for the open note (text.checked's shape), null while there is none.
+    checks: null,
+    // The note and the text line-checks last learned from this editor, by a read or a save.
+    checkedId: null,
+    checkedText: null,
+    // The lines the user finished that no save has carried yet (note.saved's finished).
+    finished: [],
   }),
   initial: "starting",
+  // Asked after any change that shows another note or another text (checksDue), so no
+  // state can forget it.
+  always: { guard: ({ context }) => checksDue(context) != null, actions: "readChecks" },
   // Beside the states, so the preference arrives whatever the editor is doing and a
   // keystroke never waits for it. settings.changed that races it is held for us until
   // the reply lands (settings: read supersededBy).
@@ -577,6 +676,17 @@ export const machine = setup({
   ],
   on: {
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
+    // Lines the user finished (the view sends them before the blur that also finishes them).
+    _finished: { actions: enqueueActions(({ context, event, enqueue }) => finish(context, enqueue, event.lines)) },
+    // line-checks' report for the note shown: from the read, or announced after a check.
+    _checks: {
+      guard: ({ context, event }) => event.id === context.checkedId && event.reply?.source != null,
+      actions: assign({ checks: ({ event }) => event.reply }),
+    },
+    "text.checked": {
+      guard: ({ context, event }) => event.source.kind === "note" && event.source.id === context.checkedId,
+      actions: assign({ checks: ({ event }) => event }),
+    },
     // Whether the keyboard is in the note, so a chapter change does not swap the note the
     // user is writing in. Beside the states, so no state can miss the keyboard leaving.
     _focused: { actions: assign({ focused: true }) },
@@ -609,7 +719,7 @@ export const machine = setup({
       guard: ({ context }) => relinkOf(context) != null,
       actions: enqueueActions(({ context, enqueue }) => {
         const { about } = relinkOf(context);
-        enqueue.assign({ about, sent: { body: context.body } });
+        enqueue.assign({ about, sent: { body: context.body }, finished: [], checkedText: context.body });
         enqueue.emit({ ...savedEvent(context), about });
       }),
     },

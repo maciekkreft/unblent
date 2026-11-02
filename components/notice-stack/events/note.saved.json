@@ -8,6 +8,7 @@
     "body": { "type": "string" },
     "baseVersion": { "type": ["integer", "null"], "minimum": 1 },
     "left": { "type": "boolean", "description": "True when the user left the note with this save, which ends the stretch of typing that Undo takes back as one step (12, Undo). False when absent." },
+    "finished": { "type": "array", "items": { "type": "string" }, "description": "The texts of the lines the user finished with this save (moved off the line, Enter, the box losing focus, a paste), so a hashtag check asks only finished lines. Absent when none." },
     "about": {
       "type": "array",
       "items": {

@@ -139,6 +139,138 @@
         }
       ],
       "position": null
+    },
+    {
+      "id": "01M6F0VJ18R5904Y7VAK23MVVF",
+      "book": "00000000000000000000000JRN",
+      "name": "In my control",
+      "description": "Says whether what a line names is something the writer can do something about. Write #in-my-control above a list of what is on your mind.",
+      "on": false,
+      "questions": [
+        {
+          "id": "01M6F0VJ198JHHYZ11C12FDCSF",
+          "on": true,
+          "kind": "pick",
+          "text": "Is what this line names in the writer's own control: something they can choose to do or say themselves?",
+          "yes": "",
+          "no": "",
+          "options": [
+            {
+              "id": "01M6F0VJ15Z0035F5X21GVA4FA",
+              "name": "In my control",
+              "description": "The writer can do or decide this themselves, such as how they prepare, what they say or whether they make a call.",
+              "icon": "check"
+            },
+            {
+              "id": "01M6F0VJ16R12P9F21PAN934NV",
+              "name": "Partly in my control",
+              "description": "The writer can influence it but not decide it, such as how a conversation goes or how well an interview goes.",
+              "icon": "hand-palm"
+            },
+            {
+              "id": "01M6F0VJ17BKWBNJGY6EX95TCX",
+              "name": "Not in my control",
+              "description": "It depends on other people, the past or chance, such as what someone else thinks, a decision others make or the weather.",
+              "icon": "prohibit"
+            }
+          ]
+        }
+      ],
+      "position": null
+    },
+    {
+      "id": "01M6F0VJ1HT7PJE6NV8MBA7NJF",
+      "book": "00000000000000000000000JRN",
+      "name": "Thinking traps",
+      "description": "Names the thinking trap a thought falls into, if any. Write #thinking-traps above a list of thoughts.",
+      "on": false,
+      "questions": [
+        {
+          "id": "01M6F0VJ1JRXDB4YJK2Z78V2AW",
+          "on": true,
+          "kind": "pick",
+          "text": "Which thinking trap, if any, does this thought fall into?",
+          "yes": "",
+          "no": "",
+          "options": [
+            {
+              "id": "01M6F0VJ1AQZ0J2TX9PAN7YR85",
+              "name": "All-or-nothing",
+              "description": "Sees things in only two categories, with no middle ground, often with words such as always, never or ruined.",
+              "icon": "brain"
+            },
+            {
+              "id": "01M6F0VJ1BAWPA1K3D771AQ3EJ",
+              "name": "Mind reading",
+              "description": "Assumes to know what other people think or feel without their saying so.",
+              "icon": "brain"
+            },
+            {
+              "id": "01M6F0VJ1CRTJJYFPV07BR82TN",
+              "name": "Fortune telling",
+              "description": "Predicts that things will turn out badly, as if the future were already known.",
+              "icon": "brain"
+            },
+            {
+              "id": "01M6F0VJ1DEGR3K8GJ98ZQNJKN",
+              "name": "Catastrophising",
+              "description": "Treats a setback as a disaster, or expects the worst possible outcome.",
+              "icon": "brain"
+            },
+            {
+              "id": "01M6F0VJ1EWNHNVDVYWWF3D5QR",
+              "name": "Should statements",
+              "description": "Holds oneself or others to fixed rules of how things should or must be.",
+              "icon": "brain"
+            },
+            {
+              "id": "01M6F0VJ1F46R9Z1PBTNCK806B",
+              "name": "Labelling",
+              "description": "Sums up oneself or another person in one harsh word, such as a failure or an idiot.",
+              "icon": "brain"
+            },
+            {
+              "id": "01M6F0VJ1GF21DNPXG5MWNFB9H",
+              "name": "No trap",
+              "description": "A balanced thought, a plain fact or a plan, that falls into none of these traps.",
+              "icon": "check"
+            }
+          ]
+        }
+      ],
+      "position": null
+    },
+    {
+      "id": "01M6F0VJ1N23PT08WBSAK7B8GG",
+      "book": "00000000000000000000000JRN",
+      "name": "Fact or story",
+      "description": "Tells a fact apart from a story the mind adds to it. Write #fact-or-story above a list of what happened.",
+      "on": false,
+      "questions": [
+        {
+          "id": "01M6F0VJ1P4F9FYR83956BW1T9",
+          "on": true,
+          "kind": "pick",
+          "text": "Is this line a fact that anyone present could check, or a story: an interpretation, a judgment or a guess about it?",
+          "yes": "",
+          "no": "",
+          "options": [
+            {
+              "id": "01M6F0VJ1KVXT1QMRSPC42RP4V",
+              "name": "Fact",
+              "description": "Something that happened or was said, which anyone present could see or hear and agree on.",
+              "icon": "check"
+            },
+            {
+              "id": "01M6F0VJ1M6C4F7A2F5N23M385",
+              "name": "Story",
+              "description": "An interpretation, judgment, assumption or prediction the writer adds to what happened.",
+              "icon": "question"
+            }
+          ]
+        }
+      ],
+      "position": null
     }
   ]
 }

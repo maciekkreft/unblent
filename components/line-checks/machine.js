@@ -506,20 +506,20 @@ export const machine = setup({
     // may name. Missing asks (a Node test) read as signed out, no decider, nothing listed.
     load: fromPromise(async ({ input }) => {
       const { store, ask, api } = input;
-      await claim(store, ask, api);
       const asked = (target, name, payload, fallback) =>
         ask ? ask(target, name, payload).catch(() => fallback) : Promise.resolve(fallback);
+      // Asked first, before anything is awaited: an llm.changed or evaluator.changed that
+      // arrives after the ask is held until its reply (4.2), so what is queued while loading
+      // is never older than the reply it is applied after.
+      const facts = Promise.all([asked("evaluators", "list", {}, {}), asked("llm", "read", {}, {})]);
+      await claim(store, ask, api);
       const [answers, outbox, cursor, userId] = await Promise.all([
         store.answerAll(),
         store.outboxAll(),
         store.metaGet("cursor"),
         store.metaGet("userId"),
       ]);
-      const [session, evaluators, llm] = await Promise.all([
-        asked("session", "read", {}, { userId: null }),
-        asked("evaluators", "list", {}, {}),
-        asked("llm", "read", {}, {}),
-      ]);
+      const [session, [evaluators, llm]] = await Promise.all([asked("session", "read", {}, { userId: null }), facts]);
       return {
         answers,
         outbox,
