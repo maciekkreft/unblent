@@ -237,7 +237,7 @@ export const machine = setup({
       "browser for each chat, and for a new chat about each open item, so it is still there " +
       "after a reload or on coming back, and never shows up in another chat; sending clears " +
       "it, and deleting a chat drops its text. When the user has commented on the last answer, " +
-      "Send says how many comments it sends and works with an empty box. It disables itself while nobody is signed in " +
+      "Send stays the same round arrow, so the box keeps its width, and works with an empty box; its name for a screen reader says how many comments it sends. It disables itself while nobody is signed in " +
       "or the chosen provider has no key. With Vim keys on, `:tab split` or `:tab sp` in the box " +
       "shows its chat on the stage, as the conversation's Open on stage does, once the chat has " +
       "its first message. With `stage` it is the box of a chat the stage shows: it follows no " +
