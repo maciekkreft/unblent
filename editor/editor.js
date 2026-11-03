@@ -1262,6 +1262,21 @@ const hashtagTheme = EditorView.theme({
 // its own effect, so two pickers in one editor never move each other.
 const refreshEffect = StateEffect.define();
 
+// The move a key makes in an open picker list, or null when the key is not the list's:
+// the arrows or Ctrl+N and Ctrl+P choose, Enter or Tab picks, Escape closes. `vim` adds j
+// and k, for a list nothing is typed into while Vim keys is on (12). Exported so a list an
+// editor draws outside its text keeps the same keys.
+export function pickerKey(event, { vim = false } = {}) {
+  if (event.isComposing || event.altKey || event.metaKey) return null;
+  if (event.ctrlKey) return event.key === "n" ? "down" : event.key === "p" ? "up" : null;
+  if (event.shiftKey) return null;
+  if (event.key === "ArrowDown" || (vim && event.key === "j")) return "down";
+  if (event.key === "ArrowUp" || (vim && event.key === "k")) return "up";
+  if (event.key === "Enter" || event.key === "Tab") return "pick";
+  if (event.key === "Escape") return "close";
+  return null;
+}
+
 // One editor's picker:
 // - `find(state)` gives { from, typed } while the cursor ends what opens the list (from
 //   at its first character, typed what follows it), else null;
@@ -1376,7 +1391,12 @@ export function picker({ find, items, insert, row, className = "cm-picker", aria
           dom.children[v.selected]?.scrollIntoView?.({ block: "nearest" });
         };
         draw();
-        return { dom, update: draw };
+        // Never wider than its editor: a narrow panel (the Notes drawer on a phone) is
+        // narrower than the list's own width, so it would run past the panel's edge.
+        const positioned = (space) => {
+          dom.style.maxWidth = `${Math.max(0, space.right - space.left)}px`;
+        };
+        return { dom, update: draw, positioned };
       },
     };
   }
@@ -1387,14 +1407,13 @@ export function picker({ find, items, insert, row, className = "cm-picker", aria
     EditorView.domEventHandlers({
       keydown(event, view) {
         const v = view.state.field(field);
-        if (!v.open || event.isComposing || event.altKey || event.metaKey) return false;
-        const ctrl = event.ctrlKey;
-        const key = ctrl ? (event.key === "n" ? "down" : event.key === "p" ? "up" : null) : event.shiftKey ? null : event.key;
+        if (!v.open) return false;
+        const key = pickerKey(event);
         let done = false;
-        if (key === "ArrowDown" || key === "down") done = (view.dispatch({ effects: own.of({ move: 1 }) }), true);
-        else if (key === "ArrowUp" || key === "up") done = (view.dispatch({ effects: own.of({ move: -1 }) }), true);
-        else if (key === "Enter" || key === "Tab") done = pick(view, v.selected);
-        else if (key === "Escape") done = (view.dispatch({ effects: own.of({ close: "escape" }) }), true);
+        if (key === "down") done = (view.dispatch({ effects: own.of({ move: 1 }) }), true);
+        else if (key === "up") done = (view.dispatch({ effects: own.of({ move: -1 }) }), true);
+        else if (key === "pick") done = pick(view, v.selected);
+        else if (key === "close") done = (view.dispatch({ effects: own.of({ close: "escape" }) }), true);
         // The key is the list's: no view around the editor acts on it too.
         if (done) event.stopPropagation();
         return done;
@@ -1524,6 +1543,7 @@ export function notePicker({ targets }) {
 const pickerTheme = EditorView.theme({
   "&.cm-editor .cm-tooltip.cm-picker": {
     width: "calc(var(--space-xl) * 7.5)",
+    boxSizing: "border-box",
     maxHeight: "calc(var(--space-xl) * 7)",
     overflowY: "auto",
     display: "flex",
