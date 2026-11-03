@@ -281,12 +281,6 @@ class ConversationList extends LitElement {
     .bin:hover {
       color: var(--color-danger);
     }
-    /* A cut row (Vim's dd) waits greyed in place for p or P, with no countdown. */
-    .row.cut .name,
-    .row.cut .subtitle,
-    .row.cut .cut-mark {
-      color: var(--color-mute);
-    }
     /* A title being edited in place (cc): the field takes the title line. */
     .title-input {
       font: inherit;
@@ -364,18 +358,6 @@ class ConversationList extends LitElement {
 
   #actor = new ActorController(this);
 
-  // The keyboard leaving the list while a row is cut deletes it (12). Checked once the
-  // focus has landed; a window losing focus (another app) is not leaving the list.
-  constructor() {
-    super();
-    this.addEventListener("focusout", () =>
-      setTimeout(() => {
-        if (!document.hasFocus() || this.matches(":focus-within")) return;
-        const context = this.#actor.snapshot?.context;
-        if (context?.cut) this.#actor.send({ type: "_left" });
-      }),
-    );
-  }
   // Which row holds the roving tabindex and focus. Ephemeral UI focus, not a fact: null
   // falls back to the open row, then the first.
   #focusId = null;
@@ -408,7 +390,7 @@ class ConversationList extends LitElement {
   // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
   // held (those belong to the browser and the desk), and never inside a field, where a
   // letter is typed text. gg is two presses, so a first g waits a moment for the second.
-  // dd (cut) and cc (rename) are the same idiom.
+  // dd (delete) and cc (rename) are the same idiom.
   #gAt = 0;
   #dAt = 0;
   #cAt = 0;
@@ -420,14 +402,14 @@ class ConversationList extends LitElement {
     const second = event.key === "g" && Date.now() - this.#gAt < 1000;
     this.#gAt = event.key === "g" && !second ? Date.now() : 0;
     if (second) return "first";
-    const cut = event.key === "d" && Date.now() - this.#dAt < 1000;
-    this.#dAt = event.key === "d" && !cut ? Date.now() : 0;
-    if (cut) return "cut";
+    const dd = event.key === "d" && Date.now() - this.#dAt < 1000;
+    this.#dAt = event.key === "d" && !dd ? Date.now() : 0;
+    if (dd) return "delete";
     const cc = event.key === "c" && Date.now() - this.#cAt < 1000;
     this.#cAt = event.key === "c" && !cc ? Date.now() : 0;
     if (cc) return "rename";
     return (
-      { j: "down", k: "up", G: "last", g: "prefix", d: "prefix", c: "prefix", p: "below", P: "above", u: "undo", o: "openBelow", O: "openAbove" }[
+      { j: "down", k: "up", G: "last", g: "prefix", d: "prefix", c: "prefix", p: "below", P: "above", o: "openBelow", O: "openAbove" }[
         event.key
       ] ?? null
     );
@@ -442,37 +424,29 @@ class ConversationList extends LitElement {
 
   #keydown(event, rows, switched) {
     const context = this.#actor.snapshot.context;
-    // While a row is cut, Escape stays in the list (12): it deletes the row, and the
-    // container never sees it as Back.
-    if (event.key === "Escape" && context.cut) {
-      event.preventDefault();
-      const at = rows.findIndex((r) => r.id === context.cut);
-      const next = rows[at + 1] ?? rows[at - 1];
-      this.#actor.send({ type: "_escape" });
-      if (next) this.#follow(next.id);
-      return;
-    }
     const vim = this.#vim(event);
     // Every Vim letter the list owns is spent here, even with nowhere to move (j on the
     // last row): an uncancelled letter is typed wherever the browser still keeps a
-    // selection, and that may be a hidden editor (WebKit). u is the list's only on the cut
-    // row; anywhere else it is the global Undo's (12).
+    // selection, and that may be a hidden editor (WebKit). u is not the list's: it is the
+    // global Undo's (12).
     const current = this.#focusRow(rows, context.open);
-    if (vim && !(vim === "undo" && current !== context.cut)) event.preventDefault();
+    if (vim) event.preventDefault();
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
-    if (vim === "cut") {
-      this.#actor.send({ type: "_cut", id: current });
+    if (vim === "delete") {
+      // The keyboard moves to the row below, as in Vim, or above from the last row.
+      if (!context.chats.some((c) => c.id === current)) return;
+      const at = rows.findIndex((r) => r.id === current);
+      const next = rows[at + 1] ?? rows[at - 1];
+      this.#actor.send({ type: "_dd", id: current });
+      if (next) this.#follow(next.id);
     } else if (vim === "rename") {
       const row = rows.find((r) => r.id === current);
-      if (row && !row.draft && context.cut !== current) this.#startEdit(current);
+      if (row && !row.draft) this.#startEdit(current);
     } else if (vim === "below" || vim === "above") {
-      if (!context.cut) return;
-      const id = context.cut;
-      if (current === id) this.#actor.send({ type: "_uncut" });
-      else this.#actor.send({ type: "_paste", ...this.#neighbours(rows, current, vim === "below") });
+      const id = context.deleted;
+      if (!id) return;
+      this.#actor.send({ type: "_paste", ...this.#neighbours(rows, current, vim === "below") });
       this.#follow(id);
-    } else if (vim === "undo" && current === context.cut) {
-      this.#actor.send({ type: "_uncut" });
     } else if (vim === "openBelow" || vim === "openAbove") {
       this.#actor.send({ type: "_place", ...this.#neighbours(rows, current, vim === "openBelow") });
     } else if (step || vim === "first" || vim === "last") {
@@ -514,12 +488,9 @@ class ConversationList extends LitElement {
     });
   }
 
-  // A click or Enter on a row picks it — or, if it is cut, puts it back, the whole row
-  // being the target so there is nothing small to hit.
+  // A click or Enter on a row picks it.
   #activate(id) {
-    if (!id) return;
-    if (this.#actor.snapshot.context.cut === id) this.#actor.send({ type: "_uncut" });
-    else this.#pick(id);
+    if (id) this.#pick(id);
   }
 
   // Which row's title is being edited in place (cc). Ephemeral view state, nothing a
@@ -651,7 +622,7 @@ class ConversationList extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { open, signedIn, cut, subject } = snapshot.context;
+    const { open, signedIn, subject } = snapshot.context;
     // Signed out nothing of the account shows, not even New chat, since a chat needs an
     // account (3.4); until session answers, neither the rows nor the sign-in line.
     if (signedIn === null) return nothing;
@@ -659,7 +630,7 @@ class ConversationList extends LitElement {
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, open);
     const groups = chaptered(snapshot.context);
-    const row = (r) => this.#row(r, open, focusId, cut, subject);
+    const row = (r) => this.#row(r, open, focusId, subject);
     // In the failed state no rows show either: conversations could not answer, and a
     // chat cannot be made offline (5), so the "New chat" row would promise what we cannot
     // keep. Otherwise the list is always at least the "New chat" row.
@@ -730,14 +701,12 @@ class ConversationList extends LitElement {
     `;
   }
 
-  #row(r, open, focusId, cut, subject) {
-    const isCut = cut === r.id;
+  #row(r, open, focusId, subject) {
     const d = this.#drag && this.#drag.id === r.id ? this.#drag : null;
     const dx = d ? d.dx : 0;
     const classes = [
       "row",
       r.draft ? "draft" : "",
-      isCut ? "cut" : "",
       d && d.dragging ? "dragging" : "",
       d && d.armed ? "armed" : "",
     ]
@@ -766,12 +735,10 @@ class ConversationList extends LitElement {
     }
 
     const untitled = !r.title;
-    const trailing = isCut
-      ? html`<span class="time cut-mark">Cut</span>`
-      : html`<span class="time">${when(r.updatedAt)}</span
-          ><button class="bin" type="button" tabindex="-1" aria-label="Delete chat" @click=${(e) => this.#discard(e, r.id)}>
-            ${icon("trash-simple")}
-          </button>`;
+    const trailing = html`<span class="time">${when(r.updatedAt)}</span
+      ><button class="bin" type="button" tabindex="-1" aria-label="Delete chat" @click=${(e) => this.#discard(e, r.id)}>
+        ${icon("trash-simple")}
+      </button>`;
 
     return html`
       <li

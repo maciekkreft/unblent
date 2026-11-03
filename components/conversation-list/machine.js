@@ -2,7 +2,7 @@ import { setup, assign, fromPromise, emit, enqueueActions } from "xstate";
 
 // The view component that lists the chats and lets one be picked (6.4): it owns only UI
 // state — the rows it is showing, which chat is open, a next-chat draft with no row yet,
-// and the row cut with Vim's dd — and points at `conversations`, which owns the
+// and the last chat deleted with Vim's dd — and points at `conversations`, which owns the
 // fact. It asks conversations: list for the starting picture, conversations: open for the
 // open chat, subject: read for what to scope by, and session: read for whether anyone is
 // signed in, following conversation.changed /
@@ -89,10 +89,10 @@ export const chaptered = (context) => {
 // user set: right below or above that row, next to it in every list that shows both, even
 // while a subject or a chapter hides the chats between it and its neighbour on screen.
 // `ids` are the chat rows as shown; from the fixed New chat row the chat goes above the
-// first shown chat. The chat being moved is never its own neighbour.
-export const placement = ({ chats, cut }, ids, current, below) => {
-  const all = chats.filter((c) => c.id !== cut).map((c) => c.id);
-  const shownIds = ids.filter((id) => id !== cut);
+// first shown chat.
+export const placement = ({ chats }, ids, current, below) => {
+  const all = chats.map((c) => c.id);
+  const shownIds = ids;
   let at = shownIds.indexOf(current);
   if (at < 0) {
     if (!shownIds.length) return { after: null, before: all[0] ?? null };
@@ -106,28 +106,8 @@ export const placement = ({ chats, cut }, ids, current, below) => {
 // counts as signed in, so a page that cannot tell never hides the chats.
 export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
 
-// A chat row the user can cut or delete: a real chat.
+// A chat row the user can delete: a real chat.
 const live = (context, id) => context.chats.some((c) => c.id === id);
-
-// The cut row is deleted (12, Vim keys): Escape, the keyboard leaving the list, or a
-// second dd. The delete happens at once; it is a step `conversations` records, with the
-// short notice and its Undo.
-function dropCut(context, enqueue) {
-  if (!context.cut) return;
-  enqueue.emit({ type: "conversation.discarded", id: context.cut });
-  enqueue.assign({ cut: null });
-}
-
-// Where a pasted row shows until conversations announces its real place: a key just
-// after the row above it, or before the row below it, by plain comparison. Only for
-// this list's order; conversations computes the place it keeps.
-const provisional = (chats, after, before) => {
-  const above = chats.find((c) => c.id === after)?.position;
-  const below = chats.find((c) => c.id === before)?.position;
-  if (above != null) return above + "\u0000";
-  if (below != null) return "";
-  return null;
-};
 
 export const machine = setup({
   actors: {
@@ -172,17 +152,16 @@ export const machine = setup({
       "always New chat; a new chat goes to the top and a new message does not move a chat. " +
       "A delete happens at once and shows the short notice with Undo, and Undo and Redo take " +
       "back a delete, a move or a rename (section 12). " +
-      "With Vim keys on, never while typing in a field: dd cuts the row, greyed and marked Cut " +
-      "with no countdown, and the keyboard stays in the list; p places it below the row the " +
-      "cursor is on and P above, one move; u on the cut row puts it back. While a row is cut, " +
-      "Escape does not leave the list but deletes the row at once, and so does the keyboard " +
-      "leaving the list (a row opened, another panel, a click elsewhere) or a second dd on " +
-      "another row. o starts a new chat below the cursor row " +
+      "With Vim keys on, never while typing in a field: dd deletes the row at once, with the " +
+      "same notice, and the keyboard moves to the next row; the list keeps the last chat it " +
+      "deleted in memory, and p brings it back below the row the cursor is on and P above, " +
+      "one step that Undo deletes again. p and P do nothing once that chat is back by another " +
+      "way (an Undo, another device) or after signing out. u is the global Undo. " +
+      "o starts a new chat below the cursor row " +
       "and O above it; it takes that place once its first message is sent. New chat stays " +
       "put: dd does nothing there. cc on a chat row edits its title in place: Enter or " +
       "leaving the field saves, Escape cancels, and an empty title gives back the first line " +
-      "of the chat's first message; New chat and a cut row are not " +
-      "renamed. A moved or new chat goes right below or above the row it was placed at, also " +
+      "of the chat's first message; New chat is not renamed. A moved or new chat goes right below or above the row it was placed at, also " +
       "in the whole order, so chats hidden by the subject or the chapter stay where they were. " +
       "While a subject is on the stage only the chats " +
       "about it are listed, never a chat apart from them, also while the open chat is not about " +
@@ -231,9 +210,9 @@ export const machine = setup({
     // Which chat is open, learned from conversations: open then conversation.opened; never
     // set on a gesture (the list does not decide what is open).
     open: null,
-    // The row cut with Vim's dd (12), waiting for p or P to place it, u to put it back,
-    // or Escape to delete it; null when none. Greyed in place, no timer.
-    cut: null,
+    // The last chat deleted with Vim's dd (12), which p or P brings back; null when none.
+    // Like Vim's register it is UI state, kept in memory only.
+    deleted: null,
     // A new chat started with o or O (12): where it goes once its first message is sent,
     // as { id, after, before }, the draft's id; null when none.
     placing: null,
@@ -319,21 +298,24 @@ export const machine = setup({
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Someone signed in or out (4.3): a first visit loads signed out and learns who it is
-    // a moment later, so the chats the list started with were not this account's.
+    // a moment later, so the chats the list started with were not this account's, nor the
+    // chat dd deleted, which p could no longer bring back to it.
     "session.changed": {
       target: ".resyncing",
-      actions: assign({ signedIn: ({ event }) => event.userId != null, cut: null, placing: null }),
+      actions: assign({ signedIn: ({ event }) => event.userId != null, deleted: null, placing: null }),
     },
     // The fact's news (4.3, fourth rule), followed in any state so a change that races the
     // starting query is not lost. A change for the draft's id means the draft became a
     // real chat, so a fresh next-chat id is minted above it.
     // A chat started with o or O becomes real on its first change, and is moved then to
-    // the place it was started at (a new chat otherwise goes first).
+    // the place it was started at (a new chat otherwise goes first). The chat dd deleted
+    // coming back (an Undo, another device) is no longer one p can bring back.
     "conversation.changed": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         enqueue.assign({
           chats: ({ context }) => upsert(context.chats, event),
           draft: ({ context }) => (context.draft === event.id ? context.mint() : context.draft),
+          deleted: ({ context }) => (context.deleted === event.id ? null : context.deleted),
         });
         const p = context.placing;
         if (p && p.id === event.id && !context.chats.some((c) => c.id === event.id)) {
@@ -349,7 +331,6 @@ export const machine = setup({
       actions: assign({
         chats: ({ context, event }) => context.chats.filter((c) => c.id !== event.id),
         open: ({ context, event }) => (context.open === event.id ? null : context.open),
-        cut: ({ context, event }) => (context.cut === event.id ? null : context.cut),
       }),
     },
     // conversations announced which chat is open (12): highlight that row. Held for the
@@ -368,46 +349,31 @@ export const machine = setup({
     // The trash on a row, or a swipe past its threshold: the chat is deleted at once, one
     // step with the short notice and its Undo (12, Undo).
     _discard: {
-      guard: ({ context, event }) => live(context, event.id) && context.cut !== event.id,
+      guard: ({ context, event }) => live(context, event.id),
       actions: emit(({ event }) => ({ type: "conversation.discarded", id: event.id })),
     },
-    // Vim's dd on a chat row (12): the row is cut, greyed in place with no timer, while
-    // the keyboard stays in the list. A row already cut is deleted, as Vim's register
-    // holds only the latest cut.
-    _cut: {
-      guard: ({ context, event }) => live(context, event.id) && context.cut !== event.id,
-      actions: enqueueActions(({ context, event, enqueue }) => {
-        dropCut(context, enqueue);
-        enqueue.assign({ cut: event.id });
-      }),
+    // Vim's dd on a chat row (12): the same delete, and the list remembers the chat so p
+    // or P can bring it back. A second dd replaces it, as Vim's register holds one.
+    _dd: {
+      guard: ({ context, event }) => live(context, event.id),
+      actions: [
+        assign({ deleted: ({ event }) => event.id }),
+        emit(({ event }) => ({ type: "conversation.discarded", id: event.id })),
+      ],
     },
-    // p or P: the cut chat goes between these neighbours, and is no longer cut. The row
-    // shows there at once; conversations' announcement of its place follows.
+    // p or P: the deleted chat comes back between these neighbours; `conversations`
+    // restores it there as one step.
     _paste: {
-      guard: ({ context }) => context.cut != null,
+      guard: ({ context }) => context.deleted != null,
       actions: enqueueActions(({ context, event, enqueue }) => {
-        const id = context.cut;
-        const after = event.after ?? null;
-        const before = event.before ?? null;
-        enqueue.assign({ cut: null });
-        if (after === id || before === id) return;
-        const position = provisional(context.chats, after, before);
-        if (position != null)
-          enqueue.assign({ chats: ({ context }) => sorted(context.chats.map((c) => (c.id === id ? { ...c, position } : c))) });
-        enqueue.emit({ type: "conversation.moved", id, after, before });
+        enqueue.assign({ deleted: null });
+        enqueue.emit({ type: "conversation.moved", id: context.deleted, after: event.after ?? null, before: event.before ?? null });
       }),
     },
-    // u on the cut row: it stays where it was.
-    _uncut: { guard: ({ context }) => context.cut != null, actions: assign({ cut: null }) },
-    // Escape while a row is cut, or the keyboard leaving the list (the view tells): the
-    // cut row is deleted.
-    _escape: { actions: enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)) },
-    _left: { actions: enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)) },
     // o or O (12): a new chat, opened like New chat, that goes between these neighbours
     // once its first message is sent.
     _place: {
       actions: enqueueActions(({ context, event, enqueue }) => {
-        dropCut(context, enqueue);
         enqueue.assign({ placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null } });
         enqueue.emit({ type: "conversation.selected", id: context.draft });
       }),
@@ -421,7 +387,7 @@ export const machine = setup({
     _rename: {
       guard: ({ context, event }) => {
         const chat = context.chats.find((c) => c.id === event.id);
-        return Boolean(chat) && live(context, event.id) && context.cut !== event.id && event.title.trim() !== chat.title;
+        return Boolean(chat) && live(context, event.id) && event.title.trim() !== chat.title;
       },
       actions: enqueueActions(({ event, enqueue }) => {
         const title = event.title.trim();
@@ -432,13 +398,10 @@ export const machine = setup({
     // The user picked a row (7.2, internal gesture): announce it, but only for a chat that
     // exists or the next-chat draft, never a stale id. `open` is not set here; it follows
     // conversation.opened, the same for the draft as any other row.
-    // Opening a row while another is cut takes the keyboard out of the list, so the cut
-    // row is deleted (12).
     _pick: {
       guard: ({ context, event }) =>
-        context.cut !== event.id && (context.chats.some((c) => c.id === event.id) || context.draft === event.id),
+        context.chats.some((c) => c.id === event.id) || context.draft === event.id,
       actions: [
-        enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)),
         assign({ placing: null }),
         emit(({ event }) => ({ type: "conversation.selected", id: event.id })),
       ],

@@ -1204,9 +1204,13 @@ const onDiscard = (context, event, enqueue) => {
 
 // A chat leaves the list and the server keeps it as a tombstone (5), so a restore write
 // can bring it back; what this browser held of it is kept for that until the page goes.
-const remove = (context, enqueue, id, step) => {
+// A `position` is the place it is deleted at, saved before the delete, so the restore
+// that follows brings it back there.
+const remove = (context, enqueue, id, step, position) => {
   const chat = context.chats.get(id);
-  const listed = context.headings.find((h) => h.id === id);
+  if (chat && position) chat.position = position;
+  const found = context.headings.find((h) => h.id === id);
+  const listed = found && position ? { ...found, position } : found;
   if (listed || chat) context.gone.set(id, { heading: listed ?? heading(chat), chat });
   stamp(context, id, { step });
   context.unsentMarks.delete(id);
@@ -1216,21 +1220,28 @@ const remove = (context, enqueue, id, step) => {
   context.chats.delete(id);
   context.headings = context.headings.filter((h) => h.id !== id);
   if (context.openId === id) setOpen(context, enqueue, null);
-  enqueue(() => inOrder(context, id, () => context.deleteChat(id)).catch(() => {}));
+  const placed = () => (position ? context.saveChat(id, { position }).catch(() => {}) : null);
+  enqueue(() => inOrder(context, id, () => Promise.resolve(placed()).then(() => context.deleteChat(id))).catch(() => {}));
   enqueue.emit({ type: "conversation.deleted", id });
 };
 
 // A deleted chat brought back with a restore write (5). A chat this page held is
 // announced at once; one only listed, or deleted before a reload, is read once the server
-// has it back, so its row comes back with the whole chat.
-const restore = (context, enqueue, self, id, step) => {
+// has it back, so its row comes back with the whole chat. A `position` is the place it
+// comes back at, saved once the server has it back (a place for a tombstone is refused).
+const restore = (context, enqueue, self, id, step, position) => {
   const gone = context.gone.get(id);
   context.gone.delete(id);
   stamp(context, id, { step });
+  if (gone && position) {
+    gone.heading = { ...gone.heading, position };
+    if (gone.chat) gone.chat.position = position;
+  }
   if (gone) context.headings = [gone.heading, ...context.headings.filter((h) => h.id !== id)];
   if (gone?.chat) context.chats.set(id, gone.chat);
+  const placed = () => (position ? context.saveChat(id, { position }).catch(() => {}) : null);
   enqueue(() =>
-    inOrder(context, id, () => context.restoreChat(id))
+    inOrder(context, id, () => context.restoreChat(id).then(placed))
       .then(() => self.send({ type: "_restored", id }))
       .catch(() => {}),
   );
@@ -1250,14 +1261,18 @@ const inOrder = (context, id, run) => {
 // it is saved alone, changes no time, and never conflicts. A chat in memory is announced
 // with its new place; one that is not is only listed in it, since its turns are not here
 // to announce. Every move is one step (12, Undo), whose Undo puts back the place before.
+// A chat this page deleted, moved into the list (Vim's p or P, 12), comes back at that
+// place instead (restoreAt).
 const onMoved = (context, event, enqueue, self) => {
   const current = context.headings.find((h) => h.id === event.id);
-  if (!current) return;
+  const gone = current ? null : context.gone.get(event.id);
+  if (!current && !gone) return;
   const neighbour = (id) => {
     const h = id && id !== event.id ? context.headings.find((x) => x.id === id) : null;
     return h ? positionOf(h) : null;
   };
   const position = between(neighbour(event.after), neighbour(event.before));
+  if (gone) return restoreAt(context, enqueue, self, event.id, gone, position);
   if (position === current.position) return;
   const step = context.mint();
   const prior = priorOf(stampOf(context, event.id).placeStep);
@@ -1267,6 +1282,23 @@ const onMoved = (context, event, enqueue, self) => {
     label: `move ${nameOf(current.title)}`,
     undo: { kind: "place", id: event.id, position: positionOf(current), ...prior },
     redo: { kind: "place", id: event.id, position, ...prior },
+  });
+};
+
+// A deleted chat comes back at a place with the restore write an Undo of its delete uses,
+// as one step after the delete's: its undo deletes it again where it stood before it was
+// deleted, so the delete's own Undo puts it back in its first row; its redo restores it at
+// the place it was moved to. Its place step is left as it was.
+const restoreAt = (context, enqueue, self, id, gone, position) => {
+  const step = context.mint();
+  const before = positionOf(gone.heading);
+  const prior = priorOf(stampOf(context, id).step);
+  restore(context, enqueue, self, id, step, position);
+  record(context, enqueue, {
+    id: step,
+    label: `restore ${nameOf(gone.chat?.title ?? gone.heading.title)}`,
+    undo: { kind: "chat", id, deleted: true, position: before, ...prior },
+    redo: { kind: "chat", id, deleted: false, position, ...prior },
   });
 };
 
@@ -1376,9 +1408,11 @@ const applyStep = (context, event, enqueue, self) => {
   const live = context.headings.some((h) => h.id === p.id) || Boolean(chat);
   if (p.kind === "chat" && typeof p.deleted === "boolean") {
     if (stamps.step !== expected) return settle("refused", "changed");
+    // A restore by a move (restoreAt) names the place the chat goes to as well.
+    const at = isPosition(p.position) ? p.position : undefined;
     if (p.deleted === !live) stamp(context, p.id, { step: leaves });
-    else if (p.deleted) remove(context, enqueue, p.id, leaves);
-    else restore(context, enqueue, self, p.id, leaves);
+    else if (p.deleted) remove(context, enqueue, p.id, leaves, at);
+    else restore(context, enqueue, self, p.id, leaves, at);
     return settle("applied");
   }
   if (p.kind === "title" && live && typeof p.title === "string") {
@@ -1731,7 +1765,9 @@ export const machine = setup({
       "go to the model; like a rename they are not news, so they never move the chat. Each chat has a place " +
       "in the list, kept on the account and the same on every device: a new chat goes first, " +
       "a new message never moves a chat, and a move from the list puts it between its new " +
-      "neighbours. A place is last write wins and changes nothing else. A chat from before " +
+      "neighbours; a move of a chat deleted on this page (Vim's p in the list) restores it " +
+      "there, one step labelled restore, whose Undo deletes it again where it stood before it " +
+      "was deleted. A place is last write wins and changes nothing else. A chat from before " +
       "places keeps the order it had, newest first, until it changes or is moved. Deleting a " +
       "chat, renaming it, moving it, linking or unlinking it, a change to the comments or the " +
       "highlights on its answers, and a flip of a switch under What the chat may read are each " +

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user brought back a book they deleted, with Vim's p or P on the shelf: books restores the tombstone at once, one step Undo deletes again (12). A book whose files were already erased stays deleted.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}

@@ -104,11 +104,10 @@ export const chaptered = (context) => {
 // user set: right below or above that row, next to it in every list that shows both, even
 // while a subject or a chapter hides the notes between it and its neighbour on screen.
 // `ids` are the note rows as shown; from the New note row the note goes
-// above the first shown note. The note being moved is never its own
-// neighbour.
-export const placement = ({ notes, cut }, ids, current, below) => {
-  const all = notes.filter((n) => n.id !== cut).map((n) => n.id);
-  const shownIds = ids.filter((id) => id !== cut);
+// above the first shown note.
+export const placement = ({ notes }, ids, current, below) => {
+  const all = notes.map((n) => n.id);
+  const shownIds = ids;
   let at = shownIds.indexOf(current);
   if (at < 0) {
     if (!shownIds.length) return { after: null, before: all[0] ?? null };
@@ -131,17 +130,8 @@ export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn =
 // A gesture on a row counts only while the rows are shown.
 const shows = ({ context }) => showing(context) === "show";
 
-// A note row the user can cut or delete: a real note, shown.
+// A note row the user can delete: a real note, shown.
 const live = (context, id) => context.notes.some((n) => n.id === id);
-
-// The cut row is deleted (12, Vim keys): Escape, the keyboard leaving the list, or a
-// second dd. The delete happens at once; it is a step `notes` records, with the short
-// notice and its Undo.
-function dropCut(context, enqueue) {
-  if (!context.cut) return;
-  enqueue.emit({ type: "note.discarded", id: context.cut });
-  enqueue.assign({ cut: null });
-}
 
 export const machine = setup({
   actors: {
@@ -171,12 +161,12 @@ export const machine = setup({
       "device, with New note always the first row; a new note goes to the top and editing a " +
       "note does not move it. The user can open, move or delete a note; a delete happens at " +
       "once and shows the short notice with Undo, and Undo and Redo take back a delete or a " +
-      "move (section 12). With Vim keys on, never while typing in a field: dd cuts the row, " +
-      "greyed and marked Cut with no countdown, and the keyboard stays in the list; p places " +
-      "it below the row the cursor is on and P above, one move; u on the cut row puts it " +
-      "back. While a row is cut, Escape does not leave the list but deletes the row at once, " +
-      "and so does the keyboard leaving the list (a row opened, another panel, a click " +
-      "elsewhere) or a second dd on another row. o makes a new note " +
+      "move (section 12). With Vim keys on, never while typing in a field: dd deletes the row " +
+      "at once, with the same notice, and the keyboard moves to the next row; the list keeps " +
+      "the last note it deleted in memory, and p brings it back below the row the cursor is " +
+      "on and P above, one step that Undo deletes again. p and P do nothing once that note " +
+      "is back by another way (an Undo, another device) or after signing out. u is the " +
+      "global Undo. o makes a new note " +
       "below the cursor row and O above it, opened in the editor. The New note row stays " +
       "put: dd does nothing there. A moved or new note goes right below or above the " +
       "row it was placed at, also in the whole order, so notes hidden by the subject or the " +
@@ -195,8 +185,7 @@ export const machine = setup({
       "chapter's title before its second line; a note linked to the whole book shows nothing " +
       "extra. Highlights are never listed as notes: the book reader shows them. Signed out " +
       "it shows only \"Sign in to see your notes.\": no New note and no notes. The notes stay kept in " +
-      "this browser and come back when the user signs in, without a reload; a row still cut " +
-      "when the user signs out is put back. On a try page a visitor not " +
+      "this browser and come back when the user signs in, without a reload. On a try page a visitor not " +
       "yet signed in still sees the list.",
     kind: "view",
     emits: ["note.selected", "note.discarded", "note.moved"],
@@ -225,9 +214,9 @@ export const machine = setup({
     // The note the editor is showing, learned from note.opened, never set on a
     // gesture: the list does not decide what is open.
     open: null,
-    // The row cut with Vim's dd (12), waiting for p or P to place it, u to put it back,
-    // or Escape to delete it; null when none. Greyed in place, no timer.
-    cut: null,
+    // The last note deleted with Vim's dd (12), which p or P brings back; null when none.
+    // Like Vim's register it is UI state, kept in memory only.
+    deleted: null,
     // A new note made with o or O (12): where it goes once the user writes in it, as
     // { id, after, before }, the draft's id; null when none.
     placing: null,
@@ -286,22 +275,24 @@ export const machine = setup({
   },
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    // Who is signed in now (4.3). Signing out hides the rows and keeps them; a cut the
-    // user can no longer see is put back, so nothing goes out of sight.
+    // Who is signed in now (4.3). Signing out hides the rows and keeps them, and forgets
+    // the note dd deleted, which p could no longer bring back to this account.
     "session.changed": [
       { guard: ({ event }) => event.userId != null, actions: assign({ signedIn: true }) },
-      { actions: assign({ signedIn: false, cut: null }) },
+      { actions: assign({ signedIn: false, deleted: null }) },
     ],
     // The fact's news (4.3, fourth rule), followed in any state so a change that
     // races the starting query is not lost. A change for the draft's id means the
     // draft became a real note, so a fresh next-note id is minted above it.
     // A note made with o or O becomes real on its first change, and is moved then to
-    // the place it was opened at (a new note otherwise sorts first).
+    // the place it was opened at (a new note otherwise sorts first). The note dd deleted
+    // coming back (an Undo, another device) is no longer one p can bring back.
     "note.changed": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         enqueue.assign({
           notes: ({ context }) => upsert(context.notes, event),
           draft: ({ context }) => (context.draft === event.id ? context.mint() : context.draft),
+          deleted: ({ context }) => (context.deleted === event.id ? null : context.deleted),
         });
         const p = context.placing;
         if (p && p.id === event.id && !context.notes.some((n) => n.id === event.id)) {
@@ -316,7 +307,6 @@ export const machine = setup({
       actions: assign({
         notes: ({ context, event }) => context.notes.filter((n) => n.id !== event.id),
         open: ({ context, event }) => (context.open === event.id ? null : context.open),
-        cut: ({ context, event }) => (context.cut === event.id ? null : context.cut),
       }),
     },
     // The stage moved (4.3): the subject changed, so a different set of notes is about
@@ -329,40 +319,29 @@ export const machine = setup({
     // The trash on a row, or a swipe past its threshold: the note is deleted at once,
     // one step with the short notice and its Undo (12, Undo).
     _discard: {
-      guard: ({ context, event }) => shows({ context }) && live(context, event.id) && context.cut !== event.id,
+      guard: ({ context, event }) => shows({ context }) && live(context, event.id),
       actions: emit(({ event }) => ({ type: "note.discarded", id: event.id })),
     },
-    // Vim's dd on a note row (12): the row is cut, greyed in place with no timer, while
-    // the keyboard stays in the list. A row already cut is deleted, as Vim's register
-    // holds only the latest cut.
-    _cut: {
-      guard: ({ context, event }) => shows({ context }) && live(context, event.id) && context.cut !== event.id,
-      actions: enqueueActions(({ context, event, enqueue }) => {
-        dropCut(context, enqueue);
-        enqueue.assign({ cut: event.id });
-      }),
+    // Vim's dd on a note row (12): the same delete, and the list remembers the note so p
+    // or P can bring it back. A second dd replaces it, as Vim's register holds one.
+    _dd: {
+      guard: ({ context, event }) => shows({ context }) && live(context, event.id),
+      actions: [assign({ deleted: ({ event }) => event.id }), emit(({ event }) => ({ type: "note.discarded", id: event.id }))],
     },
-    // p or P: the cut note goes between these neighbours, and is no longer cut.
+    // p or P: the deleted note comes back between these neighbours; `notes` restores it
+    // there as one step.
     _paste: {
-      guard: ({ context }) => context.cut != null,
+      guard: ({ context }) => shows({ context }) && context.deleted != null,
       actions: enqueueActions(({ context, event, enqueue }) => {
-        enqueue.assign({ cut: null });
-        if (event.after !== context.cut && event.before !== context.cut)
-          enqueue.emit({ type: "note.moved", id: context.cut, after: event.after ?? null, before: event.before ?? null });
+        enqueue.assign({ deleted: null });
+        enqueue.emit({ type: "note.moved", id: context.deleted, after: event.after ?? null, before: event.before ?? null });
       }),
     },
-    // u on the cut row: it stays where it was.
-    _uncut: { guard: ({ context }) => context.cut != null, actions: assign({ cut: null }) },
-    // Escape while a row is cut, or the keyboard leaving the list (the view tells): the
-    // cut row is deleted.
-    _escape: { actions: enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)) },
-    _left: { actions: enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)) },
     // o or O (12): a new note, opened in the editor like New note, that goes between
     // these neighbours once the user writes in it.
     _place: {
       guard: shows,
       actions: enqueueActions(({ context, event, enqueue }) => {
-        dropCut(context, enqueue);
         enqueue.assign({ placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null } });
         enqueue.emit({ type: "note.selected", id: context.draft });
       }),
@@ -376,13 +355,10 @@ export const machine = setup({
     // The user picked a row (7.2, internal gesture): announce it, but only for a note
     // that exists or the next-note draft, never a stale id. `open` is not set here;
     // it follows the editor's note.opened, the same for the draft as any other row.
-    // Opening a row while another is cut takes the keyboard out of the list, so the cut
-    // row is deleted (12).
     _pick: {
       guard: ({ context, event }) =>
-        shows({ context }) && context.cut !== event.id && (context.notes.some((n) => n.id === event.id) || context.draft === event.id),
+        shows({ context }) && (context.notes.some((n) => n.id === event.id) || context.draft === event.id),
       actions: [
-        enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)),
         assign({ placing: null }),
         emit(({ event }) => ({ type: "note.selected", id: event.id })),
       ],

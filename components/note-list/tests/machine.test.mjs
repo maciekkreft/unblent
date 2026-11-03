@@ -433,18 +433,25 @@ test("signed out no row can be opened or deleted", async () => {
   assert.deepEqual([selected, discarded], [[], []]);
 });
 
-test("signing in brings the notes back without a reload; signing out hides them and puts back a cut", async () => {
-  const { actor, discarded } = list({ following: true, ask: withSession(SIGNED_OUT) });
+test("signing in brings the notes back without a reload; signing out hides them and forgets the note dd deleted", async () => {
+  const { actor, moved } = (() => {
+    const out = list({ following: true, ask: withSession(SIGNED_OUT) });
+    out.moved = [];
+    out.actor.on("note.moved", (e) => out.moved.push(e.id));
+    return out;
+  })();
   await tick();
   assert.deepEqual(shownIds(actor), [A], "still kept while hidden");
   actor.send({ type: "session.changed", ...SIGNED_IN });
   assert.equal(showing(actor.getSnapshot().context), "show");
-  actor.send({ type: "_cut", id: A });
+  actor.send({ type: "_dd", id: A });
+  actor.send({ type: "note.deleted", id: A });
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(showing(actor.getSnapshot().context), "sign-in");
-  assert.equal(actor.getSnapshot().context.cut, null);
-  assert.deepEqual(discarded, [], "the cut the user can no longer see is not deleted");
-  assert.deepEqual(ids(actor).includes(A), true);
+  assert.equal(actor.getSnapshot().context.deleted, null);
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  actor.send({ type: "_paste", after: null, before: null });
+  assert.deepEqual(moved, [], "p after signing out brings nothing back");
 });
 
 // --- Order and the Vim list keys (12) ---------------------------------------------
@@ -469,62 +476,45 @@ test("rows follow the place notes gives each note, and an edit does not move one
   assert.deepEqual(ids(actor), [A, B, C]);
 });
 
-test("dd cuts a row with no countdown; p or P places it and emits note.moved", async () => {
-  const { actor, moved, discarded, clock } = keyed(placed);
+test("dd deletes the row at once and remembers it; p or P brings it back with note.moved", async () => {
+  const { actor, moved, discarded } = keyed(placed);
   await tick();
-  actor.send({ type: "_cut", id: A });
-  assert.equal(actor.getSnapshot().context.cut, A);
-  clock.increment(LATER);
-  assert.deepEqual(discarded, [], "a cut has no clock");
+  // Nothing deleted yet: p does nothing.
+  actor.send({ type: "_paste", after: null, before: B });
+  assert.deepEqual(moved, []);
+  actor.send({ type: "_dd", id: A });
+  assert.deepEqual(discarded, [A], "no countdown");
+  actor.send({ type: "note.deleted", id: A });
+  assert.equal(actor.getSnapshot().context.deleted, A);
   actor.send({ type: "_paste", after: C, before: null });
   assert.deepEqual(moved, [{ id: A, after: C, before: null }]);
-  assert.equal(actor.getSnapshot().context.cut, null);
-  // Nothing cut: p does nothing.
+  assert.equal(actor.getSnapshot().context.deleted, null);
+  // Once brought back, a second p does nothing.
   actor.send({ type: "_paste", after: null, before: B });
   assert.equal(moved.length, 1);
 });
 
-test("u on the cut row puts it back; a second dd deletes the first cut at once", async () => {
+test("a second dd replaces the note p brings back", async () => {
   const { actor, moved, discarded } = keyed(placed);
   await tick();
-  actor.send({ type: "_cut", id: A });
-  actor.send({ type: "_uncut" });
-  assert.equal(actor.getSnapshot().context.cut, null);
-  actor.send({ type: "_cut", id: A });
-  actor.send({ type: "_cut", id: B });
-  assert.equal(actor.getSnapshot().context.cut, B);
-  assert.deepEqual(discarded, [A]);
+  actor.send({ type: "_dd", id: A });
+  actor.send({ type: "note.deleted", id: A });
+  actor.send({ type: "_dd", id: B });
+  actor.send({ type: "note.deleted", id: B });
+  assert.deepEqual(discarded, [A, B]);
+  actor.send({ type: "_paste", after: null, before: C });
+  assert.deepEqual(moved, [{ id: B, after: null, before: C }]);
+});
+
+test("the deleted note coming back another way (an Undo) is no longer one p brings back", async () => {
+  const { actor, moved } = keyed(placed);
+  await tick();
+  actor.send({ type: "_dd", id: A });
+  actor.send({ type: "note.deleted", id: A });
+  actor.send({ type: "note.changed", id: A, title: "A", body: "A", version: 2, pending: false, updatedAt: 10, position: "a" });
+  assert.equal(actor.getSnapshot().context.deleted, null);
+  actor.send({ type: "_paste", after: C, before: null });
   assert.deepEqual(moved, []);
-});
-
-test("Escape on a cut deletes the row at once", async () => {
-  const { actor, discarded } = keyed(placed);
-  await tick();
-  actor.send({ type: "_escape" });
-  assert.deepEqual(discarded, [], "Escape with nothing cut deletes nothing");
-  actor.send({ type: "_cut", id: B });
-  actor.send({ type: "_escape" });
-  assert.equal(actor.getSnapshot().context.cut, null);
-  assert.deepEqual(discarded, [B]);
-});
-
-test("the keyboard leaving the list deletes the cut row", async () => {
-  const { actor, discarded } = keyed(placed);
-  await tick();
-  actor.send({ type: "_cut", id: B });
-  actor.send({ type: "_left" });
-  assert.deepEqual(discarded, [B]);
-  actor.send({ type: "_left" });
-  assert.deepEqual(discarded, [B], "nothing cut, nothing deleted");
-});
-
-test("opening a row while one is cut deletes the cut", async () => {
-  const { actor, discarded, selected } = keyed(placed);
-  await tick();
-  actor.send({ type: "_cut", id: A });
-  actor.send({ type: "_pick", id: C });
-  assert.deepEqual(discarded, [A]);
-  assert.deepEqual(selected, [C]);
 });
 
 test("o opens a new note and moves it to its place once the user writes in it", async () => {
@@ -540,8 +530,9 @@ test("o opens a new note and moves it to its place once the user writes in it", 
 });
 
 test("dd does nothing on the New note row", async () => {
-  const { actor } = keyed(placed);
+  const { actor, discarded } = keyed(placed);
   await tick();
-  actor.send({ type: "_cut", id: MINTED });
-  assert.equal(actor.getSnapshot().context.cut, null);
+  actor.send({ type: "_dd", id: MINTED });
+  assert.deepEqual(discarded, []);
+  assert.equal(actor.getSnapshot().context.deleted, null);
 });

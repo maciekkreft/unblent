@@ -515,6 +515,28 @@ function applyDiscard(context, event, enqueue) {
   });
 }
 
+// The user brought back the book they deleted (book-shelf emits book.restored on Vim's p
+// or P, 12): the restore write an Undo of its delete uses, as one step after the delete's,
+// so its Undo deletes the book again and the delete's own Undo then brings it back. A book
+// that is not a tombstone, or whose files went when its delete step left the undo list
+// (purge), is left as it is.
+function applyRestore(context, event, enqueue) {
+  const { id } = event;
+  const current = context.books.get(id);
+  if (!current?.deleted || current.purged) return;
+  const step = context.mint();
+  restore(context, enqueue, current, step);
+  const prior = current.step ? { prior: current.step } : {};
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "books",
+    label: `restore ${nameOf(current)}`,
+    undo: { kind: "book", id, deleted: true, ...prior },
+    redo: { kind: "book", id, deleted: false, ...prior },
+  });
+}
+
 // Mark a book a tombstone and announce it gone: queue a delete (which replaces any
 // pending position, Decision 6, or a restore not yet sent) and drain. The server keeps
 // the book's files, so a restore write (5) can bring it back.
@@ -619,6 +641,10 @@ function purge(context, event) {
   if (event.owner !== "books" || p.kind !== "book" || p.deleted !== true || typeof p.id !== "string") return;
   const current = context.books.get(p.id);
   if (!current?.deleted || current.step !== event.id || context.userId == null || !context.api?.purge) return;
+  // Marked, so the shelf's p (applyRestore) no longer offers a book the server cannot bring back.
+  const record = { ...current, purged: true };
+  context.books.set(p.id, record);
+  context.store.put(record).catch(() => {});
   Promise.resolve()
     .then(() => context.api.purge(p.id))
     .catch(() => {});
@@ -684,6 +710,7 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
   else if (message.type === "book.renamed") applyRename(context, message, enqueue);
   else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
+  else if (message.type === "book.restored") applyRestore(context, message, enqueue);
   else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
@@ -877,7 +904,9 @@ export const machine = setup({
       "the short notice. Undo of an added book deletes it, and a deleted book comes back with a " +
       "restore write the server accepts, its files kept on the server, so nothing is imported " +
       "again. Once a delete's step leaves the undo list (`step.dropped`), the book's files on " +
-      "the server are erased; a restore after that is refused and the book stays deleted. A step is refused when the book was written since by anything else; turning a " +
+      "the server are erased; a restore after that is refused and the book stays deleted. The " +
+      "shelf's Vim p brings a deleted book back the same way, one step labelled restore whose " +
+      "Undo deletes it again. A step is refused when the book was written since by anything else; turning a " +
       "page is not a step and refuses nothing. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
       "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
@@ -908,6 +937,7 @@ export const machine = setup({
       "chapter.selected": "navigation",
       "day.selected": "navigation",
       "book.discarded": "step",
+      "book.restored": "step",
     },
     asks: ["session: read", "journal: read"],
   },
@@ -1003,6 +1033,7 @@ export const machine = setup({
         "chapter.selected": { actions: queue },
         "day.selected": { actions: queue },
         "book.discarded": { actions: queue },
+        "book.restored": { actions: queue },
         "step.undone": { actions: queue },
         "step.redone": { actions: queue },
       },
@@ -1052,6 +1083,7 @@ export const machine = setup({
         "chapter.selected": { actions: queue },
         "day.selected": { actions: queue },
         "book.discarded": { actions: queue },
+        "book.restored": { actions: queue },
         "step.undone": { actions: queue },
         "step.redone": { actions: queue },
       },
@@ -1087,6 +1119,7 @@ export const machine = setup({
         "book.progressed": { actions: enqueueActions(({ context, event, enqueue }) => applyProgress(context, event, enqueue)) },
         "book.renamed": { actions: enqueueActions(({ context, event, enqueue }) => applyRename(context, event, enqueue)) },
         "book.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
+        "book.restored": { actions: enqueueActions(({ context, event, enqueue }) => applyRestore(context, event, enqueue)) },
         "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         "step.dropped": { actions: ({ context, event }) => purge(context, event) },

@@ -98,7 +98,6 @@ const clickEdit = (page, title) =>
       ?.querySelector(".edit")
       ?.click();
   }, title);
-const isCut = (page) => page.evaluate(() => Boolean(document.querySelector("book-shelf").shadowRoot.querySelector(".tile.cut")));
 
 const forgeCookie = () => {
   const SECRET = process.env.SESSION_SECRET;
@@ -351,11 +350,11 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("with Vim keys on, dd cuts a tile, u puts it back, Escape deletes it, cc renames and o opens the picker", async () => {
+    test("with Vim keys on, dd deletes a tile at once, p brings it back, u twice walks both steps, cc renames and o opens the picker", async () => {
       const cookie = forgeCookie();
       await importBook(cookie, SAMPLE_ID, SAMPLE);
       await importBook(cookie, "01K00000000000000000000GPS", GAPS);
-      const { page, problems, debug } = await open({ cookie, vimKeys: true });
+      const { page, problems } = await open({ cookie, vimKeys: true });
       // Playwright turns on catching the file picker when the first listener is added,
       // without waiting for Chromium to confirm; added just before `o`, a loaded host lets
       // the key win and Chromium opens a real picker the test never sees.
@@ -363,53 +362,36 @@ for (const engine of ENGINES) {
       await until(async () => (await tiles(page)).length === 2);
       await focusShelf(page);
       const first = await focusedTile(page);
+      const titles = async () => (await tiles(page)).map((t) => t.title);
+      const both = await titles();
       await page.keyboard.press("d");
       await page.keyboard.press("d");
-      await until(() => isCut(page));
-      await page.keyboard.press("u");
-      await until(async () => !(await isCut(page)));
-      assert.ok(!debug.some((l) => DISCARDED.test(l)), "a cut put back deletes nothing");
-      await page.keyboard.press("d");
-      await page.keyboard.press("d");
-      await until(() => isCut(page));
-      await page.keyboard.press("Escape");
-      await until(() => debug.some((l) => DISCARDED.test(l)));
       await until(async () => (await tiles(page)).length === 1);
-      assert.ok(!(await tiles(page)).some((t) => t.title === first));
+      assert.ok(!(await titles()).includes(first));
+      await page.locator("notice-stack", { hasText: `Delete book ${first}` }).waitFor();
       const left = (await tiles(page))[0].title;
       await until(async () => (await focusedTile(page)) === left, 2000);
+      // p brings the book back at its place on the shelf, and the keyboard follows it.
+      await page.keyboard.press("p");
+      await until(async () => (await titles()).join() === both.join());
+      await until(async () => (await focusedTile(page)) === first, 2000);
+      // u is the global Undo (12): the first takes back the p, the second the dd.
+      await page.keyboard.press("u");
+      await until(async () => (await tiles(page)).length === 1);
+      await page.keyboard.press("u");
+      await until(async () => (await titles()).join() === both.join());
+      await focusShelf(page);
+      const target = await focusedTile(page);
       await page.keyboard.press("c");
       await page.keyboard.press("c");
       const input = page.locator("book-shelf .title-input");
       await input.waitFor();
       assert.ok(await input.evaluate((el) => el.getRootNode().activeElement === el), "the title field has the keyboard");
       await input.press("Escape");
-      await until(async () => (await focusedTile(page)) === left);
+      await until(async () => (await focusedTile(page)) === target);
       const chooser = page.waitForEvent("filechooser", { timeout: 2000 });
       await page.keyboard.press("o");
       await chooser;
-      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-
-    // Browser: focus and keys.
-    test("the keyboard leaving the shelf while a tile is cut deletes it, and the notice's Undo brings the book back", async () => {
-      const cookie = forgeCookie();
-      await importBook(cookie, SAMPLE_ID, SAMPLE);
-      const { page, problems, debug } = await open({ cookie, vimKeys: true });
-      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
-      await focusShelf(page);
-      await until(async () => (await focusedTile(page)) === "Sample Book");
-      await page.keyboard.press("d");
-      await page.keyboard.press("d");
-      await until(() => isCut(page));
-      const box = await page.locator("book-reader").boundingBox();
-      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-      await until(() => debug.some((l) => DISCARDED.test(l)));
-      await until(async () => !(await tiles(page)).some((t) => t.title === "Sample Book"));
-      await page.locator("notice-stack", { hasText: "Delete book Sample Book" }).waitFor();
-      await page.locator("notice-stack .undo").click();
-      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       await page.close();
     });

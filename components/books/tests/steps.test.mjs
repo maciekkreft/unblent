@@ -284,6 +284,54 @@ test("a deleted book's files go only when its delete step leaves the undo list; 
   assert.equal(h.api.rows.get(A).deleted, true);
 });
 
+test("book.restored brings a deleted book back as one step after the delete's; Undo deletes it again, Undo again brings it back, Redo deletes it", async () => {
+  const h = await start({ store: memory([row(A)]), api: server([row(A)]) });
+  h.actor.send({ type: "book.discarded", id: A });
+  await h.sync();
+  const [del] = h.steps;
+  h.actor.send({ type: "book.restored", id: A });
+  assert.equal(h.steps.length, 2);
+  const res = h.steps[1];
+  assert.equal(res.label, "restore book Dune");
+  assert.equal(res.notice, undefined);
+  assert.deepEqual(res.undo, { kind: "book", id: A, deleted: true, prior: del.id });
+  assert.deepEqual(res.redo, { kind: "book", id: A, deleted: false, prior: del.id });
+  assert.equal((await shown(h.actor, A)).title, "Dune");
+  await h.sync();
+  assert.equal(h.api.rows.get(A).deleted, false, "brought back with a restore write");
+
+  h.actor.send({ type: "book.restored", id: A });
+  assert.equal(h.steps.length, 2, "a book on the shelf is not restored again");
+
+  h.actor.send(undo(res));
+  assert.equal(await shown(h.actor, A), null, "Undo deletes it again");
+  h.actor.send(undo(del));
+  assert.equal((await shown(h.actor, A)).title, "Dune", "the delete's Undo brings it back");
+  h.actor.send(redo(del));
+  h.actor.send(redo(res));
+  assert.equal((await shown(h.actor, A)).title, "Dune", "Redo brings it back again");
+  h.actor.send(undo(res));
+  assert.equal(await shown(h.actor, A), null);
+  await h.sync();
+  assert.equal(h.api.rows.get(A).deleted, true);
+  assert.ok(h.settled.every((s) => s.outcome === "applied"), JSON.stringify(h.settled));
+});
+
+test("book.restored leaves a book alone whose files went when its delete step left the undo list", async () => {
+  const h = await start({ store: memory([row(A)]), api: server([row(A)]) });
+  h.actor.send({ type: "book.discarded", id: A });
+  await h.sync();
+  const [del] = h.steps;
+  h.actor.send({ type: "step.dropped", id: del.id, owner: "books", payload: del.redo });
+  await flush();
+  assert.deepEqual(h.api.purged, [A]);
+  h.actor.send({ type: "book.restored", id: A });
+  assert.equal(h.steps.length, 1, "no step");
+  assert.equal(await shown(h.actor, A), null);
+  h.actor.send({ type: "book.restored", id: B });
+  assert.equal(h.steps.length, 1, "an unknown book records nothing");
+});
+
 test("Undo of a delete while it is on its way still brings the book back", async () => {
   let release;
   const api = server([row(A)]);

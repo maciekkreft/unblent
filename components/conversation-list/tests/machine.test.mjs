@@ -408,62 +408,44 @@ test("rows follow the place conversations gives each chat, and a new message doe
   assert.deepEqual(ids(actor), [A, B, C]);
 });
 
-test("dd cuts a row with no countdown; p places it at once and emits conversation.moved", async () => {
-  const { actor, moved, discarded, clock } = keyed(placed);
-  await tick();
-  actor.send({ type: "_cut", id: A });
-  assert.equal(actor.getSnapshot().context.cut, A);
-  clock.increment(LATER);
-  assert.deepEqual(discarded, [], "a cut has no clock");
-  actor.send({ type: "_paste", after: B, before: C });
-  assert.deepEqual(moved, [{ id: A, after: B, before: C }]);
-  assert.deepEqual(ids(actor), [B, A, C], "shown in its new place before conversations answers");
-  assert.equal(actor.getSnapshot().context.cut, null);
-  actor.send({ type: "_paste", after: null, before: B });
-  assert.equal(moved.length, 1, "nothing cut: p does nothing");
-});
-
-test("u on the cut row puts it back; a second dd deletes the first cut at once", async () => {
+test("dd deletes a row at once and keeps it; p brings it back between the cursor row's neighbours", async () => {
   const { actor, moved, discarded } = keyed(placed);
   await tick();
-  actor.send({ type: "_cut", id: A });
-  actor.send({ type: "_uncut" });
-  assert.equal(actor.getSnapshot().context.cut, null);
-  actor.send({ type: "_cut", id: A });
-  actor.send({ type: "_cut", id: B });
-  assert.equal(actor.getSnapshot().context.cut, B);
-  assert.deepEqual(discarded, [A]);
+  actor.send({ type: "_paste", after: B, before: C });
+  assert.deepEqual(moved, [], "nothing deleted: p does nothing");
+  actor.send({ type: "_dd", id: A });
+  assert.deepEqual(discarded, [A], "deleted at once");
+  assert.equal(actor.getSnapshot().context.deleted, A);
+  actor.send({ type: "conversation.deleted", id: A });
+  actor.send({ type: "_paste", after: B, before: C });
+  assert.deepEqual(moved, [{ id: A, after: B, before: C }]);
+  assert.equal(actor.getSnapshot().context.deleted, null);
+  actor.send({ type: "_paste", after: null, before: B });
+  assert.equal(moved.length, 1, "p brings it back once");
+});
+
+test("a second dd replaces the deleted chat; P brings back the last one", async () => {
+  const { actor, moved, discarded } = keyed(placed);
+  await tick();
+  actor.send({ type: "_dd", id: A });
+  actor.send({ type: "_dd", id: B });
+  assert.deepEqual(discarded, [A, B]);
+  actor.send({ type: "_paste", after: null, before: C });
+  assert.deepEqual(moved, [{ id: B, after: null, before: C }]);
+});
+
+test("the deleted chat coming back another way, or signing out, leaves nothing for p", async () => {
+  const { actor, moved } = keyed(placed);
+  await tick();
+  actor.send({ type: "_dd", id: A });
+  actor.send({ type: "conversation.deleted", id: A });
+  actor.send(change(A, { position: "a" }));
+  assert.equal(actor.getSnapshot().context.deleted, null, "an Undo brought it back");
+  actor.send({ type: "_dd", id: B });
+  actor.send({ type: "session.changed", userId: null });
+  assert.equal(actor.getSnapshot().context.deleted, null, "signed out");
+  actor.send({ type: "_paste", after: null, before: C });
   assert.deepEqual(moved, []);
-});
-
-test("Escape on a cut deletes the row at once", async () => {
-  const { actor, discarded } = keyed(placed);
-  await tick();
-  actor.send({ type: "_escape" });
-  assert.deepEqual(discarded, [], "Escape with nothing cut deletes nothing");
-  actor.send({ type: "_cut", id: B });
-  actor.send({ type: "_escape" });
-  assert.equal(actor.getSnapshot().context.cut, null);
-  assert.deepEqual(discarded, [B]);
-});
-
-test("the keyboard leaving the list deletes the cut row", async () => {
-  const { actor, discarded } = keyed(placed);
-  await tick();
-  actor.send({ type: "_cut", id: B });
-  actor.send({ type: "_left" });
-  assert.deepEqual(discarded, [B]);
-  actor.send({ type: "_left" });
-  assert.deepEqual(discarded, [B], "nothing cut, nothing deleted");
-});
-
-test("opening a row while one is cut deletes the cut", async () => {
-  const { actor, discarded, selected } = keyed(placed);
-  await tick();
-  actor.send({ type: "_cut", id: A });
-  actor.send({ type: "_pick", id: C });
-  assert.deepEqual(discarded, [A]);
-  assert.deepEqual(selected, [C]);
 });
 
 test("o starts a new chat and moves it to its place once its first message is sent", async () => {
@@ -478,10 +460,11 @@ test("o starts a new chat and moves it to its place once its first message is se
 });
 
 test("dd does nothing on the New chat row", async () => {
-  const { actor } = keyed(placed);
+  const { actor, discarded } = keyed(placed);
   await tick();
-  actor.send({ type: "_cut", id: MINTED });
-  assert.equal(actor.getSnapshot().context.cut, null);
+  actor.send({ type: "_dd", id: MINTED });
+  assert.equal(actor.getSnapshot().context.deleted, null);
+  assert.deepEqual(discarded, []);
 });
 
 test("_rename emits conversation.renamed with the trimmed text, and only when it changed", async () => {
@@ -503,7 +486,5 @@ test("_rename emits conversation.renamed with the trimmed text, and only when it
   assert.deepEqual(renamed[1], { id: B, title: "" }, "an empty title is announced");
   assert.equal(actor.getSnapshot().context.chats.find((c) => c.id === B).title, "B", "and waits for conversations");
   actor.send({ type: "_rename", id: MINTED, title: "x" });
-  actor.send({ type: "_cut", id: C });
-  actor.send({ type: "_rename", id: C, title: "x" });
-  assert.equal(renamed.length, 2, "not New chat, not a cut row");
+  assert.equal(renamed.length, 2, "not New chat");
 });

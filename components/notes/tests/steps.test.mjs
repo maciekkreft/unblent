@@ -206,6 +206,45 @@ test("a move is refused once the note's place was written since", async () => {
   assert.deepEqual(settled.at(-1), { id: first.id, owner: "notes", outcome: "refused", reason: "changed" });
 });
 
+const C = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
+
+test("a move of a deleted note restores it there as one step; Undo deletes it again, and the delete's Undo puts it back in its row", async () => {
+  const { actor, steps, settled, deleted } = await start();
+  actor.send(save(A, "A", null, { left: true }));
+  actor.send(save(B, "B", null, { left: true }));
+  actor.send(save(C, "Back\nbody", null, { left: true }));
+  const ids = async () => (await list(actor)).notes.map((n) => n.id);
+  assert.deepEqual(await ids(), [C, B, A]);
+  actor.send({ type: "note.discarded", id: C });
+  const removal = steps.at(-1);
+  actor.send({ type: "note.moved", id: C, after: A, before: null });
+  const restore = steps.at(-1);
+  assert.equal(restore.label, "restore note Back");
+  assert.notEqual(restore.id, removal.id);
+  assert.equal(restore.notice, undefined);
+  assert.deepEqual(await ids(), [B, A, C], "back where it was placed");
+  assert.equal((await read(actor, C)).note.body, "Back\nbody");
+  actor.send(undo(restore));
+  assert.deepEqual(deleted, [C, C]);
+  assert.deepEqual(await ids(), [B, A]);
+  actor.send(undo(removal));
+  assert.deepEqual(await ids(), [C, B, A], "the delete's Undo puts it back in its first row");
+  actor.send(redo(removal));
+  actor.send(redo(restore));
+  assert.deepEqual(await ids(), [B, A, C], "Redo restores it at the place it was moved to");
+  assert.deepEqual(settled.map((s) => s.outcome), ["applied", "applied", "applied", "applied"]);
+});
+
+test("a deleted highlight moved into the list stays deleted", async () => {
+  const { actor, steps } = await start();
+  actor.send(save(A, "comment", null, { about: highlight(at(0, 5), "Hello"), left: true }));
+  actor.send({ type: "note.discarded", id: A });
+  const count = steps.length;
+  actor.send({ type: "note.moved", id: A, after: null, before: null });
+  assert.equal(steps.length, count);
+  assert.equal((await read(actor, A)).error, "not-found");
+});
+
 test("signed in, an Undo of a delete is a restore write naming the tombstone's version", async () => {
   const puts = [];
   const server = new Map();

@@ -23,7 +23,7 @@ const notes = [
   note(OTHER, "e", [{ kind: "book", id: "01ARZ3NDEKTSV4RRFFQ69G5BK2" }]),
 ];
 const subject = (chapter, chapterTitle) => ({ kind: "book", id: BOOK, title: "Book", ...(chapter ? { chapter, chapterTitle } : {}) });
-const context = (over = {}) => ({ notes, following: true, subject: subject("chapter-two", "Chapter Two"), handed: new Set(), open: null, allChapters: false, cut: null, ...over });
+const context = (over = {}) => ({ notes, following: true, subject: subject("chapter-two", "Chapter Two"), handed: new Set(), open: null, allChapters: false, ...over });
 const idsOf = (rows) => rows.map((n) => n.id);
 
 test("under This chapter only the open chapter's notes are listed, none linked to no chapter", () => {
@@ -73,16 +73,18 @@ test("the switch starts on This chapter, comes back from input, and _chapters tu
 });
 
 test("a move in the filtered list lands next to the row it was placed at in the whole order", () => {
-  // A list showing LOOSE, TWO, TWO_B (group order, not the whole order).
+  // A list showing LOOSE, TWO, TWO_B (group order, not the whole order); the note being
+  // brought back is deleted, so it is in no list.
+  const without = (id) => context({ notes: notes.filter((n) => n.id !== id) });
   const shownIds = [LOOSE, TWO, TWO_B];
-  // ONE cut, placed below TWO: right after TWO, before LOOSE, which comes next in the whole order.
-  assert.deepEqual(placement(context({ cut: ONE }), shownIds, TWO, true), { after: TWO, before: LOOSE });
-  // Placed above TWO_B: between ONE's old neighbours, skipping the cut note itself.
-  assert.deepEqual(placement(context({ cut: ONE }), shownIds, TWO_B, false), { after: LOOSE, before: TWO_B });
+  // ONE placed below TWO: right after TWO, before LOOSE, which comes next in the whole order.
+  assert.deepEqual(placement(without(ONE), shownIds, TWO, true), { after: TWO, before: LOOSE });
+  // Placed above TWO_B: between ONE's old neighbours.
+  assert.deepEqual(placement(without(ONE), shownIds, TWO_B, false), { after: LOOSE, before: TWO_B });
   // Below the last row: before the hidden note that follows it, never far past it.
-  assert.deepEqual(placement(context({ cut: TWO }), [LOOSE, TWO_B], TWO_B, true), { after: TWO_B, before: OTHER });
+  assert.deepEqual(placement(without(TWO), [LOOSE, TWO_B], TWO_B, true), { after: TWO_B, before: OTHER });
   // From a fixed row, above the first shown note.
-  assert.deepEqual(placement(context({ cut: TWO_B }), [LOOSE, TWO], "draft", true), { after: TWO, before: LOOSE });
+  assert.deepEqual(placement(without(TWO_B), [LOOSE, TWO], "draft", true), { after: TWO, before: LOOSE });
   // Nothing shown: the top of the whole order.
   assert.deepEqual(placement(context(), [], "draft", true), { after: null, before: TWO });
 });

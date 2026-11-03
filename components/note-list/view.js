@@ -283,12 +283,6 @@ class NoteList extends LitElement {
     .bin:hover {
       color: var(--color-danger);
     }
-    /* A cut row (Vim's dd) waits greyed in place for p or P, with no countdown. */
-    .row.cut .name,
-    .row.cut .subtitle,
-    .row.cut .cut-mark {
-      color: var(--color-mute);
-    }
     /* The chapter switch, the top row of the list: two equal halves across the list's
        width in one rectangular box, the pressed one raised. Its edges stand on the rows'
        edges, with the same space above it as beside it and below it. */
@@ -348,18 +342,6 @@ class NoteList extends LitElement {
 
   #actor = new ActorController(this);
 
-  // The keyboard leaving the list while a row is cut deletes it (12). Checked once the
-  // focus has landed; a window losing focus (another app) is not leaving the list.
-  constructor() {
-    super();
-    this.addEventListener("focusout", () =>
-      setTimeout(() => {
-        if (!document.hasFocus() || this.matches(":focus-within")) return;
-        const context = this.#actor.snapshot?.context;
-        if (context?.cut) this.#actor.send({ type: "_left" });
-      }),
-    );
-  }
   // Which row holds the roving tabindex and focus. Ephemeral UI focus, not a fact:
   // null falls back to the open row, then the first.
   #focusId = null;
@@ -400,11 +382,11 @@ class NoteList extends LitElement {
     const second = event.key === "g" && Date.now() - this.#gAt < 1000;
     this.#gAt = event.key === "g" && !second ? Date.now() : 0;
     if (second) return "first";
-    const cut = event.key === "d" && Date.now() - this.#dAt < 1000;
-    this.#dAt = event.key === "d" && !cut ? Date.now() : 0;
-    if (cut) return "cut";
+    const dd = event.key === "d" && Date.now() - this.#dAt < 1000;
+    this.#dAt = event.key === "d" && !dd ? Date.now() : 0;
+    if (dd) return "delete";
     return (
-      { j: "down", k: "up", G: "last", g: "prefix", d: "prefix", p: "below", P: "above", u: "undo", o: "openBelow", O: "openAbove" }[
+      { j: "down", k: "up", G: "last", g: "prefix", d: "prefix", p: "below", P: "above", o: "openBelow", O: "openAbove" }[
         event.key
       ] ?? null
     );
@@ -419,34 +401,26 @@ class NoteList extends LitElement {
 
   #keydown(event, rows, switched) {
     const context = this.#actor.snapshot.context;
-    // While a row is cut, Escape stays in the list (12): it deletes the row, and the
-    // container never sees it as Back.
-    if (event.key === "Escape" && context.cut) {
-      event.preventDefault();
-      const at = rows.findIndex((r) => r.id === context.cut);
-      const next = rows[at + 1] ?? rows[at - 1];
-      this.#actor.send({ type: "_escape" });
-      if (next) this.#follow(next.id);
-      return;
-    }
     const vim = this.#vim(event);
     // Every Vim letter the list owns is spent here, even with nowhere to move (j on the
     // last row): an uncancelled letter is typed wherever the browser still keeps a
-    // selection, and that may be a hidden editor (WebKit). u is the list's only on the cut
-    // row; anywhere else it is the global Undo's (12).
+    // selection, and that may be a hidden editor (WebKit). u is not the list's: it is the
+    // global Undo's (12).
     const current = this.#focusRow(rows, context);
-    if (vim && !(vim === "undo" && current !== context.cut)) event.preventDefault();
+    if (vim) event.preventDefault();
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
-    if (vim === "cut") {
-      this.#actor.send({ type: "_cut", id: current });
+    if (vim === "delete") {
+      // The keyboard moves to the row below, as in Vim, or above from the last row.
+      if (!context.notes.some((n) => n.id === current)) return;
+      const at = rows.findIndex((r) => r.id === current);
+      const next = rows[at + 1] ?? rows[at - 1];
+      this.#actor.send({ type: "_dd", id: current });
+      if (next) this.#follow(next.id);
     } else if (vim === "below" || vim === "above") {
-      if (!context.cut) return;
-      const id = context.cut;
-      if (current === id) this.#actor.send({ type: "_uncut" });
-      else this.#actor.send({ type: "_paste", ...this.#neighbours(rows, current, vim === "below") });
+      const id = context.deleted;
+      if (!id) return;
+      this.#actor.send({ type: "_paste", ...this.#neighbours(rows, current, vim === "below") });
       this.#follow(id);
-    } else if (vim === "undo" && current === context.cut) {
-      this.#actor.send({ type: "_uncut" });
     } else if (vim === "openBelow" || vim === "openAbove") {
       this.#actor.send({ type: "_place", ...this.#neighbours(rows, current, vim === "openBelow") });
     } else if (step || vim === "first" || vim === "last") {
@@ -488,12 +462,9 @@ class NoteList extends LitElement {
     });
   }
 
-  // A click or Enter on a row picks it — or, if it is cut, puts it back, the whole row
-  // being the target so there is nothing small to hit.
+  // A click or Enter on a row picks it.
   #activate(id) {
-    if (!id) return;
-    if (this.#actor.snapshot.context.cut === id) this.#actor.send({ type: "_uncut" });
-    else this.#pick(id);
+    if (id) this.#pick(id);
   }
 
   #clickRow(id) {
@@ -583,11 +554,11 @@ class NoteList extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
-    const { open, cut, subject } = snapshot.context;
+    const { open, subject } = snapshot.context;
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, snapshot.context);
     const groups = chaptered(snapshot.context);
-    const row = (r) => this.#row(r, open, focusId, cut, subject);
+    const row = (r) => this.#row(r, open, focusId, subject);
     // The failed state is the one time no rows show: notes could not answer, so the
     // next-note row would write into a picture we do not have. Otherwise the list is
     // always at least the next-note row, so there is no empty state.
@@ -658,14 +629,12 @@ class NoteList extends LitElement {
     `;
   }
 
-  #row(r, open, focusId, cut, subject) {
-    const isCut = cut === r.id;
+  #row(r, open, focusId, subject) {
     const d = this.#drag && this.#drag.id === r.id ? this.#drag : null;
     const dx = d ? d.dx : 0;
     const classes = [
       "row",
       r.draft ? "draft" : "",
-      isCut ? "cut" : "",
       d && d.dragging ? "dragging" : "",
       d && d.armed ? "armed" : "",
     ]
@@ -695,12 +664,10 @@ class NoteList extends LitElement {
     }
 
     const untitled = !r.title;
-    const trailing = isCut
-      ? html`<span class="time cut-mark">Cut</span>`
-      : html`<span class="time">${when(r.updatedAt)}</span
-          ><button class="bin" type="button" tabindex="-1" aria-label="Delete note" @click=${(e) => this.#discard(e, r.id)}>
-            ${icon("trash-simple")}
-          </button>`;
+    const trailing = html`<span class="time">${when(r.updatedAt)}</span
+      ><button class="bin" type="button" tabindex="-1" aria-label="Delete note" @click=${(e) => this.#discard(e, r.id)}>
+        ${icon("trash-simple")}
+      </button>`;
 
     // A note with no second line keeps the subtitle line (an em-space placeholder),
     // so every note row is the same height.

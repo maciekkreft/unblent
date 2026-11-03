@@ -116,7 +116,7 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
 // renames or discards it.
 const JRN = "00000000000000000000000JRN";
 
-test("the journal sits first and cannot be renamed, cut or deleted", async () => {
+test("the journal sits first and cannot be renamed or deleted", async () => {
   const { actor, renamed } = start();
   const discarded = [];
   actor.on("book.discarded", (e) => discarded.push(e));
@@ -126,10 +126,10 @@ test("the journal sits first and cannot be renamed, cut or deleted", async () =>
   assert.deepEqual(actor.getSnapshot().context.books.map((b) => b.id), [JRN, ID]);
   actor.send({ type: "_rename", id: JRN, title: "Diary", author: "Me" });
   actor.send({ type: "_discard", id: JRN });
-  actor.send({ type: "_cut", id: JRN });
+  actor.send({ type: "_dd", id: JRN });
   assert.deepEqual(renamed, []);
   assert.deepEqual(discarded, []);
-  assert.equal(actor.getSnapshot().context.cut, null);
+  assert.equal(actor.getSnapshot().context.deleted, null);
 });
 
 // --- Signed out (14) -------------------------------------------------------------------
@@ -144,11 +144,13 @@ const shelf = async (session, tryPage = false) => {
     Promise.resolve(target === "session" ? (session ?? { error: "no-answerer" }) : name === "list" ? { books } : name === "open" ? { id: ID } : {});
   const actor = createActor(machine, { input: { ask, tryPage } });
   const discarded = [];
+  const restored = [];
   actor.on("book.discarded", (e) => discarded.push(e));
+  actor.on("book.restored", (e) => restored.push(e));
   actor.start();
   await flush();
   await flush();
-  return { actor, discarded, ctx: () => actor.getSnapshot().context };
+  return { actor, discarded, restored, ctx: () => actor.getSnapshot().context };
 };
 
 test("signed out the shelf asks to sign in; signed in, or with no session to ask, it shows", async () => {
@@ -159,21 +161,20 @@ test("signed out the shelf asks to sign in; signed in, or with no session to ask
   assert.equal(showing((await shelf(SIGNED_OUT, true)).ctx()), "show", "a try page shows its visitor the shelf");
 });
 
-test("signing out hides the tiles without dropping them, and puts back a cut tile", async () => {
-  const { actor, ctx, discarded } = await shelf(SIGNED_IN);
-  actor.send({ type: "_cut", id: ID });
+test("signing out hides the tiles without dropping them, and forgets the book dd deleted", async () => {
+  const { actor, ctx, restored } = await shelf(SIGNED_IN);
+  actor.send({ type: "_dd", id: ID });
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(showing(ctx()), "sign-in");
   assert.deepEqual(ctx().books.map((b) => b.id), [JRN, ID], "the tiles are kept");
   assert.equal(ctx().selected, ID, "the open book stays highlighted");
-  assert.equal(ctx().cut, null, "the cut is put back");
-  actor.send({ type: "_left" });
-  assert.deepEqual(discarded, []);
+  assert.equal(ctx().deleted, null, "p can no longer bring it back");
   actor.send({ type: "session.changed", ...SIGNED_IN });
   await flush();
   await flush();
+  actor.send({ type: "_paste" });
+  assert.deepEqual(restored, []);
   assert.equal(showing(ctx()), "show");
-  assert.deepEqual(ctx().books.map((b) => b.id), [JRN, ID]);
 });
 
 // --- Deleting and cutting (12, Undo; Vim keys) -----------------------------------------
@@ -184,40 +185,33 @@ test("the trash deletes a book at once", async () => {
   assert.deepEqual(discarded, [{ type: "book.discarded", id: ID }]);
 });
 
-test("dd cuts a tile: u puts it back, Escape or the keyboard leaving deletes it at once", async () => {
-  const { actor, ctx, discarded } = await shelf(SIGNED_IN);
-  actor.send({ type: "_cut", id: ID });
-  assert.equal(ctx().cut, ID);
-  assert.deepEqual(discarded, [], "a cut is not a delete");
-  actor.send({ type: "_uncut" });
-  assert.equal(ctx().cut, null);
-  actor.send({ type: "_escape" });
-  assert.deepEqual(discarded, [], "Escape with nothing cut deletes nothing");
-  actor.send({ type: "_cut", id: ID });
-  actor.send({ type: "_escape" });
+test("dd deletes a tile at once and remembers it; p brings it back once", async () => {
+  const { actor, ctx, discarded, restored } = await shelf(SIGNED_IN);
+  actor.send({ type: "_paste" });
+  assert.deepEqual(restored, [], "p with nothing deleted does nothing");
+  actor.send({ type: "_dd", id: ID });
   assert.deepEqual(discarded, [{ type: "book.discarded", id: ID }]);
-  assert.equal(ctx().cut, null);
+  assert.equal(ctx().deleted, ID);
   actor.send({ type: "book.deleted", id: ID });
-  actor.send({ ...changed(ID, "Dune"), addedAt: 10 });
-  actor.send({ type: "_cut", id: ID });
-  actor.send({ type: "_left" });
-  assert.equal(discarded.length, 2, "the keyboard leaving deletes the cut tile");
+  actor.send({ type: "_paste" });
+  assert.deepEqual(restored, [{ type: "book.restored", id: ID }]);
+  assert.equal(ctx().deleted, null);
+  actor.send({ type: "_paste" });
+  assert.equal(restored.length, 1, "a second p does nothing");
 });
 
-test("opening a book, or cutting another, deletes the tile already cut", async () => {
-  const { actor, ctx, discarded } = await shelf(SIGNED_IN);
+test("a second dd replaces the remembered book; the book coming back another way forgets it", async () => {
+  const { actor, ctx, discarded, restored } = await shelf(SIGNED_IN);
   const OTHER = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
   actor.send({ ...changed(OTHER, "Emma"), addedAt: 0 });
-  const selected = [];
-  actor.on("book.selected", (e) => selected.push(e.id));
-  actor.send({ type: "_cut", id: ID });
-  actor.send({ type: "_select", id: ID });
-  assert.deepEqual(selected, [], "the cut tile itself does not open");
-  actor.send({ type: "_select", id: OTHER });
-  assert.deepEqual(discarded.map((e) => e.id), [ID]);
-  assert.deepEqual(selected, [OTHER]);
-  actor.send({ type: "_cut", id: OTHER });
-  actor.send({ type: "_cut", id: ID });
+  actor.send({ type: "_dd", id: ID });
+  actor.send({ type: "_dd", id: OTHER });
   assert.deepEqual(discarded.map((e) => e.id), [ID, OTHER]);
-  assert.equal(ctx().cut, ID);
+  assert.equal(ctx().deleted, OTHER);
+  actor.send({ type: "book.deleted", id: ID });
+  actor.send({ type: "book.deleted", id: OTHER });
+  actor.send({ ...changed(OTHER, "Emma"), addedAt: 0 });
+  assert.equal(ctx().deleted, null, "an Undo brought it back");
+  actor.send({ type: "_paste" });
+  assert.deepEqual(restored, []);
 });

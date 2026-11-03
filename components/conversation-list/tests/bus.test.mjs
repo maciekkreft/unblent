@@ -48,10 +48,10 @@ test("a first visit lists the account's chats once the session is known", async 
   }
 });
 
-// A cut row placed with p reaches `conversations` as conversation.moved, which saves the
-// place alone; a cut deleted when the keyboard leaves the list goes at once, and the corner
-// notice's Undo, through `undo`, brings it back with a restore write (12, Vim keys; 12, Undo).
-test("a move goes through conversations, and a cut deleted on leaving comes back with the notice's Undo", async () => {
+// Vim's dd deletes a row at once with the notice, p brings it back below another row as one
+// step `conversations` records with a restore write, Undo deletes it again, and a second
+// Undo returns it to its first row; Redo goes forward the same way (12, Vim keys; 12, Undo).
+test("dd then p brings a chat back there through conversations, and Undo twice returns it to its row", async () => {
   const saved = [];
   const deleted = [];
   const restored = [];
@@ -92,21 +92,24 @@ test("a move goes through conversations, and a cut deleted on leaving comes back
   const order = () => list.getSnapshot().context.chats.map((r) => r.title).join();
   try {
     await until(() => order() === "chat 3,chat 2,chat 1");
-    list.send({ type: "_cut", id: U("C3") });
-    list.send({ type: "_paste", after: U("C2"), before: U("C1") });
-    await until(() => order() === "chat 2,chat 3,chat 1");
-    await until(() => saved.length === 1);
-    assert.deepEqual(saved[0], { id: U("C3"), body: { position: saved[0].body.position } });
-    list.send({ type: "_cut", id: U("C1") });
-    list.send({ type: "_left" });
-    await until(() => deleted.length === 1);
-    assert.deepEqual(deleted, [U("C1")]);
-    await until(() => order() === "chat 2,chat 3");
+    list.send({ type: "_dd", id: U("C3") });
+    await until(() => order() === "chat 2,chat 1");
+    assert.deepEqual(deleted, [U("C3")]);
     const notices = () => [...actors["notice-stack"].getSnapshot().context.notices.values()];
     await until(() => notices().some((n) => n.key === "step"));
-    actors["notice-stack"].send({ type: "_act", key: "step", index: 0 });
-    await until(() => order() === "chat 2,chat 3,chat 1");
-    assert.deepEqual(restored, [U("C1")]);
+    list.send({ type: "_paste", after: U("C1"), before: null });
+    await until(() => order() === "chat 2,chat 1,chat 3");
+    assert.deepEqual(restored, [U("C3")]);
+    await until(() => saved.some((s) => s.id === U("C3") && s.body.position));
+    const undo = actors["undo"];
+    undo.send({ type: "step.requested", direction: "undo" });
+    await until(() => order() === "chat 2,chat 1");
+    undo.send({ type: "step.requested", direction: "undo" });
+    await until(() => order() === "chat 3,chat 2,chat 1");
+    undo.send({ type: "step.requested", direction: "redo" });
+    await until(() => order() === "chat 2,chat 1");
+    undo.send({ type: "step.requested", direction: "redo" });
+    await until(() => order() === "chat 2,chat 1,chat 3");
   } finally {
     unwire();
   }

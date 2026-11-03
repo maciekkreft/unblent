@@ -45,8 +45,8 @@ function fakeApi() {
   };
 }
 
-async function start(store, api) {
-  const wired = await wire(["books", "book-shelf"], {
+async function start(store, api, extra = [], extraInputs = {}) {
+  const wired = await wire(["books", "book-shelf", ...extra], {
     books: {
       store,
       api,
@@ -55,6 +55,7 @@ async function start(store, api) {
       ask: async (target) => (target === "session" ? { userId: "u1", registrationOpen: false } : { error: "no-answerer" }),
     },
     "book-shelf": {},
+    ...extraInputs,
   });
   const tiles = () => wired.actors["book-shelf"].getSnapshot().context.books.filter((b) => !b.written).map((b) => b.id);
   const emitted = (type) => wired.records.filter((r) => r.kind === "event" && r.name === type);
@@ -91,19 +92,35 @@ test("delete happens at once as one step and stays gone", async () => {
   }
 });
 
-// A tile cut with dd is deleted by `books` once the keyboard leaves the shelf (12, Vim keys).
-test("a cut tile is deleted when the keyboard leaves the shelf", async () => {
+// Vim's dd deletes a tile at once, p brings the book back as one step `books` records,
+// Undo deletes it again and a second Undo brings it back; Redo goes forward the same way
+// (12, Vim keys; 12, Undo).
+test("dd then p brings a book back through books, and Undo and Redo walk both steps", async () => {
   const store = booksStore([BOOK]);
-  const h = await start(store, fakeApi());
+  const rows = new Map();
+  const undoStore = { read: async (account) => rows.get(account), write: async (account, lists) => void rows.set(account, structuredClone(lists)) };
+  const h = await start(store, fakeApi(), ["undo"], { undo: { store: undoStore, tell: () => {} } });
   try {
     await until(() => h.tiles().includes(ID));
     const shelf = h.actors["book-shelf"];
-    shelf.send({ type: "_cut", id: ID });
-    assert.equal(h.emitted("book.discarded").length, 0, "a cut is not a delete");
-    shelf.send({ type: "_left" });
-    await until(() => store.books.get(ID).deleted === true);
+    shelf.send({ type: "_dd", id: ID });
     await until(() => !h.tiles().includes(ID));
-    assert.equal(shelf.getSnapshot().context.cut, null);
+    assert.equal(store.books.get(ID).deleted, true);
+    shelf.send({ type: "_paste" });
+    await until(() => h.tiles().includes(ID));
+    assert.equal(h.emitted("book.restored").length, 1);
+    assert.equal(h.emitted("step.recorded").at(-1).payload.label, "restore book Sample Book");
+    const undo = h.actors["undo"];
+    const request = (direction) => undo.send({ type: "step.requested", direction });
+    request("undo");
+    await until(() => !h.tiles().includes(ID));
+    request("undo");
+    await until(() => h.tiles().includes(ID));
+    request("redo");
+    await until(() => !h.tiles().includes(ID));
+    request("redo");
+    await until(() => h.tiles().includes(ID));
+    assert.equal(store.books.get(ID).deleted, false);
   } finally {
     h.unwire();
   }

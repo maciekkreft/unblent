@@ -196,6 +196,42 @@ test("a move is one step whose Undo puts the chat back where it was", async () =
   assert.deepEqual(await titles(actor), ["Second", "About books"]);
 });
 
+test("a deleted chat moved into the list (Vim's p) comes back there as one step; Undo deletes it again where it stood", async () => {
+  const { actor, steps, settled, calls } = await start();
+  actor.send({ type: "conversation.discarded", id: A });
+  await flush();
+  actor.send({ type: "conversation.moved", id: A, after: B, before: null });
+  await flush();
+  assert.deepEqual(await titles(actor), ["Second", "About books"], "back below Second");
+  assert.equal(steps.length, 2);
+  assert.equal(steps[1].label, "restore chat About books");
+  assert.deepEqual(steps[1].undo, { kind: "chat", id: A, deleted: true, position: "a", prior: steps[0].id });
+  assert.deepEqual(calls.restored, [A]);
+  const pasted = steps[1].redo.position;
+  assert.ok(pasted > "b", "the place is after Second's");
+  assert.deepEqual(calls.saved.at(-1), { id: A, body: { position: pasted } }, "the place is saved once the chat is back");
+
+  // Undo of the paste deletes it again at its first place, then Undo of the delete brings it back there.
+  actor.send(undo(steps[1]));
+  await flush();
+  assert.equal(settled.at(-1).outcome, "applied");
+  assert.deepEqual(await titles(actor), ["Second"]);
+  assert.deepEqual(calls.saved.at(-1), { id: A, body: { position: "a" } }, "its first place is saved before the delete");
+  assert.deepEqual(calls.deleted, [A, A]);
+  actor.send(undo(steps[0]));
+  await flush();
+  assert.equal(settled.at(-1).outcome, "applied");
+  assert.deepEqual(await titles(actor), ["About books", "Second"], "back in its first row");
+
+  // Redo both: deleted, then restored at the pasted place.
+  actor.send(redo(steps[0]));
+  await flush();
+  actor.send(redo(steps[1]));
+  await flush();
+  assert.equal(settled.at(-1).outcome, "applied");
+  assert.deepEqual(await titles(actor), ["Second", "About books"]);
+});
+
 test("a move another device made since refuses the Undo", async () => {
   const moved = { conversations: [heading(chatA), { ...heading(chatB), position: "0V" }], tools: { tools: {}, approval: "auto" } };
   const { actor, steps, settled } = await start({ lists: [{ conversations: [heading(chatA), heading(chatB)], tools: { tools: {}, approval: "auto" } }] });

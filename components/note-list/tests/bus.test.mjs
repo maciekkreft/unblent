@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shown } from "../machine.js";
+import { shown, placement } from "../machine.js";
 
 // The kit (10): note-list with its partners, real machines on the real bus — `notes`
 // (whose notes it lists and whose tombstones remove a row), `note-editor` (which says
@@ -200,10 +200,10 @@ test("a delete happens at once and stays gone", async () => {
   }
 });
 
-// A cut row placed with p reaches `notes` as note.moved, and the list's order is the
-// one notes keeps; a cut deleted when the keyboard leaves the list goes at once, and the
-// corner notice's Undo, through `undo`, brings it back (12, Vim keys; 12, Undo).
-test("a move goes through notes, and a cut deleted on leaving comes back with the notice's Undo", async () => {
+// Vim's dd deletes a row at once with the notice, p brings it back below another row as
+// one step `notes` records, Undo deletes it again, and a second Undo returns it to its
+// first row; Redo goes forward the same way (12, Vim keys; 12, Undo).
+test("dd then p brings a note back there through notes, and Undo twice returns it to its row", async () => {
   const one = note(NOTE_ONE, "One");
   const two = { ...note(NOTE_TWO, "Two"), updatedAt: 20 };
   const none = { ...note(NOTE_NONE, "Three"), updatedAt: 5 };
@@ -216,17 +216,23 @@ test("a move goes through notes, and a cut deleted on leaving comes back with th
   });
   try {
     const order = () => h.list().notes.map((n) => n.title);
+    const list = h.actors["note-list"];
     await until(() => order().join() === "Two,One,Three");
-    h.actors["note-list"].send({ type: "_cut", id: NOTE_TWO });
-    h.actors["note-list"].send({ type: "_paste", after: NOTE_ONE, before: NOTE_NONE });
-    await until(() => order().join() === "One,Two,Three");
-    h.actors["note-list"].send({ type: "_cut", id: NOTE_NONE });
-    h.actors["note-list"].send({ type: "_left" });
-    await until(() => order().join() === "One,Two");
+    list.send({ type: "_dd", id: NOTE_TWO });
+    await until(() => order().join() === "One,Three");
     const notices = () => [...h.actors["notice-stack"].getSnapshot().context.notices.values()];
     await until(() => notices().some((n) => n.key === "step"));
-    h.actors["notice-stack"].send({ type: "_act", key: "step", index: 0 });
-    await until(() => order().join() === "One,Two,Three");
+    list.send({ type: "_paste", ...placement(list.getSnapshot().context, [NOTE_ONE, NOTE_NONE], NOTE_NONE, true) });
+    await until(() => order().join() === "One,Three,Two");
+    const undo = h.actors["undo"];
+    undo.send({ type: "step.requested", direction: "undo" });
+    await until(() => order().join() === "One,Three");
+    undo.send({ type: "step.requested", direction: "undo" });
+    await until(() => order().join() === "Two,One,Three");
+    undo.send({ type: "step.requested", direction: "redo" });
+    await until(() => order().join() === "One,Three");
+    undo.send({ type: "step.requested", direction: "redo" });
+    await until(() => order().join() === "One,Three,Two");
   } finally {
     h.unwire();
   }

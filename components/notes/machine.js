@@ -399,12 +399,16 @@ function tombstone(context, enqueue, current, step) {
 // in it rides the outbox like an edit, alone or on the row of an edit not yet sent.
 function applyMove(context, event, enqueue) {
   const current = context.notes.get(event.id);
-  if (!visible(current)) return;
+  if (!current) return;
   const neighbour = (id) => {
     const record = id ? context.notes.get(id) : null;
     return visible(record) && id !== event.id ? positionOf(record) : null;
   };
   const position = between(neighbour(event.after), neighbour(event.before));
+  if (current.deleted) {
+    if (!highlightLink(current)) applyRestore(context, enqueue, current, position);
+    return;
+  }
   if (position === current.position) return;
   // Every move is one step (12, Undo); its undo puts back the place the note showed in.
   const step = context.mint();
@@ -418,6 +422,27 @@ function applyMove(context, event, enqueue) {
     label: `move ${nameOf(current)}`,
     undo: { kind: "place", id: current.id, position: positionOf(current), ...priorOf(current.placeStep) },
     redo: { kind: "place", id: current.id, position, ...priorOf(current.placeStep) },
+  });
+}
+
+// A deleted note moved into the list (Vim's p or P, 12) comes back at that place with the
+// restore write an Undo of its delete uses, as one step after the delete's: its undo
+// deletes it again where it stood before it was deleted, so the delete's own Undo puts it
+// back in its first row; its redo restores it at the place it was moved to. Its place
+// step is left as it was, so an older move's Undo still finds its stamp.
+function applyRestore(context, enqueue, current, position) {
+  const step = context.mint();
+  const before = positionOf(current);
+  rewrite(context, enqueue, { ...current, position }, textOf(current), step);
+  context.stretch = null;
+  enqueue.assign({ stretch: null });
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "notes",
+    label: `restore ${nameOf(current)}`,
+    undo: { kind: "note", id: current.id, deleted: true, position: before, ...priorOf(current.step) },
+    redo: { kind: "note", id: current.id, ...textOf(current), deleted: false, position, ...priorOf(current.step) },
   });
 }
 
@@ -596,13 +621,15 @@ function applyStep(context, event, enqueue) {
   const leaves = (entry) => (undoing ? priorStamp(entry, event.id) : event.id);
   if (p.kind === "note" && current) {
     if (current.step !== expected(p)) return settle("refused", "changed");
+    // A restore by a move (applyRestore) names the place the note goes to as well.
+    const at = isPosition(p.position) ? { ...current, position: p.position } : current;
     if (p.deleted === true) {
-      if (!current.deleted) tombstone(context, enqueue, current, leaves(p));
+      if (!current.deleted) tombstone(context, enqueue, at, leaves(p));
       else stamp(context, enqueue, current, { step: leaves(p) });
       return settle("applied");
     }
     if (typeof p.title !== "string" || typeof p.body !== "string") return settle("refused", "changed");
-    rewrite(context, enqueue, current, { title: p.title, body: p.body, about: Array.isArray(p.about) ? p.about : current.about ?? [] }, leaves(p));
+    rewrite(context, enqueue, at, { title: p.title, body: p.body, about: Array.isArray(p.about) ? p.about : current.about ?? [] }, leaves(p));
     return settle("applied");
   }
   if (p.kind === "notes" && Array.isArray(p.notes)) {
@@ -800,7 +827,7 @@ export const machine = setup({
       "narrowed by a book and a chapter. A deleted note is kept as a tombstone with its title " +
       "and body, so it can still be shown or restored. Each note has a place in the list, the " +
       "same on every device: a new note goes first, an edit never moves a note, and a move " +
-      "from the list puts it between its new neighbours. A place is last write wins: it " +
+      "from the list puts it between its new neighbours; a move of a deleted note that is not a highlight (Vim's p in the list) restores it there, one step labelled restore, whose Undo deletes it again where it stood before it was deleted. A place is last write wins: it " +
       "changes no version, so a move never conflicts with an edit. A note from before places " +
       "keeps the order it had, newest first, until it is edited or moved. Every change is a " +
       "step Undo and Redo reverse (section 12): one stretch of typing in one note, from " +

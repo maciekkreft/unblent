@@ -83,31 +83,23 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("with Vim keys on, dd cuts a row and p places it; Escape on a cut deletes it, keeping the keyboard, and u brings it back", async () => {
+    test("with Vim keys on, dd deletes a row at once and p brings it back below the cursor; u twice returns it to its row", async () => {
       const { context, page, problems } = await open(true);
       try {
-        const rowClass = (title) => inList(page, (root, t) => [...root.querySelectorAll(".row")].find((r) => r.querySelector(".name").textContent.trim() === t)?.className, title);
         await focusList(page);
         assert.equal(await focusedTitle(page), "Second");
         await page.keyboard.press("d");
         await page.keyboard.press("d");
-        await until(async () => (await rowClass("Second")).includes("cut"));
-        await page.keyboard.press("j");
+        await until(async () => (await rowTitles(page)).join() === "New note,First");
         await until(async () => (await focusedTitle(page)) === "First");
         await page.keyboard.press("p");
         await until(async () => (await rowTitles(page)).join() === "New note,First,Second");
         await until(async () => (await focusedTitle(page)) === "Second");
-        assert.ok(!(await rowClass("Second")).includes("cut"));
-        // Cut again, then Escape: the row is deleted at once and the list keeps the
-        // keyboard; u is then the global Undo, which brings the row back (12).
-        await page.keyboard.press("d");
-        await page.keyboard.press("d");
-        await until(async () => (await rowClass("Second")).includes("cut"));
-        await page.keyboard.press("Escape");
-        await until(async () => (await rowTitles(page)).join() === "New note,First");
-        await until(async () => (await focusedTitle(page)) === "First");
+        // u is the global Undo (12): the first takes back the p, the second the dd.
         await page.keyboard.press("u");
-        await until(async () => (await rowTitles(page)).join() === "New note,First,Second");
+        await until(async () => (await rowTitles(page)).join() === "New note,First");
+        await page.keyboard.press("u");
+        await until(async () => (await rowTitles(page)).join() === "New note,Second,First");
         // The editor showed Second, so its delete left the empty page, and nothing was typed there.
         assert.equal(await editorBody(page), "", "no letter was typed into the editor");
         assert.deepEqual(problems, [], problems.join("; "));
