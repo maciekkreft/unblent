@@ -573,7 +573,11 @@ export const machine = setup({
       "#in-my-control\". Each name is matched to one of the account's evaluators by the " +
       "evaluator's name made short the way a chapter link names a chapter: lowercase a to z " +
       "and digits, accented letters written plainly, every other run of characters one " +
-      "hyphen. A name that matches no evaluator checks nothing. The hashtag line itself is " +
+      "hyphen. In the journal and in a note, typing # opens a list of the account's evaluators " +
+      "by these short names, each with its description, and picking one writes its name; " +
+      "Enter at the end of a hashtag line starts a bullet below it, so the lines written " +
+      "next are in its list and get checked. " +
+      "A name that matches no evaluator checks nothing. The hashtag line itself is " +
       "not checked. It checks the lines after it in the same paragraph or list, up to the next " +
       "gap between paragraphs (a blank line); a line without a letter or digit is skipped. A " +
       "line is checked once the user has finished it, as the editor's save says (the cursor " +

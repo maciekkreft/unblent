@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
 import { machine, keyOf, askedOf, shortName, hashtagScopes, CHECK_PAUSE_MS } from "../machine.js";
+import { shortName as kitShortName } from "editor";
 
 // The actor is where decisions live (3.2): driven with a fake store, faked asks (session,
 // evaluators, llm: read, and llm: decide answered by hand), a fake sync api, and a
@@ -144,6 +145,14 @@ test("the hashtag parse is the kit's: a gap ends a scope and a later hashtag lin
     { tags: ["a"], lines: [] },
   ]);
   assert.equal(shortName("Łódź Trips!"), "lodz-trips");
+});
+
+// The "#" picker offers the kit's short names, so a picked tag must be the name this fact
+// matches an evaluator by.
+test("a short name is the editor kit's, so a tag picked with # names its evaluator", () => {
+  const names = ["In my control", "Łódź Trips!", "Straße & Œuvre", "Café — naïve", "  --Kind?--  ", "#1 goal: 2026", "Øre/Đak", "Ægis…", "", "!!!"];
+  for (const name of names) assert.equal(shortName(name), kitShortName(name), name);
+  assert.deepEqual(names.slice(0, 3).map(shortName), ["in-my-control", "lodz-trips", "strasse-oeuvre"]);
 });
 
 test("only finished lines in a hashtag scope are asked, one at a time; the hashtag line is not", async () => {

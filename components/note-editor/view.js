@@ -6,7 +6,7 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, refreshHashtagPicker, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
 import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, showing, startsTyping, linkMissing, notSynced, knownTags, lineMarksOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
@@ -265,6 +265,10 @@ const drawMarks = (into, marks) => {
       into,
     );
 };
+
+// The "#" picker's rows: each evaluator by the short name line-checks matches a tag to.
+const pickerTags = (evaluators) =>
+  (evaluators ?? []).map((e) => ({ tag: shortName(e.name), description: e.description ?? "" }));
 
 // The lines of `doc` a hashtag line names (the editor kit's hashtagScopes), of those given.
 const named = (doc, lines) => {
@@ -676,6 +680,8 @@ class NoteEditor extends LitElement {
   // The hashtags that name an evaluator, and the report they and the marks were drawn from.
   #known = new Set();
   #checksFrom = undefined;
+  // The evaluator list an open "#" picker was last asked to show.
+  #evaluatorsFrom = undefined;
 
   #extensions() {
     return [
@@ -697,6 +703,7 @@ class NoteEditor extends LitElement {
       webLinks(),
       // Hashtags and Jev's answers at the lines they name (the editor kit, 10).
       hashtags({ known: (name) => this.#known.has(name) }),
+      hashtagPicker({ tags: () => pickerTags(this.#actor.snapshot?.context.evaluators) }),
       lineMarks({ render: drawMarks }),
       this.#history.of(history()),
       EditorView.updateListener.of(this.#onUpdate),
@@ -826,6 +833,10 @@ class NoteEditor extends LitElement {
       this.#known = knownTags(checks);
       refreshHashtags(this.#view);
       this.#view.dispatch({ effects: setLineMarks.of(lineMarksOf(checks)) });
+    }
+    if (snapshot.context.evaluators !== this.#evaluatorsFrom) {
+      this.#evaluatorsFrom = snapshot.context.evaluators;
+      refreshHashtagPicker(this.#view);
     }
     if (notes !== this.#missingFrom?.notes || removed !== this.#missingFrom?.removed) {
       this.#missingFrom = { notes, removed };

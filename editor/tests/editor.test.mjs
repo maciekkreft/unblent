@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EditorState, EditorSelection, Transaction } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, showTooltip } from "@codemirror/view";
 import { undo, redo, undoDepth } from "@codemirror/commands";
 import { Vim } from "@replit/codemirror-vim";
 import {
@@ -36,6 +36,10 @@ import {
   webLinkDecorations,
   hashtagsIn,
   hashtagScopes,
+  tagEnterAt,
+  tagsMatching,
+  shortName,
+  hashtagPicker,
   finishedLines,
 } from "../editor.js";
 
@@ -851,4 +855,110 @@ test("finishedLines: the line the cursor left, the lines an edit added, and ever
     finishedLines(updateOf("Start ", 6, { changes: { from: 6, insert: "a\nb\nc" }, selection: { anchor: 11 }, userEvent: "input.paste" })),
     ["Start a", "b", "c"],
   );
+});
+
+test("Enter at the end of a hashtag line starts a bullet below it; anywhere else it is a paragraph", () => {
+  assert.deepEqual(tagEnterAt("#in-my-control", 14), { from: 14, to: 14, insert: "\n- ", cursor: 17 });
+  assert.equal(run("Tonight #a\nNext", tagEnterAt("Tonight #a\nNext", 10)), "Tonight #a\n- \nNext");
+  // Mid-line, with a selection, on a line without a hashtag, or on an item: nothing.
+  assert.equal(tagEnterAt("#in-my-control", 3), null);
+  assert.equal(tagEnterAt("#in-my-control", 10, 14), null);
+  assert.equal(tagEnterAt("No tag here", 11), null);
+  assert.equal(tagEnterAt("# Title", 7), null);
+  assert.equal(tagEnterAt("- one #tag", 10), null);
+
+  const t = target("Tonight #in-my-control", 22, [...baseExtensions(), paragraphs()]);
+  assert.ok(press(t, "Enter"));
+  assert.equal(t.state.doc.toString(), "Tonight #in-my-control\n- ");
+  assert.equal(t.state.selection.main.head, 25);
+  assert.ok(undo(t));
+  assert.equal(t.state.doc.toString(), "Tonight #in-my-control");
+  // Mid-line, or without a hashtag, Enter starts a paragraph as before.
+  const mid = target("#in-my-control", 3, [paragraphs()]);
+  assert.ok(press(mid, "Enter"));
+  assert.equal(mid.state.doc.toString(), "#in\n\n-my-control");
+  const plain = target("Tonight", 7, [paragraphs()]);
+  assert.ok(press(plain, "Enter"));
+  assert.equal(plain.state.doc.toString(), "Tonight\n\n");
+  // A hashtag item gives the next item, as any item does.
+  const item = target("- x #tag", 8, [paragraphs()]);
+  assert.ok(press(item, "Enter"));
+  assert.equal(item.state.doc.toString(), "- x #tag\n- ");
+  // Lists off, the paragraph.
+  const off = target("#tag", 4, [paragraphs({ lists: false })]);
+  assert.ok(press(off, "Enter"));
+  assert.equal(off.state.doc.toString(), "#tag\n\n");
+});
+
+test("o on a hashtag line leaves what Enter at its end leaves; O, and lists off, a paragraph", () => {
+  const t = target("Tonight #in-my-control\nNext", 3, [...baseExtensions(), paragraphs()]);
+  openLine(t, true);
+  assert.equal(t.state.doc.toString(), "Tonight #in-my-control\n- \nNext");
+  assert.equal(t.state.selection.main.head, 25);
+  const up = target("#tag", 2, [paragraphs()]);
+  openLine(up, false);
+  assert.equal(up.state.doc.toString(), "\n\n#tag");
+  const off = target("#tag", 2, [paragraphs({ lists: false })]);
+  openLine(off, true);
+  assert.equal(off.state.doc.toString(), "#tag\n\n");
+});
+
+test("tagsMatching keeps the tags starting with what is typed, in order, each once", () => {
+  const tags = [
+    { tag: "in-my-control", description: "A" },
+    { tag: "thinking-traps", description: "" },
+    { tag: "in-the-moment", description: "B" },
+    { tag: "in-my-control", description: "again" },
+    { tag: "", description: "no name" },
+  ];
+  assert.deepEqual(tagsMatching(tags, "in").map((t) => t.description), ["A", "B"]);
+  assert.deepEqual(tagsMatching(tags, "IN-M").map((t) => t.tag), ["in-my-control"]);
+  assert.deepEqual(tagsMatching(tags, "").map((t) => t.tag), ["in-my-control", "thinking-traps", "in-the-moment"]);
+  assert.deepEqual(tagsMatching(tags, "x"), []);
+  assert.deepEqual(tagsMatching(undefined, "a"), []);
+});
+
+test("shortName is a title in lowercase letters and digits, accents plain, the rest hyphens", () => {
+  assert.equal(shortName("In my control?"), "in-my-control");
+  assert.equal(shortName("  Gedanken über Łódź  "), "gedanken-uber-lodz");
+  assert.equal(shortName("Straße & Œuvre"), "strasse-oeuvre");
+  assert.equal(shortName(null), "");
+});
+
+// The picker as a view would drive it: typing (input.type) at the cursor, and the list it
+// shows read from the tooltip it asks for.
+const TAGS = [
+  { tag: "in-my-control", description: "Whether each line is in your control" },
+  { tag: "thinking-traps", description: "" },
+  { tag: "in-the-moment", description: "" },
+];
+const pickerOpen = (t) => t.state.facet(showTooltip).filter(Boolean).length > 0;
+
+test("the picker opens on typing # at a word's start and stays open while something matches", () => {
+  const exts = () => [...baseExtensions(), paragraphs(), hashtagPicker({ tags: () => TAGS })];
+  const t = target("Tonight ", 8, exts());
+  assert.equal(pickerOpen(t), false);
+  type(t, "#");
+  assert.ok(pickerOpen(t));
+  type(t, "in");
+  assert.ok(pickerOpen(t));
+  type(t, "x");
+  assert.equal(pickerOpen(t), false, "nothing matches #inx");
+  // Inside a word, or a cursor moved onto a tag, opens nothing.
+  const word = target("and", 3, exts());
+  type(word, "#");
+  assert.equal(pickerOpen(word), false);
+  const moved = target("#in more", 8, exts());
+  move(moved, 3);
+  assert.equal(pickerOpen(moved), false);
+  // An editor that takes no typing never opens it.
+  const read = target("", 0, [...exts(), EditorState.readOnly.of(true)]);
+  type(read, "#");
+  assert.equal(pickerOpen(read), false);
+  // Moving away closes it.
+  const away = target("One ", 4, exts());
+  type(away, "#");
+  assert.ok(pickerOpen(away));
+  move(away, 1);
+  assert.equal(pickerOpen(away), false);
 });

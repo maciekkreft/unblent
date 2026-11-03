@@ -204,7 +204,8 @@ test("on start it reopens the newest note notes lists", async () => {
   const asked = [];
   const { actor } = editor({
     ask: (target, name, payload) => {
-      if (target !== "settings") asked.push([target, name, payload]);
+      // The picker's evaluators are asked on their own (the last tests).
+      if (target !== "settings" && target !== "evaluators") asked.push([target, name, payload]);
       if (name === "list") return Promise.resolve({ notes: [{ id: ID2, title: "N", updatedAt: 20 }, { id: ID, title: "O", updatedAt: 10 }] });
       return Promise.resolve({ note: { ...NOTE, id: ID2 } });
     },
@@ -250,7 +251,7 @@ test("load asks notes: read and lands per the reply", async () => {
   const asked = [];
   const withReply = async (reply) => {
     const { actor } = await started({
-      ask: (...args) => ((args[0] === "settings" || asked.push(args)), Promise.resolve(args[1] === "list" ? { notes: [] } : reply)),
+      ask: (...args) => ((args[0] === "settings" || args[0] === "evaluators" || asked.push(args)), Promise.resolve(args[1] === "list" ? { notes: [] } : reply)),
     });
     actor.send({ type: "load", id: ID });
     return actor;
@@ -742,7 +743,7 @@ test("a subject.changed before the notes arrive, keepOpen off, follows the new s
   const gate = new Promise((r) => (resolve = r));
   const ask = (target, name, payload) => {
     if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
-    if (name === "list") {
+    if (target === "notes" && name === "list") {
       listCalls.push(payload);
       return listCalls.length === 1 ? gate : Promise.resolve({ notes: [{ id: ID2, title: "about B", updatedAt: 20, about: [LINK_B] }] });
     }
@@ -1385,4 +1386,54 @@ test("every payload matches its schema", () => {
     const result = new Validator(schema, "2020-12").validate(rest);
     assert.ok(result.valid, `${JSON.stringify(value).slice(0, 160)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
   }
+});
+
+// --- The "#" picker's evaluators -------------------------------------------------------
+
+const EV1 = "01ARZ3NDEKTSV4RRFFQ69G5FE1";
+const EV2 = "01ARZ3NDEKTSV4RRFFQ69G5FE2";
+const BOOK_ID = "01ARZ3NDEKTSV4RRFFQ69G5FB9";
+const evaluator = (id, name, description) => ({ id, book: BOOK_ID, name, ...(description == null ? {} : { description }), on: true, questions: [], version: 1, pending: false, removing: false });
+
+// An editor whose evaluators answer `reply`, recording the payloads it is asked with.
+async function picking(reply) {
+  const payloads = [];
+  const e = await started({
+    ask: (target, name, payload) => {
+      if (target === "evaluators" && name === "list") {
+        payloads.push(payload);
+        return reply instanceof Error ? Promise.reject(reply) : Promise.resolve(reply);
+      }
+      return Promise.resolve(name === "list" ? { notes: [] } : {});
+    },
+  });
+  await settle();
+  return { ...e, payloads, list: () => e.actor.getSnapshot().context.evaluators };
+}
+
+test("the editor asks for every evaluator of the account, and keeps each one's name and description", async () => {
+  const { payloads, list } = await picking({ evaluators: [evaluator(EV1, "In my control", "Whether it is up to me."), evaluator(EV2, "Kind")] });
+  assert.deepEqual(payloads, [{}], "no book, so none is left out");
+  assert.deepEqual(list(), [
+    { id: EV1, name: "In my control", description: "Whether it is up to me." },
+    { id: EV2, name: "Kind", description: "" },
+  ]);
+});
+
+test("evaluator.changed renames one in its place or adds a new one; evaluator.deleted removes it", async () => {
+  const { actor, list } = await picking({ evaluators: [evaluator(EV1, "In my control"), evaluator(EV2, "Kind")] });
+  actor.send({ type: "evaluator.changed", evaluator: evaluator(EV1, "Up to me", "Mine to change.") });
+  assert.deepEqual(list().map((e) => e.name), ["Up to me", "Kind"]);
+  actor.send({ type: "evaluator.deleted", id: EV2, book: BOOK_ID });
+  const EV3 = "01ARZ3NDEKTSV4RRFFQ69G5FE3";
+  actor.send({ type: "evaluator.changed", evaluator: evaluator(EV3, "Fair") });
+  assert.deepEqual(list(), [
+    { id: EV1, name: "Up to me", description: "Mine to change." },
+    { id: EV3, name: "Fair", description: "" },
+  ]);
+});
+
+test("without evaluators to ask, offline or not on the page, the picker offers nothing", async () => {
+  assert.deepEqual((await picking({ error: "no-answerer" })).list(), []);
+  assert.deepEqual((await picking(new Error("offline"))).list(), []);
 });

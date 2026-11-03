@@ -20,7 +20,9 @@ import { setup, assign, fromPromise, fromCallback, enqueueActions, emit, spawnCh
 // effect — the queries, minting an id, focusing the input, the open note's store — arrives
 // through input, so this stays a pure definition importable in Node; it imports no
 // CodeMirror (that lives in view.js, the browser-only entry). It asks session: read and
-// follows session.changed only for whether anyone is signed in.
+// follows session.changed only for whether anyone is signed in, and evaluators: list,
+// following evaluator.changed and evaluator.deleted, only for the names the "#" picker
+// offers.
 
 const THROTTLE_MS = 200;
 
@@ -388,6 +390,19 @@ function finish(context, enqueue, lines) {
   } else enqueue.assign({ finished });
 }
 
+// The account's evaluators as the "#" picker offers them, { id, name, description } each,
+// in the order evaluators lists them; a reply that is not a list (offline, no-answerer)
+// offers none. Copied in journal-entry/machine.js, because components never import each
+// other (11.2).
+export const evaluatorsOf = (reply) =>
+  Array.isArray(reply?.evaluators) ? reply.evaluators.map(pickable) : [];
+const pickable = (e) => ({ id: e.id, name: e.name, description: e.description ?? "" });
+// evaluator.changed replaces the one it names in its place, or adds a new one at the end.
+export const withEvaluator = (list, evaluator) =>
+  list.some((e) => e.id === evaluator.id)
+    ? list.map((e) => (e.id === evaluator.id ? pickable(evaluator) : e))
+    : [...list, pickable(evaluator)];
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): every note, and — only while following the stage —
@@ -414,6 +429,9 @@ export const machine = setup({
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
+    // Every evaluator of the account, for the "#" picker: no book is named, so none is
+    // left out; evaluator.changed and evaluator.deleted are held until the reply lands.
+    evaluators: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
     // line-checks' report for the note shown, from the answers it keeps (it never asks Jev
     // for a read); text.checked is held for us until the reply lands (read supersededBy).
     checks: fromCallback(({ input, sendBack }) => {
@@ -566,11 +584,17 @@ export const machine = setup({
       "it in the same paragraph or list) is checked by line-checks once the user finishes it " +
       "(moves off it, presses Enter, pastes, or leaves the editor), and its answer shows at " +
       "the line's end as the option's icon and name, several joined in one row: a pulsing dot " +
-      "while Jev is asked, and a warning whose tooltip says why when it could not be.",
+      "while Jev is asked, and a warning whose tooltip says why when it could not be." +
+      " Typing # at the start of a word opens a list of the account's evaluators by their " +
+      "short names, each with its description on a line under it, narrowed as the name is " +
+      "typed; the arrow keys (or Ctrl+N and Ctrl+P) choose, Enter, Tab, a click or a tap " +
+      "writes the name and a space, and Escape or moving away closes it. Enter at the end of " +
+      "a hashtag line starts a bullet directly below it, so the lines written next are the " +
+      "ones it checks.",
     kind: "view",
     emits: ["note.saved", "note.opened", "passage.selected", "note.staged", "note.closed"],
     attributes: ["height", "follows", "subject", "stage"],
-    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read", "line-checks: read"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read", "line-checks: read", "evaluators: list"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -653,6 +677,9 @@ export const machine = setup({
     checkedText: null,
     // The lines the user finished that no save has carried yet (note.saved's finished).
     finished: [],
+    // The account's evaluators the "#" picker offers (evaluatorsOf); none until evaluators
+    // answers.
+    evaluators: [],
   }),
   initial: "starting",
   // Asked after any change that shows another note or another text (checksDue), so no
@@ -673,8 +700,17 @@ export const machine = setup({
       onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
       onError: { actions: assign({ signedIn: true }) },
     },
+    {
+      src: "evaluators",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ evaluators: ({ event }) => evaluatorsOf(event.output) }) },
+      onError: { actions: assign({ evaluators: [] }) },
+    },
   ],
   on: {
+    // evaluators' news, for the "#" picker.
+    "evaluator.changed": { actions: assign({ evaluators: ({ context, event }) => withEvaluator(context.evaluators, event.evaluator) }) },
+    "evaluator.deleted": { actions: assign({ evaluators: ({ context, event }) => context.evaluators.filter((e) => e.id !== event.id) }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     // Lines the user finished (the view sends them before the blur that also finishes them).
     _finished: { actions: enqueueActions(({ context, event, enqueue }) => finish(context, enqueue, event.lines)) },

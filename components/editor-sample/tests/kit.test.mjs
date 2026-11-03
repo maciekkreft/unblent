@@ -377,5 +377,120 @@ for (const engine of ENGINES) {
       assert.equal(page.url(), `${BASE_URL}${PAGE}`, "the app stays where it was");
       assert.equal(await text(page), "Read [the site](https://example.com/a) now\nnext", "the text stays as typed");
     });
+
+    // The hashtag picker's rows as drawn: each row's tag, its description (or null), and
+    // whether it is the marked one; [] while the list is closed.
+    const picker = (page) =>
+      page.evaluate(() =>
+        [...document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-hashtag-picker-row")].map((row) => ({
+          tag: row.querySelector(".cm-hashtag-picker-tag").textContent,
+          about: row.querySelector(".cm-hashtag-picker-about")?.textContent ?? null,
+          selected: row.classList.contains("cm-hashtag-picker-selected"),
+        })),
+      );
+    const pickerShown = async (page, tags) => until(async () => JSON.stringify((await picker(page)).map((r) => r.tag)) === JSON.stringify(tags));
+
+    // Browser: rendering and layout.
+    run("typing # opens the tags under it, narrowed to the ones matching what follows", { viewport: { width: 1000, height: 600 } }, async (page) => {
+      await page.keyboard.type("Tonight #");
+      await pickerShown(page, ["#in-my-control", "#inner-critic", "#thinking-traps"]);
+      const rows = await picker(page);
+      assert.deepEqual(rows.map((r) => r.selected), [true, false, false], "the first row is marked");
+      assert.equal(rows[2].about, null, "a tag without a description shows none");
+      const shape = await page.evaluate(() => {
+        const root = document.querySelector("editor-sample").shadowRoot;
+        const card = root.querySelector(".cm-hashtag-picker").getBoundingClientRect();
+        const tag = root.querySelector(".cm-hashtag-picker-tag");
+        const about = root.querySelector(".cm-hashtag-picker-about");
+        const hash = [...root.querySelectorAll(".cm-line")][0].getBoundingClientRect();
+        return { width: card.width, top: card.top, lineMiddle: (hash.top + hash.bottom) / 2, tagColor: getComputedStyle(tag).color, aboutWraps: getComputedStyle(about).whiteSpace };
+      });
+      assert.ok(Math.abs(shape.width - 300) <= 2, `about 300px wide on the desk, saw ${shape.width}`);
+      assert.ok(shape.top > shape.lineMiddle, `the list opens under the line, saw ${JSON.stringify(shape)}`);
+      assert.equal(shape.aboutWraps, "nowrap", "a description stays on one line");
+      assert.equal(shape.tagColor, "rgb(251, 146, 60)", "a tag is in the accent color");
+      await page.keyboard.type("in");
+      await pickerShown(page, ["#in-my-control", "#inner-critic"]);
+      await page.keyboard.type("-");
+      await pickerShown(page, ["#in-my-control"]);
+      await page.keyboard.type("x");
+      await pickerShown(page, []);
+      assert.equal(await text(page), "Tonight #in-x");
+    });
+
+    // Browser: rendering and layout.
+    run("on a phone the picker's rows are tall enough for a finger", { viewport: { width: 390, height: 700 } }, async (page) => {
+      await page.keyboard.type("#");
+      await pickerShown(page, ["#in-my-control", "#inner-critic", "#thinking-traps"]);
+      const heights = await page.evaluate(() =>
+        [...document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-hashtag-picker-row")].map((r) => r.getBoundingClientRect().height),
+      );
+      assert.ok(heights.every((h) => h >= 44), `every row at least 44px tall, saw ${heights}`);
+    });
+
+    // Browser: focus and keys.
+    run("Down then Up returns to the first tag, Enter adds it and a space, and Enter after it starts a bullet below", {}, async (page) => {
+      await page.keyboard.type("Tonight #in");
+      await pickerShown(page, ["#in-my-control", "#inner-critic"]);
+      await page.keyboard.press("ArrowDown");
+      await until(async () => (await picker(page))[1]?.selected === true);
+      await page.keyboard.press("ArrowUp");
+      await until(async () => (await picker(page))[0]?.selected === true);
+      await page.keyboard.press("Enter");
+      await until(async () => (await text(page)) === "Tonight #in-my-control ");
+      await pickerShown(page, []);
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("one");
+      await until(async () => (await text(page)) === "Tonight #in-my-control \n- one");
+      assert.ok((await lines(page))[1].className.includes("cm-item"), "the line below is a bullet item");
+    });
+
+    // Browser: focus and keys.
+    run("Tab adds the marked tag, Ctrl+n moves the mark, and Esc closes the list leaving the text", {}, async (page) => {
+      await page.keyboard.type("#in");
+      await pickerShown(page, ["#in-my-control", "#inner-critic"]);
+      await page.keyboard.press("Control+n");
+      await until(async () => (await picker(page))[1]?.selected === true);
+      await page.keyboard.press("Tab");
+      await until(async () => (await text(page)) === "#inner-critic ");
+      await page.keyboard.type("and #th");
+      await pickerShown(page, ["#thinking-traps"]);
+      await page.keyboard.press("Escape");
+      await pickerShown(page, []);
+      assert.equal(await text(page), "#inner-critic and #th");
+      // Typing on in the same tag keeps it closed.
+      await page.keyboard.type("i");
+      assert.deepEqual(await picker(page), []);
+      assert.equal(await text(page), "#inner-critic and #thi");
+    });
+
+    // Browser: a gesture.
+    run("a click on a tag adds it and the keyboard stays in the editor", {}, async (page) => {
+      await page.keyboard.type("Tonight #");
+      await pickerShown(page, ["#in-my-control", "#inner-critic", "#thinking-traps"]);
+      await page.locator("editor-sample .cm-hashtag-picker-row").nth(2).click();
+      await until(async () => (await text(page)) === "Tonight #thinking-traps ");
+      await pickerShown(page, []);
+      await page.keyboard.type("next");
+      assert.equal(await text(page), "Tonight #thinking-traps next", "the keyboard stayed in the editor");
+    });
+
+    // Browser: focus and keys.
+    run("with Vim keys the picker works in insert mode, and Esc closes it before it leaves insert mode", { vim: true }, async (page) => {
+      await page.keyboard.press("i");
+      await page.keyboard.type("#in-");
+      await pickerShown(page, ["#in-my-control"]);
+      await page.keyboard.press("Enter");
+      await until(async () => (await text(page)) === "#in-my-control ");
+      await page.keyboard.type("#t");
+      await pickerShown(page, ["#thinking-traps"]);
+      await page.keyboard.press("Escape");
+      await pickerShown(page, []);
+      assert.equal(await page.locator("editor-sample .cm-fat-cursor").count(), 0, "still in insert mode");
+      await page.keyboard.type("h");
+      assert.equal(await text(page), "#in-my-control #th");
+      await page.keyboard.press("Escape");
+      await until(async () => (await page.locator("editor-sample .cm-fat-cursor").count()) > 0);
+    });
   });
 }

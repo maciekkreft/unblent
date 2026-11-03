@@ -1,5 +1,5 @@
 import { EditorState, EditorSelection, RangeSetBuilder, StateField, StateEffect, Transaction, Prec, Compartment, Facet } from "@codemirror/state";
-import { EditorView, ViewPlugin, Decoration, WidgetType, keymap, drawSelection } from "@codemirror/view";
+import { EditorView, ViewPlugin, Decoration, WidgetType, keymap, drawSelection, showTooltip, tooltips } from "@codemirror/view";
 import { history, historyKeymap, standardKeymap, isolateHistory } from "@codemirror/commands";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 
@@ -14,6 +14,18 @@ import { vim, Vim, getCM } from "@replit/codemirror-vim";
 
 // Enter: a new paragraph. The selection is replaced by one blank line.
 export const enterAt = (text, from, to = from) => ({ from, to, insert: "\n\n", cursor: from + 2 });
+
+// Enter at the end of a hashtag line (10): a bullet item directly below it, so the lines
+// written next stay in the hashtag's paragraph and are checked. Anywhere else, and on a
+// line that already is an item, null.
+export function tagEnterAt(text, from, to = from) {
+  if (from !== to) return null;
+  const next = text.indexOf("\n", from);
+  if (from !== (next < 0 ? text.length : next)) return null;
+  const line = text.slice(text.lastIndexOf("\n", from - 1) + 1, from);
+  if (!hashtagsIn(line).length || ITEM.test(line)) return null;
+  return { from, to, insert: "\n- ", cursor: from + 3 };
+}
 
 // Shift+Enter: a line break inside the paragraph.
 export const breakAt = (text, from, to = from) => ({ from, to, insert: "\n", cursor: from + 1 });
@@ -722,6 +734,7 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
   const collapsed = (fn) => (text, from, to) => (from === to ? fn(text, from) : null);
 
   const keys = [
+    ...(enter && lists ? [{ key: "Enter", run: apply(tagEnterAt, "input") }] : []),
     ...(enter ? [{ key: "Enter", run: apply(enterAt, "input") }] : []),
     { key: "Shift-Enter", run: apply(breakAt, "input") },
     { key: "Backspace", run: apply(collapsed(backspaceAt), "delete.backward", true) },
@@ -738,7 +751,10 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
   const opener = paragraphsOpener.of((state, below) => {
     const head = state.selection.main.head;
     const text = state.doc.toString();
-    return openAt(text, head, below, itemLineAt(state, head) ? itemAt(text, head) : null);
+    const item = itemLineAt(state, head) ? itemAt(text, head) : null;
+    // o on a hashtag line starts its list, as Enter at the line's end does.
+    const tagged = below && !item && lists && tagEnterAt(text, state.doc.lineAt(head).to);
+    return tagged || openAt(text, head, below, item);
   });
 
   // What Vim's J does here (see paragraphsJoiner): joinAt across a gap, refused where it
@@ -1213,6 +1229,247 @@ export function refreshHashtags(view, known = null) {
 const hashtagTheme = EditorView.theme({
   ".cm-hashtag-known": { color: "var(--color-accent)" },
   ".cm-hashtag-unknown": { color: "var(--color-mute)" },
+});
+
+// --- The hashtag picker -------------------------------------------------------------
+// Typing "#" at the start of a word on an editable line opens a list of the tags the
+// editor supplies, narrowed as the name is typed (10). It is drawn as a CodeMirror
+// tooltip, not CodeMirror's autocompletion, so its keys, its look and when it opens are
+// the kit's own. It opens only on typing, so a cursor moved onto a tag, or Vim's normal
+// mode, never opens it.
+
+// A copy of `shortName` in components/line-checks/machine.js, which names an evaluator by
+// it when it reads a hashtag line. The two must stay identical, so the names the picker
+// offers are exactly the names line-checks finds; the kit may not import a component (11.2).
+const PLAIN = { "ł": "l", "ø": "o", "đ": "d", "ß": "ss", "æ": "ae", "œ": "oe" };
+export const shortName = (title) =>
+  String(title ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[łøđßæœ]/g, (c) => PLAIN[c])
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+// The tags whose name starts with what is typed, in the order given, each name once. A
+// short name is lowercase, so what is typed is compared lowercased; a tag with no name
+// can never be typed and is left out.
+export function tagsMatching(tags, typed) {
+  const start = String(typed ?? "").toLowerCase();
+  const seen = new Set();
+  return (tags ?? []).filter((t) => t?.tag && t.tag.startsWith(start) && !seen.has(t.tag) && seen.add(t.tag));
+}
+
+// The "#" and what follows it up to the cursor, when the cursor ends a word that is a tag
+// being typed: { from (at the "#"), typed }. HASHTAG's word, so what is picked is a tag.
+const TYPED_TAG = /(?:^|\s)#([\p{L}\p{N}-]*)$/u;
+const TAG_CHAR = /^[\p{L}\p{N}-]/u;
+function typedTag(state) {
+  const range = state.selection.main;
+  if (state.selection.ranges.length !== 1 || !range.empty) return null;
+  const line = state.doc.lineAt(range.head);
+  const at = range.head - line.from;
+  const m = TYPED_TAG.exec(line.text.slice(0, at));
+  if (!m || TAG_CHAR.test(line.text.slice(at))) return null;
+  return { from: range.head - m[1].length - 1, typed: m[1] };
+}
+
+// { move } steps the marked row, { close: "escape" | "blur" } closes the list, and
+// { refresh } asks the editor's tags again.
+const pickerEffect = StateEffect.define();
+
+// One editor's picker. `tags()` gives [{ tag, description }], the names the editor knows,
+// asked again on every keystroke while the list is open and on refreshHashtagPicker.
+export function hashtagPicker({ tags }) {
+  const closed = (dismissed = null) => ({ open: false, dismissed });
+
+  const field = StateField.define({
+    create: () => closed(),
+    update(value, tr) {
+      let move = 0;
+      let close = null;
+      let refresh = false;
+      for (const e of tr.effects) {
+        if (!e.is(pickerEffect)) continue;
+        move += e.value.move ?? 0;
+        close = e.value.close ?? close;
+        refresh ||= Boolean(e.value.refresh);
+      }
+      if (!tr.docChanged && !tr.selection && !tr.reconfigured && !move && !close && !refresh) return value;
+      const found = takesTyping(tr.state) ? typedTag(tr.state) : null;
+      // Leaving the tag forgets an Esc on it, so the next "#" opens the list again.
+      if (!found) return closed();
+      const dismissed = value.dismissed == null ? null : tr.changes.mapPos(value.dismissed);
+      if (close === "escape") return closed(found.from);
+      if (close === "blur" || dismissed === found.from) return closed(dismissed);
+      const was = value.open && tr.changes.mapPos(value.from) === found.from;
+      if (!was && !tr.isUserEvent("input.type")) return closed(dismissed);
+      const items = tagsMatching(tags(), found.typed);
+      if (!items.length) return closed(dismissed);
+      const start = was && value.typed === found.typed ? value.selected : 0;
+      const selected = (((start + move) % items.length) + items.length) % items.length;
+      return { open: true, from: found.from, to: tr.state.selection.main.head, typed: found.typed, items, selected, dismissed: null, tooltip: was ? value.tooltip : pickerTooltip(found.from) };
+    },
+    provide: (f) => showTooltip.from(f, (v) => (v.open ? v.tooltip : null)),
+  });
+
+  // The typed "#part" becomes "#tag" and a space, in one transaction, so one Undo takes
+  // it back. A space already after the cursor is used rather than doubled.
+  const pick = (view, index) => {
+    const v = view.state.field(field);
+    const item = v.open && v.items[index];
+    if (!item) return false;
+    const spaced = view.state.sliceDoc(v.to, v.to + 1) === " ";
+    const insert = "#" + item.tag + (spaced ? "" : " ");
+    view.dispatch({
+      changes: { from: v.from, to: v.to, insert },
+      selection: EditorSelection.cursor(v.from + item.tag.length + 2),
+      scrollIntoView: true,
+      userEvent: "input.complete",
+    });
+    return true;
+  };
+
+  function pickerTooltip(from) {
+    return {
+      pos: from,
+      above: false,
+      create(view) {
+        const dom = document.createElement("div");
+        dom.className = "cm-hashtag-picker";
+        dom.setAttribute("role", "listbox");
+        dom.setAttribute("aria-label", "Tags");
+        // A finger needs taller rows (the phone preview, or a narrow window), read the way
+        // the editors read it.
+        const root = view.dom.ownerDocument.documentElement;
+        const rem = parseFloat(getComputedStyle(root).fontSize) || 16;
+        if (root.getAttribute("data-viewport") === "phone" || globalThis.innerWidth < 45 * rem) dom.classList.add("cm-hashtag-picker-narrow");
+        // The press would move the focus out of the editor and close the list first.
+        dom.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          const row = event.target.closest?.(".cm-hashtag-picker-row");
+          if (row) pick(view, Number(row.dataset.index));
+        });
+        let shown = null;
+        const draw = () => {
+          const v = view.state.field(field);
+          if (!v.open || v === shown) return;
+          shown = v;
+          dom.replaceChildren(
+            ...v.items.map((item, i) => {
+              const row = document.createElement("div");
+              row.className = i === v.selected ? "cm-hashtag-picker-row cm-hashtag-picker-selected" : "cm-hashtag-picker-row";
+              row.dataset.index = String(i);
+              row.setAttribute("role", "option");
+              row.setAttribute("aria-selected", String(i === v.selected));
+              const tag = document.createElement("span");
+              tag.className = "cm-hashtag-picker-tag";
+              tag.textContent = "#" + item.tag;
+              row.append(tag);
+              if (item.description) {
+                const about = document.createElement("span");
+                about.className = "cm-hashtag-picker-about";
+                about.textContent = item.description;
+                row.append(about);
+              }
+              return row;
+            }),
+          );
+          dom.children[v.selected]?.scrollIntoView?.({ block: "nearest" });
+        };
+        draw();
+        return { dom, update: draw };
+      },
+    };
+  }
+
+  // Ahead of Vim and of every keymap, and only while the list is open, so Esc closes the
+  // list before it leaves Vim's insert mode, and Enter picks before it starts a line.
+  const keys = Prec.highest(
+    EditorView.domEventHandlers({
+      keydown(event, view) {
+        const v = view.state.field(field);
+        if (!v.open || event.isComposing || event.altKey || event.metaKey) return false;
+        const ctrl = event.ctrlKey;
+        const key = ctrl ? (event.key === "n" ? "down" : event.key === "p" ? "up" : null) : event.shiftKey ? null : event.key;
+        let done = false;
+        if (key === "ArrowDown" || key === "down") done = (view.dispatch({ effects: pickerEffect.of({ move: 1 }) }), true);
+        else if (key === "ArrowUp" || key === "up") done = (view.dispatch({ effects: pickerEffect.of({ move: -1 }) }), true);
+        else if (key === "Enter" || key === "Tab") done = pick(view, v.selected);
+        else if (key === "Escape") done = (view.dispatch({ effects: pickerEffect.of({ close: "escape" }) }), true);
+        // The key is the list's: no view around the editor acts on it too.
+        if (done) event.stopPropagation();
+        return done;
+      },
+      blur(_event, view) {
+        if (view.state.field(field).open) view.dispatch({ effects: pickerEffect.of({ close: "blur" }) });
+        return false;
+      },
+    }),
+  );
+
+  // The list stays within its editor's width, shifted left near the right edge, so it
+  // never covers the panel beside the stage; it may still run below a short editor.
+  const space = tooltips({
+    tooltipSpace: (view) => {
+      const { left, right } = view.dom.getBoundingClientRect();
+      const win = view.dom.ownerDocument.defaultView;
+      return { top: 0, bottom: win.innerHeight, left, right };
+    },
+  });
+
+  return [field, keys, space, pickerTheme];
+}
+
+// The list drawn again with the editor's tags asked anew, for an editor whose tags()
+// reads state that changed; an open list narrows, or closes when nothing matches.
+export function refreshHashtagPicker(view) {
+  view.dispatch({ effects: pickerEffect.of({ refresh: true }) });
+}
+
+// `&.cm-editor` outranks CodeMirror's own light and dark tooltip colors.
+const pickerTheme = EditorView.theme({
+  "&.cm-editor .cm-tooltip.cm-hashtag-picker": {
+    width: "calc(var(--space-xl) * 7.5)",
+    maxHeight: "calc(var(--space-xl) * 7)",
+    overflowY: "auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: "var(--space-2xs)",
+    padding: "var(--space-xs)",
+    background: "var(--color-canvas)",
+    border: "var(--border-width) solid var(--color-border-strong)",
+    borderRadius: "var(--radius-sm)",
+    boxShadow: "var(--shadow-card)",
+    fontFamily: "var(--font-sans)",
+    lineHeight: "var(--leading-tight)",
+  },
+  "&.cm-editor .cm-tooltip.cm-hashtag-picker-narrow": {
+    width: "calc(var(--viewport-phone) - 2 * var(--space-md))",
+  },
+  ".cm-hashtag-picker-row": {
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    gap: "var(--space-2xs)",
+    padding: "var(--space-xs) var(--space-sm)",
+    borderRadius: "var(--radius-sm)",
+    cursor: "pointer",
+    minWidth: "0",
+  },
+  ".cm-hashtag-picker-narrow .cm-hashtag-picker-row": {
+    minHeight: "calc(var(--space-xl) + var(--space-sm))",
+    boxSizing: "border-box",
+  },
+  ".cm-hashtag-picker-selected": { background: "var(--color-surface-hover)" },
+  ".cm-hashtag-picker-tag": { fontSize: "var(--text-sm)", color: "var(--color-accent)" },
+  ".cm-hashtag-picker-about": {
+    fontSize: "var(--text-caption)",
+    color: "var(--color-body)",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
 });
 
 // --- Line marks ---------------------------------------------------------------------

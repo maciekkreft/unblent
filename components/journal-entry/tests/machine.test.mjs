@@ -594,3 +594,58 @@ test("a nested view's flag hides it while flags reports the feature hidden, and 
   actor.send({ type: "flags.changed", off: ["choice-points"], hidden: ["choice-points"] });
   assert.deepEqual(actor.getSnapshot().context.hidden, ["choice-points"]);
 });
+
+// --- The "#" picker's evaluators -------------------------------------------------------
+
+const EV1 = id("E", 1);
+const EV2 = id("E", 2);
+const evaluator = (eid, name, description) => ({ id: eid, book: BOOK, name, ...(description == null ? {} : { description }), on: true, questions: [], version: 1, pending: false, removing: false });
+
+// An entry whose evaluators answer `reply` to a list asked with `payloads`.
+async function picking(reply) {
+  const payloads = [];
+  const actor = createActor(machine, {
+    input: {
+      ask: (target, name, payload) => {
+        if (target === "evaluators" && name === "list") {
+          payloads.push(payload);
+          return reply instanceof Error ? Promise.reject(reply) : Promise.resolve(reply);
+        }
+        return Promise.resolve(target === "journal" ? picture() : {});
+      },
+      mint: () => FRESH,
+      now: () => at(12, 21),
+    },
+    clock: new SimulatedClock(),
+  });
+  actor.start();
+  await flush();
+  return { actor, payloads, list: () => actor.getSnapshot().context.evaluators };
+}
+
+test("the entry asks for every evaluator of the account, and keeps each one's name and description", async () => {
+  const { payloads, list } = await picking({ evaluators: [evaluator(EV1, "In my control", "Whether it is up to me."), evaluator(EV2, "Kind")] });
+  assert.deepEqual(payloads, [{}], "no book, so none is left out");
+  assert.deepEqual(list(), [
+    { id: EV1, name: "In my control", description: "Whether it is up to me." },
+    { id: EV2, name: "Kind", description: "" },
+  ]);
+});
+
+test("evaluator.changed renames one in its place or adds a new one; evaluator.deleted removes it", async () => {
+  const { actor, list } = await picking({ evaluators: [evaluator(EV1, "In my control"), evaluator(EV2, "Kind")] });
+  actor.send({ type: "evaluator.changed", evaluator: evaluator(EV1, "Up to me", "Mine to change.") });
+  assert.deepEqual(list().map((e) => e.name), ["Up to me", "Kind"]);
+  actor.send({ type: "evaluator.deleted", id: EV2, book: BOOK });
+  const EV3 = id("E", 3);
+  actor.send({ type: "evaluator.changed", evaluator: evaluator(EV3, "Fair") });
+  assert.deepEqual(list(), [
+    { id: EV1, name: "Up to me", description: "Mine to change." },
+    { id: EV3, name: "Fair", description: "" },
+  ]);
+});
+
+test("without evaluators to ask, offline or not on the page, the picker offers nothing", async () => {
+  assert.deepEqual((await picking({ error: "no-answerer" })).list(), []);
+  assert.deepEqual((await picking(new Error("offline"))).list(), []);
+});

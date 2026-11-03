@@ -5,7 +5,7 @@ import { icon } from "icons";
 import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode, Prec } from "@codemirror/state";
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, refreshHashtagPicker, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
 import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, flagShown, knownTags, lineMarksOf } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
@@ -206,6 +206,10 @@ const drawMarks = (into, marks) => {
       into,
     );
 };
+
+// The "#" picker's rows: each evaluator by the short name line-checks matches a tag to.
+const pickerTags = (evaluators) =>
+  (evaluators ?? []).map((e) => ({ tag: shortName(e.name), description: e.description ?? "" }));
 
 // The lines of `doc` a hashtag line names (the editor kit's hashtagScopes), of those given.
 const named = (doc, lines) => {
@@ -581,6 +585,8 @@ class JournalEntry extends LitElement {
   // The hashtags that name an evaluator, and the report they and the marks were drawn from.
   #known = new Set();
   #checksFrom = undefined;
+  // The evaluator list an open "#" picker was last asked to show.
+  #evaluatorsFrom = undefined;
 
   #send(event) {
     this.#actor.send(event);
@@ -694,6 +700,8 @@ class JournalEntry extends LitElement {
       // Hashtags and Jev's answers at the lines they name (the editor kit, 10), also on an
       // earlier day.
       hashtags({ known: (name) => this.#known.has(name) }),
+      // The kit never opens it on an earlier day, which takes no typing.
+      hashtagPicker({ tags: () => pickerTags(this.#actor.snapshot?.context.evaluators) }),
       lineMarks({ render: drawMarks }),
       EditorView.updateListener.of((update) => {
         const leveled = update.transactions.some((t) => t.effects.some((e) => e.is(setLevel) || e.is(setAllLevels)));
@@ -777,6 +785,11 @@ class JournalEntry extends LitElement {
       this.#known = knownTags(checks);
       refreshHashtags(this.#view);
       this.#view.dispatch({ effects: setLineMarks.of(lineMarksOf(checks)) });
+    }
+    const { evaluators } = snapshot.context;
+    if (evaluators !== this.#evaluatorsFrom) {
+      this.#evaluatorsFrom = evaluators;
+      refreshHashtagPicker(this.#view);
     }
     const { notes, removed } = snapshot.context;
     if (notes !== this.#missingFrom?.notes || removed !== this.#missingFrom?.removed) {

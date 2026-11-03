@@ -3,7 +3,7 @@ import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { baseExtensions, setVim, paragraphs, sourceLinks, webLinks, hashtags, refreshHashtags, lineMarks, setLineMarks } from "editor";
+import { baseExtensions, setVim, paragraphs, sourceLinks, webLinks, hashtags, refreshHashtags, hashtagPicker, lineMarks, setLineMarks } from "editor";
 import { machine } from "./machine.js";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -35,6 +35,12 @@ const fill = EditorView.theme({
   "&": { height: "100%" },
   ".cm-scroller": { overflow: "auto" },
 });
+
+const SAMPLE_TAGS = [
+  { tag: "in-my-control", description: "Whether each line is in your control, partly, or not" },
+  { tag: "inner-critic", description: "Whether a line speaks in the voice of the inner critic" },
+  { tag: "thinking-traps", description: "" },
+];
 
 class EditorSample extends LitElement {
   // `text` is the editor's text both ways: the page gives the starting text, setting it
@@ -94,6 +100,8 @@ class EditorSample extends LitElement {
       sourceLinks({ follow: () => {}, icon: (into) => render(icon("link"), into) }),
       webLinks(),
       hashtags({ known: (name) => this.known.includes(name) }),
+      // A fixed list stands in for the account's evaluators, which this page has none of (8).
+      hashtagPicker({ tags: () => SAMPLE_TAGS }),
       // The kit's style sheet sits in the shadow root, so a mark drawn here takes .mark.
       lineMarks({ render: (into, marks) => render(marks.map((m) => html`<span class="mark">${m}</span>`), into) }),
       fill,

@@ -19,6 +19,7 @@ const [EVALUATOR, QUESTION, IN, PARTLY, NOT] = [id("E1"), id("Q1"), id("P1"), id
 const IN_MY_CONTROL = {
   book: id("B1"),
   name: "In my control",
+  description: "Whether what I wrote is up to me.",
   on: true,
   baseVersion: null,
   questions: [
@@ -109,6 +110,37 @@ for (const engine of ENGINES) {
         // The answer, not the dot shown while Jev is asked, which is also a .marks.
         const calling = line(page, "Calling her").locator(".marks:not(.pending)");
         await until(async () => ((await calling.count()) ? await calling.innerText() : "") === "In my control");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: a page's composition.
+    test("typing # offers the account's evaluators, Enter picks one and Enter again starts the list it checks", async () => {
+      const context = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("hashtags-picker"));
+        const page = await context.newPage();
+        const problems = watch(page);
+        await setUp(context, page);
+        await page.goto(STEM, { waitUntil: "domcontentloaded" });
+        await editor(page).click();
+        await page.keyboard.type("Things on my mind tonight #in");
+        const row = page.locator("journal-entry .cm-hashtag-picker-row");
+        await until(async () => (await row.count()) === 1);
+        assert.equal(await row.locator(".cm-hashtag-picker-tag").textContent(), "#in-my-control");
+        assert.equal(await row.locator(".cm-hashtag-picker-about").textContent(), "Whether what I wrote is up to me.");
+        await page.keyboard.press("Enter");
+        await until(async () => (await row.count()) === 0);
+        await page.keyboard.press("Enter");
+        await page.keyboard.type("Whether I get the job");
+        await page.keyboard.press("ArrowUp");
+        assert.equal(await line(page, "Things on my mind").innerText(), "Things on my mind tonight #in-my-control ");
+        assert.equal(await page.locator("journal-entry .cm-hashtag-known").textContent(), "#in-my-control");
+        const marks = line(page, "Whether I get the job").locator(".marks:not(.pending)");
+        await until(async () => ((await marks.count()) ? await marks.innerText() : "") === "Not in my control");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

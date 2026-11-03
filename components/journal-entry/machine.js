@@ -8,7 +8,9 @@ import { setup, assign, emit, enqueueActions, fromPromise, fromCallback, spawnCh
 // (4.3, fourth rule); settings only for the "Vim keys" preference (12), session only for
 // whether anyone is signed in, and books: read only to learn whether an opened book is the
 // journal (written); notes: list and notes: read, following note.changed and note.deleted,
-// only for which highlights the day's source links point at still exist and where they are. Writing leaves as day.saved, at a throttle while
+// only for which highlights the day's source links point at still exist and where they are;
+// evaluators: list, following evaluator.changed and evaluator.deleted, only for the names
+// the "#" picker offers. Writing leaves as day.saved, at a throttle while
 // typing and at once on blur with `left` (4.3, third rule); whether a save lands is the
 // journal's to decide, because the "today only" rule lives there. The ask, the id
 // minting, the clock and the throttle arrive through input, so the machine is
@@ -359,6 +361,19 @@ function finish(context, enqueue, lines) {
   } else enqueue.assign({ finished });
 }
 
+// The account's evaluators as the "#" picker offers them, { id, name, description } each,
+// in the order evaluators lists them; a reply that is not a list (offline, no-answerer)
+// offers none. Copied in note-editor/machine.js, because components never import each
+// other (11.2).
+export const evaluatorsOf = (reply) =>
+  Array.isArray(reply?.evaluators) ? reply.evaluators.map(pickable) : [];
+const pickable = (e) => ({ id: e.id, name: e.name, description: e.description ?? "" });
+// evaluator.changed replaces the one it names in its place, or adds a new one at the end.
+export const withEvaluator = (list, evaluator) =>
+  list.some((e) => e.id === evaluator.id)
+    ? list.map((e) => (e.id === evaluator.id ? pickable(evaluator) : e))
+    : [...list, pickable(evaluator)];
+
 export const machine = setup({
   actors: {
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
@@ -369,6 +384,9 @@ export const machine = setup({
     // Which notes exist, for the day's source links; note.changed and note.deleted are held
     // for this ask until its reply lands.
     notes: fromPromise(({ input }) => input.ask("notes", "list", {})),
+    // Every evaluator of the account, for the "#" picker: no book is named, so none is
+    // left out; evaluator.changed and evaluator.deleted are held until the reply lands.
+    evaluators: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
     // line-checks' report for the day shown, from the answers it keeps (it never asks Jev
     // for a read); text.checked is held for us until the reply lands (read supersededBy).
     checks: fromCallback(({ input, sendBack }) => {
@@ -448,11 +466,17 @@ export const machine = setup({
       "page (moves off it, presses Enter, pastes, or leaves the box), and its answer shows at " +
       "the line's end as the option's icon and name, several joined in one row: a pulsing dot " +
       "while Jev is asked, and a warning whose tooltip says why when it could not be. An " +
-      "earlier day shows the answers already kept and asks nothing.",
+      "earlier day shows the answers already kept and asks nothing." +
+      " Typing # at the start of a word opens a list of the account's evaluators by their " +
+      "short names, each with its description on a line under it, narrowed as the name is " +
+      "typed; the arrow keys (or Ctrl+N and Ctrl+P) choose, Enter, Tab, a click or a tap " +
+      "writes the name and a space, and Escape or moving away closes it. Enter at the end of " +
+      "a hashtag line starts a bullet directly below it, so the lines written next are the " +
+      "ones it checks. An earlier day never opens the list.",
     kind: "view",
     emits: ["day.saved", "day.shown", "book.closed", "passage.selected"],
     attributes: ["height"],
-    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read", "flags: read", "line-checks: read"],
+    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read", "flags: read", "line-checks: read", "evaluators: list"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -503,6 +527,9 @@ export const machine = setup({
     checkedText: null,
     // The lines the user finished that no save has carried yet (day.saved's finished).
     finished: [],
+    // The account's evaluators the "#" picker offers (evaluatorsOf); none until evaluators
+    // answers.
+    evaluators: [],
   }),
   // Asked after any change that shows another day or another text (checksDue), so no
   // state can forget it.
@@ -534,6 +561,12 @@ export const machine = setup({
         guard: ({ event }) => Array.isArray(event.output?.notes),
         actions: assign({ notes: ({ event }) => event.output.notes.map((n) => n.id) }),
       },
+    },
+    {
+      src: "evaluators",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ evaluators: ({ event }) => evaluatorsOf(event.output) }) },
+      onError: { actions: assign({ evaluators: [] }) },
     },
   ],
   initial: "loading",
@@ -676,6 +709,9 @@ export const machine = setup({
         removed: context.notes === null ? [...without(context.removed, event.id), event.id] : context.removed,
       })),
     },
+    // evaluators' news, for the "#" picker.
+    "evaluator.changed": { actions: assign({ evaluators: ({ context, event }) => withEvaluator(context.evaluators, event.evaluator) }) },
+    "evaluator.deleted": { actions: assign({ evaluators: ({ context, event }) => context.evaluators.filter((e) => e.id !== event.id) }) },
     "book.changed": { actions: assign(({ context, event }) => ({ written: { ...context.written, [event.id]: event.written === true } })) },
     "book.deleted": {
       actions: assign(({ context, event }) => {
