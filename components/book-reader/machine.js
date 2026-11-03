@@ -349,6 +349,35 @@ const foldHighlight = (highlights, note, bookId) => {
 
 const rangeOf = (place) => ({ start: place.start, end: place.end });
 
+// Whether the Slip-Box feature shows (3.1): not until `flags` answers, and not on a page
+// without it, so with no answer the bubble is exactly as before.
+export const slipBoxShown = (hidden) => Array.isArray(hidden) && !hidden.includes("slip-box");
+
+// The passages a note holds: its links of kind highlight, by the highlight's id.
+const heldBy = (note) => links(note).filter((l) => l.kind === "highlight").map((l) => l.id);
+
+// Which notes hold which passages, for every note that holds any, so the bubble can say
+// a passage is already in the open note without asking.
+export const holdingOf = (notes) =>
+  Object.fromEntries(notes.map((n) => [n.id, heldBy(n)]).filter(([, ids]) => ids.length > 0));
+
+const foldHolding = (holding, note) => {
+  const { [note.id]: _, ...rest } = holding;
+  const ids = heldBy(note);
+  return ids.length ? { ...rest, [note.id]: ids } : rest;
+};
+
+// The bubble's Add to note for one highlight: null while Slip-Box is hidden, so the
+// button is not drawn; otherwise whether it can be pressed and, when not, why, said in
+// its tooltip. The note is the one open in the Notes panel (note.opened); a highlight is
+// never added to itself.
+export const addToNote = (context, id) => {
+  if (!slipBoxShown(context.hidden)) return null;
+  if (context.opened == null) return { enabled: false, why: "Open a note first" };
+  if (context.opened === id || (context.holding[context.opened] ?? []).includes(id)) return { enabled: false, why: "Already in this note" };
+  return { enabled: true, why: null };
+};
+
 // The highlight of this chapter holding a point (the Vim cursor), by the same range a
 // highlight covers: start inclusive, end exclusive. Undefined when none holds it.
 export const highlightAt = (highlights, chapter, p) =>
@@ -509,6 +538,11 @@ export const machine = setup({
     // reader keeps only what it paints (id, place, quote), so a merge reads the involved
     // notes for their comments and versions before it saves the survivor. A note the read
     // cannot find drops out; the survivor missing aborts the merge.
+    // Which features are hidden (3.1); flags.changed is held until the reply lands.
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    // The note open in the Notes panel when the reader starts, since the editor may have
+    // announced it (note.opened) before this reader was mounted.
+    openNote: fromPromise(({ input }) => input.ask("notes", "open", {})),
     readNotes: fromPromise(async ({ input }) => {
       const replies = await Promise.all(input.ids.map((id) => input.ask("notes", "read", { id })));
       return replies.filter((r) => r && "note" in r).map((r) => r.note);
@@ -565,7 +599,10 @@ export const machine = setup({
       "chapter's first and last page. A highlight made with the keys marks exactly the passage " +
       "painted while it was made, letter by letter if l and h made it, not grown to whole " +
       "words as a drag with the mouse is. A highlight's bubble offers Copy, Copy link and " +
-      "Remove; Copy link puts a link to the highlight, its quote's first words as the label, " +
+      "Remove, and while Slip-Box is shown also Add to note, which adds the passage to the note " +
+      "open in the Notes panel, one step, and reads \"Added\" for a moment; it is greyed, with a " +
+      "tooltip saying why, while no note is open there (\"Open a note first\") or that note already " +
+      "holds the passage (\"Already in this note\"). Copy link puts a link to the highlight, its quote's first words as the label, " +
       "on the clipboard and in the Vim register of any editor, and with Vim keys on, y with " +
       "the cursor inside a highlight opens its bubble and does the same, and y y does Copy, " +
       "its quote's text; d d there does Remove. Remove deletes the highlight at once and shows " +
@@ -588,9 +625,9 @@ export const machine = setup({
       "picture gets the long side; a double tap, the wheel or a pinch zooms it, a drag moves it, " +
       "and Close, Escape or a tap beside it goes back to the same page. Nothing of it is saved.",
     kind: "view",
-    emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "text.copied", "book.closed"],
+    emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "text.copied", "book.closed", "passage.added"],
     attributes: ["height", "highlights"],
-    asks: ["books: open", "books: read", "books: chapter", "notes: list", "notes: read", "settings: read"],
+    asks: ["books: open", "books: read", "books: chapter", "notes: list", "notes: read", "notes: open", "settings: read", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -611,6 +648,14 @@ export const machine = setup({
     // quote, commented). Reset when the book changes; kept current from note.changed and
     // note.deleted after the starting list (4.3).
     highlights: [],
+    // Which notes hold which passages (holdingOf), from the same list and news as the
+    // highlights, and the note open in the Notes panel, or null (note.opened). `openSeen`
+    // is whether a note.opened arrived before the starting ask replied, which then is stale.
+    holding: {},
+    opened: null,
+    openSeen: false,
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
     // A one-shot for the view: a drag wholly inside an existing highlight makes no new
     // note; instead the reader opens that highlight's bubble (Decision 6, session 3). The
     // bus cannot route an internal message to a view, so the id rides in context with a
@@ -650,13 +695,30 @@ export const machine = setup({
     quiet: false,
     at: null,
   }),
-  // Beside the states, so the preference arrives whatever the view is doing.
-  invoke: {
-    src: "settings",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
-    onError: { actions: [] },
-  },
+  // Beside the states, so the preferences arrive whatever the view is doing.
+  invoke: [
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : null) }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "openNote",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: {
+        guard: ({ context }) => !context.openSeen,
+        actions: assign({ opened: ({ event }) => event.output?.note?.id ?? null }),
+      },
+      onError: { actions: [] },
+    },
+  ],
   initial: "starting",
   on: {
     "settings.changed": {
@@ -665,6 +727,10 @@ export const machine = setup({
         command: event.vimKeys === true ? context.command : null,
       })),
     },
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
+    // The note the Notes panel shows (the stage's editor never announces one), which Add
+    // to note adds a passage to.
+    "note.opened": { actions: assign({ opened: ({ event }) => event.id, openSeen: true }) },
     _commandKey: { actions: commandKey },
     _notACommandEnd: { actions: assign({ notACommand: null }) },
     // The open book changed (4.3, fourth rule): the fact says which book is open now,
@@ -776,7 +842,10 @@ export const machine = setup({
         src: "highlights",
         input: ({ context }) => ({ ask: context.ask, highlighting: context.highlighting, id: context.book.id }),
         onDone: {
-          actions: assign({ highlights: ({ context, event }) => highlightsOf(event.output.notes ?? [], context.book.id) }),
+          actions: assign({
+            highlights: ({ context, event }) => highlightsOf(event.output.notes ?? [], context.book.id),
+            holding: ({ event }) => holdingOf(event.output.notes ?? []),
+          }),
         },
         onError: {},
       },
@@ -860,11 +929,23 @@ export const machine = setup({
         // off, where nothing is painted.
         "note.changed": {
           guard: ({ context }) => context.highlighting && Boolean(context.book),
-          actions: assign({ highlights: ({ context, event }) => foldHighlight(context.highlights, event, context.book.id) }),
+          actions: assign({
+            highlights: ({ context, event }) => foldHighlight(context.highlights, event, context.book.id),
+            holding: ({ context, event }) => foldHolding(context.holding, event),
+          }),
         },
         "note.deleted": {
           guard: ({ context }) => context.highlighting,
-          actions: assign({ highlights: ({ context, event }) => context.highlights.filter((h) => h.id !== event.id) }),
+          actions: assign({
+            highlights: ({ context, event }) => context.highlights.filter((h) => h.id !== event.id),
+            holding: ({ context, event }) => foldHolding(context.holding, { id: event.id }),
+          }),
+        },
+        // Add to note on a highlight's bubble: the user's gesture, which notes takes in and
+        // records as one step (4.3, fifth rule; 12). Its note.changed greys the button.
+        _addToNote: {
+          guard: ({ context, event }) => context.highlights.some((h) => h.id === event.id) && addToNote(context, event.id)?.enabled === true,
+          actions: emit(({ context, event }) => ({ type: "passage.added", note: context.opened, highlight: event.id })),
         },
         // Remove a highlight: the bubble's Remove and, with Vim keys, d d. A highlight is a
         // note (13), so it is deleted at once, one step `notes` records with the short

@@ -351,3 +351,29 @@ test("a deleted note moved into a list about another thing comes back under it, 
   assert.deepEqual((await read(actor, A)).note.about, [journal]);
   assert.ok(settled.every((s) => s.outcome === "applied"), JSON.stringify(settled));
 });
+
+test("a passage added with Add to note is one step at the end of the note's links; Undo takes it out", async () => {
+  const H = "01ARZ3NDEKTSV4RRFFQ69G5H01";
+  const BOOK = "01ARZ3NDEKTSV4RRFFQ69G5BK1";
+  const passage = { kind: "book", id: BOOK, place: { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } }, quote: { exact: "Hello", prefix: "", suffix: "" } };
+  const { actor, steps, changed } = await start();
+  actor.send(save(H, "", null, { about: [passage], left: true }));
+  actor.send(save(A, "Notes on it", null, { about: [{ kind: "book", id: BOOK }], left: true }));
+  const before = steps.length;
+  actor.send({ type: "passage.added", note: A, highlight: H });
+  assert.equal(steps.length, before + 1, "one step");
+  const link = { kind: "highlight", id: H };
+  assert.deepEqual(changed.at(-1).about, [{ kind: "book", id: BOOK }, link], "announced at the end of its links");
+  assert.equal(changed.at(-1).body, "Notes on it", "the text is kept");
+
+  actor.send({ type: "passage.added", note: A, highlight: H });
+  actor.send({ type: "passage.added", note: B, highlight: H });
+  actor.send({ type: "passage.added", note: A, highlight: B });
+  actor.send({ type: "passage.added", note: H, highlight: H });
+  assert.equal(steps.length, before + 1, "twice, a note that does not exist, or a highlight that is not one, change nothing");
+
+  actor.send(undo(steps.at(-1)));
+  assert.deepEqual((await read(actor, A)).note.about, [{ kind: "book", id: BOOK }]);
+  actor.send(redo(steps.at(-1)));
+  assert.deepEqual((await read(actor, A)).note.about, [{ kind: "book", id: BOOK }, link]);
+});

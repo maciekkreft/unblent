@@ -328,6 +328,20 @@ function applySave(context, event, enqueue) {
   enqueue.raise({ type: "_drain" });
 }
 
+// The user added a highlight's passage to the note open in the Notes panel (passage.added,
+// 4.3 fifth rule): a change of the note's links, so one step of its own, the same save a
+// change of links in the editor makes (12, Undo). A passage the note holds already, a note
+// that is gone, or a highlight that is not one changes nothing.
+function applyPassage(context, event, enqueue) {
+  const current = context.notes.get(event.note);
+  const highlight = context.notes.get(event.highlight);
+  if (!visible(current) || !visible(highlight) || !highlightLink(highlight) || event.note === event.highlight) return;
+  const about = current.about ?? [];
+  if (about.some((l) => l.kind === "highlight" && l.id === event.highlight)) return;
+  const link = { kind: "highlight", id: event.highlight };
+  applySave(context, { id: current.id, title: current.title, body: current.body, baseVersion: current.version, about: [...about, link] }, enqueue);
+}
+
 // The user deleted a note, in the list or as a highlight in the reader (note.discarded,
 // 4.3 fifth rule): it happens at once and is one step, shown with the short notice (12,
 // Undo).
@@ -687,6 +701,7 @@ function flush(context, message, enqueue) {
   else if (message.type === "note.saved") applySave(context, message, enqueue);
   else if (message.type === "note.discarded") applyDiscard(context, message, enqueue);
   else if (message.type === "note.moved") applyMove(context, message, enqueue);
+  else if (message.type === "passage.added") applyPassage(context, message, enqueue);
   else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
@@ -848,7 +863,8 @@ export const machine = setup({
       "keeps the order it had, newest first, until it is edited or moved. Every change is a " +
       "step Undo and Redo reverse (section 12): one stretch of typing in one note, from " +
       "the first save until the editor says the user left it or another note opens, a " +
-      "change of a note's links, a move, and a delete, which happens at once and asks for " +
+      "change of a note's links, among them a passage added with the reader's Add to note (a " +
+      "link of kind highlight after its other links, never twice), a move, and a delete, which happens at once and asks for " +
       "the short notice; a highlight's are named as a highlight. Undo of a new note deletes " +
       "it, and a deleted note comes back with a restore write the server accepts. A step " +
       "is refused when the note's text, or its place for a move, was written since by " +
@@ -864,6 +880,7 @@ export const machine = setup({
       "note.saved": "step",
       "note.discarded": "step",
       "note.moved": "step",
+      "passage.added": "step",
     },
     asks: ["session: read"],
   },
@@ -949,6 +966,7 @@ export const machine = setup({
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
         "note.moved": { actions: queue },
+        "passage.added": { actions: queue },
         "step.undone": { actions: queue },
         "step.redone": { actions: queue },
       },
@@ -987,6 +1005,7 @@ export const machine = setup({
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
         "note.moved": { actions: queue },
+        "passage.added": { actions: queue },
         "step.undone": { actions: queue },
         "step.redone": { actions: queue },
       },
@@ -1002,6 +1021,7 @@ export const machine = setup({
         "note.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "note.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         "note.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
+        "passage.added": { actions: enqueueActions(({ context, event, enqueue }) => applyPassage(context, event, enqueue)) },
         "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         // The fact's own news about who is signed in (4.3, fourth rule). A different

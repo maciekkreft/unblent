@@ -2,13 +2,14 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import linkCopied from "./events/link.copied.json" with { type: "json" };
 import textCopied from "./events/text.copied.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
+import passageAdded from "./events/passage.added.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the timers the view keeps.
 const toMs = (text, fallback = 3000) => {
@@ -34,7 +35,7 @@ class ActorController {
         // knowing whether it paints and makes highlights (Decision 3).
         highlighting: this.host.highlights,
       },
-      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded, "link.copied": linkCopied, "text.copied": textCopied, "book.closed": closed },
+      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded, "link.copied": linkCopied, "text.copied": textCopied, "book.closed": closed, "passage.added": passageAdded },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -321,7 +322,7 @@ class BookReader extends LitElement {
       }
     }
     /* The highlight bubble (Decision 3): a small overlay above the tapped mark's first
-       line, inside the clipped .page. Copy, Copy link and Remove. Placed by --bx/--by set in JS
+       line, inside the clipped .page. Copy, Copy link, Add to note and Remove. Placed by --bx/--by set in JS
        (#positionBubble), so no literal length places it; it lifts above the text and a
        press on it never turns the page (#pointerdown stops there). */
     .bubble {
@@ -366,6 +367,13 @@ class BookReader extends LitElement {
     }
     .bubble .act.remove:hover {
       color: var(--color-danger);
+    }
+    /* aria-disabled rather than disabled, so the button still takes the pointer and its
+       title says what to do first. */
+    .bubble .act[aria-disabled="true"] {
+      cursor: default;
+      color: var(--color-mute);
+      background: none;
     }
     /* A definition list (the O'Reilly idiom for a set of named things): each term set
        apart, its definition indented beneath it so the pairing reads at a glance. */
@@ -2020,7 +2028,7 @@ class BookReader extends LitElement {
     if (this.#pending) this.#positionMake();
   }
 
-  // The bubble for the open highlight (session 3): Copy, Copy link and Remove. Rendered inside .page so it is placed
+  // The bubble for the open highlight (session 3): Copy, Copy link, Add to note (while Slip-Box is shown) and Remove. Rendered inside .page so it is placed
   // against the same box #positionBubble measures; a press on it never turns the page.
   #bubble(snapshot) {
     if (this.#active == null) return nothing;
@@ -2034,9 +2042,35 @@ class BookReader extends LitElement {
         <button class="act copy-link" type="button" @click=${() => this.#copy("link", h)}>
           ${this.#copied === "link" ? "Copied" : "Copy link"}
         </button>
+        ${this.#addButton(snapshot, h)}
         <button class="act remove" type="button" @click=${() => this.#removeActive()}>Remove</button>
       </div>
     `;
+  }
+
+  // Add to note, only while Slip-Box is shown (addToNote). Greyed with its reason as the
+  // tooltip; once pressed it reads "Added" for a moment, then greys, since the note now
+  // holds the passage.
+  #addButton(snapshot, h) {
+    const add = addToNote(snapshot.context, h.id);
+    if (!add) return nothing;
+    return html`
+      <button
+        class="act add"
+        type="button"
+        aria-disabled=${add.enabled ? "false" : "true"}
+        title=${add.why ?? nothing}
+        @click=${() => this.#addActive(h, add)}
+      >
+        ${this.#copied === "note" ? "Added" : "Add to note"}
+      </button>
+    `;
+  }
+
+  #addActive(h, add) {
+    if (!add.enabled) return;
+    this.#actor.send({ type: "_addToNote", id: h.id });
+    this.#flashCopied("note");
   }
 
   // The Highlight button for a finger's selection. Its press never reaches the page, so
