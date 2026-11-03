@@ -142,6 +142,10 @@ for (const engine of ENGINES) {
         await staged.waitFor();
         assert.ok(await staged.locator("svg").isVisible(), "the stage shows the icon");
         assert.ok(await staged.locator(".name").isVisible(), "and the name");
+        // On the phone the stage is as narrow as the dock, so it shows only the icon too.
+        await page.setViewportSize({ width: 390, height: 844 });
+        await until(async () => !(await staged.locator(".name").isVisible()));
+        assert.ok(await staged.locator("svg").isVisible(), "the phone's stage shows the icon");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

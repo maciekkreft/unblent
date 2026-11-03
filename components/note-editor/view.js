@@ -594,15 +594,19 @@ class NoteEditor extends LitElement {
       align-items: center;
       gap: var(--space-2xs);
     }
-    /* The dock is narrow, so there a mark shows only its icon, and its name above it on
-       hover, out of the line's flow so the text never moves. The stage keeps the name. */
-    :host(:not([stage])) .marks .mark {
+    /* The dock is narrow, and so is the stage on the phone ([narrow]), so there a mark
+       shows only its icon, and its name above it on hover, out of the line's flow so the
+       text never moves. The stage on the desk keeps the name. */
+    :host(:not([stage])) .marks .mark,
+    :host([narrow]) .marks .mark {
       position: relative;
     }
-    :host(:not([stage])) .marks .mark .name {
+    :host(:not([stage])) .marks .mark .name,
+    :host([narrow]) .marks .mark .name {
       display: none;
     }
-    :host(:not([stage])) .marks .mark:hover .name {
+    :host(:not([stage])) .marks .mark:hover .name,
+    :host([narrow]) .marks .mark:hover .name {
       display: block;
       position: absolute;
       bottom: calc(100% + var(--space-2xs));
@@ -762,6 +766,11 @@ class NoteEditor extends LitElement {
   #mirrored = false;
   #resized = new ResizeObserver(() => this.#place());
   #place = () => {
+    // The page is in its phone layout in the phone preview (7.5, views only read it) or
+    // below dock-desk's narrow-desk breakpoint (6.4), the same 45rem.
+    const root = document.documentElement;
+    const rem = parseFloat(getComputedStyle(root).fontSize) || 16;
+    this.toggleAttribute("narrow", root.getAttribute("data-viewport") === "phone" || globalThis.innerWidth < 45 * rem);
     const mirrored = this.getBoundingClientRect().left >= globalThis.innerWidth / 2;
     if (mirrored === this.#mirrored) return;
     this.#mirrored = mirrored;
