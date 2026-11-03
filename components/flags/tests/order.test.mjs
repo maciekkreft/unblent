@@ -14,7 +14,7 @@ const flush = () => new Promise((r) => setTimeout(r, 20));
 
 // What the server says and the device kept: Values and Choice Points hidden, so an
 // asker that read nothing (and so hides nothing) is told apart from one that read it.
-const PICTURE = { off: [], hidden: ["choice-points"], released: ["choice-points"], shown: [] };
+const PICTURE = { off: [], hidden: ["choice-points"], released: ["choice-points", "usage", "slip-box"], shown: ["usage", "slip-box"] };
 const flags = { cached: PICTURE, load: async () => PICTURE, save: async () => PICTURE };
 
 const memory = () => ({
