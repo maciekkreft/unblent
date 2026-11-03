@@ -26,6 +26,9 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 # (notes/machine.js between), digits and letters, never ending in "0".
 _POSITION = re.compile(r"[0-9A-Za-z]{0,199}[1-9A-Za-z]")
 
+# A note's type (13); None, as on every note from before types, reads as fleeting.
+_TYPES = ("fleeting", "literature", "permanent")
+
 
 # `with connection:` alone commits or rolls back and leaves the handle open, to be
 # closed only when the interpreter's cycle collector gets to it (a cursor and its rows
@@ -45,6 +48,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.executescript("ALTER TABLE notes ADD COLUMN about TEXT NOT NULL DEFAULT '[]'")
     if "position" not in columns:
         connection.executescript("ALTER TABLE notes ADD COLUMN position TEXT")
+    if "type" not in columns:
+        connection.executescript("ALTER TABLE notes ADD COLUMN type TEXT")
     try:
         with connection:
             yield connection
@@ -67,6 +72,7 @@ def _record(row: sqlite3.Row) -> dict:
         "deleted": bool(row["deleted"]),
         "about": json.loads(row["about"]),
         "position": row["position"],
+        "noteType": row["type"],
     }
 
 
@@ -91,6 +97,11 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
     position = payload.get("position")
     if position is not None and not (isinstance(position, str) and _POSITION.fullmatch(position)):
         return JSONResponse({"error": "invalid-position"}, status_code=422)
+    # noteType absent leaves the stored type unchanged, as about does (D2); null makes it fleeting.
+    has_type = "noteType" in payload
+    note_type = payload.get("noteType")
+    if note_type is not None and note_type not in _TYPES:
+        return JSONResponse({"error": "invalid-type"}, status_code=422)
     moves_only = "title" not in payload and not deleted
     now = int(time.time() * 1000)
     with _connect(user_id) as connection:
@@ -110,8 +121,8 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
             # upload arrives already gone.
             version = (base or 0) + 1
             connection.execute(
-                "INSERT INTO notes (id, title, body, version, updated_at, seq, deleted, about, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (note_id, title, body, version, now, _next_seq(connection), int(deleted), json.dumps(about if about is not None else []), position),
+                "INSERT INTO notes (id, title, body, version, updated_at, seq, deleted, about, position, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (note_id, title, body, version, now, _next_seq(connection), int(deleted), json.dumps(about if about is not None else []), position, note_type),
             )
             return _reread(connection, note_id)
         # A delete always wins (5): it states no base and is not refused for a stale
@@ -133,9 +144,10 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
             if base != row["version"]:
                 return JSONResponse({"note": _record(row)}, status_code=409)
             restored_about = about if about is not None else json.loads(row["about"])
+            restored_type = note_type if has_type else row["type"]
             connection.execute(
-                "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ?, deleted = 0, about = ? WHERE id = ?",
-                (title, body, row["version"] + 1, now, _next_seq(connection), json.dumps(restored_about), note_id),
+                "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ?, deleted = 0, about = ?, type = ? WHERE id = ?",
+                (title, body, row["version"] + 1, now, _next_seq(connection), json.dumps(restored_about), restored_type, note_id),
             )
             return _reread(connection, note_id)
         # The same text and the same links as the server holds is not a change (5,
@@ -145,7 +157,8 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
         # harmless rather than a conflict. about absent means the links are unchanged (D2).
         existing_about = json.loads(row["about"])
         effective_about = about if about is not None else existing_about
-        if title == row["title"] and body == row["body"] and effective_about == existing_about:
+        effective_type = note_type if has_type else row["type"]
+        if title == row["title"] and body == row["body"] and effective_about == existing_about and effective_type == row["type"]:
             return _record(row)
         # A write must state the version it was based on (5): a mismatch is a
         # conflict carrying the server's copy, so a view can show both.
@@ -153,8 +166,8 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
             return JSONResponse({"note": _record(row)}, status_code=409)
         version = row["version"] + 1
         connection.execute(
-            "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ?, about = ? WHERE id = ?",
-            (title, body, version, now, _next_seq(connection), json.dumps(effective_about), note_id),
+            "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ?, about = ?, type = ? WHERE id = ?",
+            (title, body, version, now, _next_seq(connection), json.dumps(effective_about), effective_type, note_id),
         )
         return _reread(connection, note_id)
 

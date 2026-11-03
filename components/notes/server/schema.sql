@@ -8,6 +8,8 @@
 -- position is the note's place in the list (5), a key the browser computes; last write
 -- wins, so setting it bumps seq but never version. NULL for a note from before places,
 -- which the browser orders by updated_at, newest first, until it is edited or moved.
+-- type is fleeting, literature or permanent (13); NULL, as on a note from before types,
+-- reads as fleeting. It is versioned like the text.
 CREATE TABLE IF NOT EXISTS notes (
     id         TEXT PRIMARY KEY,
     title      TEXT NOT NULL,
@@ -17,6 +19,7 @@ CREATE TABLE IF NOT EXISTS notes (
     seq        INTEGER NOT NULL,
     deleted    INTEGER NOT NULL DEFAULT 0,
     about      TEXT NOT NULL DEFAULT '[]',
-    position   TEXT
+    position   TEXT,
+    type       TEXT
 );
 CREATE INDEX IF NOT EXISTS notes_seq ON notes(seq);

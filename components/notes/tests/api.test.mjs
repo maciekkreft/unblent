@@ -206,11 +206,29 @@ test("a database file from before links gains the about column, defaulting to []
     const cookie = cookieFor(user);
     const all = await (await list(0, cookie)).json();
     assert.deepEqual(all.notes.find((n) => n.id === noteId(1)).about, [], "the migrated row reads as []");
+    assert.equal(all.notes.find((n) => n.id === noteId(1)).noteType, null, "the migrated row has no type, so it reads as fleeting");
     const updated = await (await put(noteId(1), { title: "old2", body: "body2", baseVersion: 1, about: [{ kind: "book", id: "b1" }] }, cookie)).json();
     assert.deepEqual(updated.about, [{ kind: "book", id: "b1" }], "the migrated db can now store links");
   } finally {
     process.emitWarning = saved;
   }
+});
+
+test("noteType rides the create and the pull; absent keeps it, null clears it, a change is a new version", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  const created = await (await put(id, { title: "a", body: "b", baseVersion: null, noteType: "permanent" }, cookie)).json();
+  assert.equal(created.noteType, "permanent");
+  const kept = await (await put(id, { title: "a2", body: "b", baseVersion: 1 }, cookie)).json();
+  assert.equal(kept.noteType, "permanent");
+  const same = await (await put(id, { title: "a2", body: "b", baseVersion: 2, noteType: "permanent" }, cookie)).json();
+  assert.equal(same.version, 2, "the same type is no change");
+  const cleared = await (await put(id, { title: "a2", body: "b", baseVersion: 2, noteType: null }, cookie)).json();
+  assert.equal(cleared.version, 3);
+  assert.equal(cleared.noteType, null);
+  assert.equal((await put(id, { title: "a2", body: "b", baseVersion: 3, noteType: "big" }, cookie)).status, 422);
+  const all = await (await list(0, cookie)).json();
+  assert.equal(all.notes[0].noteType, null);
 });
 
 test("a place is last write wins: saved on any base, no new version, and pulled", async () => {

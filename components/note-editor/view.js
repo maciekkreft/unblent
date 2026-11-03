@@ -605,6 +605,65 @@ class NoteEditor extends LitElement {
       color: var(--color-mute);
       cursor: default;
     }
+    /* The note's type, first on the line: a small outlined button, so it reads as one
+       that opens a choice. */
+    .home-type {
+      appearance: none;
+      margin: 0;
+      font: inherit;
+      cursor: pointer;
+      padding: 0 var(--space-xs);
+      border: var(--border-width) solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+      background: none;
+      color: var(--color-body);
+      white-space: nowrap;
+    }
+    .home-type:hover,
+    .home-type[aria-expanded="true"] {
+      color: var(--color-ink);
+      background: var(--color-surface-hover);
+    }
+    /* The first line: the type, then the book, which fills the rest of it. */
+    .home-first {
+      flex: 1 0 100%;
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+      min-width: 0;
+    }
+    .home-first .home-book {
+      flex: 1 1 auto;
+    }
+    .home .x:disabled {
+      color: var(--color-mute);
+      cursor: default;
+    }
+    .type-row .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    /* A type's line is read whole, so it wraps rather than being cut. */
+    .slip-row.type-row .under {
+      white-space: normal;
+    }
+    .type-row[aria-disabled="true"] .tag {
+      color: var(--color-mute);
+    }
+    .type-add {
+      appearance: none;
+      align-self: flex-start;
+      margin: 0;
+      border: 0;
+      background: none;
+      padding: 0;
+      font: inherit;
+      font-size: var(--text-caption);
+      color: var(--color-accent);
+      text-decoration: underline;
+      cursor: pointer;
+    }
     /* Add to Slip-Box's list: the look of the editor kit's # and [[ lists, never wider than
        the editor. */
     .slip-list {
@@ -1310,6 +1369,86 @@ class NoteEditor extends LitElement {
   // The footer sections the user folded, kept for every note (foldStore).
   #folded = foldStore.recall();
 
+  // The type menu (UI state): open or not, and the row marked for Enter.
+  #types = { open: false, selected: 0 };
+
+  #openTypes(type) {
+    const at = type.options.findIndex((t) => t.value === type.value);
+    this.#types = { open: !this.#types.open, selected: Math.max(0, at) };
+    this.#slip = { open: false, selected: 0 };
+    this.requestUpdate();
+    if (this.#types.open) this.updateComplete.then(() => this.renderRoot.querySelector(".type-menu")?.focus());
+  }
+
+  #closeTypes(refocus) {
+    if (!this.#types.open) return;
+    this.#types = { open: false, selected: 0 };
+    this.requestUpdate();
+    if (refocus) this.updateComplete.then(() => this.renderRoot.querySelector(".home-type")?.focus());
+  }
+
+  // A type picked: set it, or, for Permanent while the note is not in the Slip-Box, open
+  // the Add to Slip-Box list, which is what makes it possible.
+  #pickType(option) {
+    if (!option) return;
+    if (!option.enabled) return this.#slipFirst();
+    this.#actor.send({ type: "_retype", noteType: option.value });
+    this.#closeTypes(true);
+  }
+
+  #slipFirst() {
+    this.#types = { open: false, selected: 0 };
+    this.#slip = { open: false, selected: 0 };
+    this.#openSlip();
+  }
+
+  #typeKey(e, type, vimKeys) {
+    const key = pickerKey(e, { vim: vimKeys });
+    if (!key) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (key === "close") return this.#closeTypes(true);
+    if (key === "pick") return this.#pickType(type.options[this.#types.selected]);
+    const n = type.options.length;
+    this.#types = { open: true, selected: (((this.#types.selected + (key === "down" ? 1 : -1)) % n) + n) % n };
+    this.requestUpdate();
+  }
+
+  #typeMenu(snapshot, type) {
+    if (!this.#types.open) return nothing;
+    const selected = Math.min(this.#types.selected, type.options.length - 1);
+    return html`<div
+      class="slip-list type-menu"
+      role="menu"
+      aria-label="Type of note"
+      tabindex="-1"
+      aria-activedescendant=${`type-${selected}`}
+      @keydown=${(e) => this.#typeKey(e, type, snapshot.context.vimKeys)}
+      @focusout=${(e) => !e.currentTarget.contains(e.relatedTarget) && this.#closeTypes(false)}
+    >
+      ${type.options.map(
+        (t, i) => html`<div
+          class="slip-row type-row"
+          id=${`type-${i}`}
+          role="menuitemradio"
+          aria-checked=${t.value === type.value}
+          aria-disabled=${!t.enabled}
+          aria-selected=${i === selected}
+          title=${t.enabled ? nothing : "A permanent note is kept in the Slip-Box"}
+          @mousedown=${(e) => e.preventDefault()}
+          @click=${() => t.enabled && this.#pickType(t)}
+        >
+          <span class="tag">${t.label}${t.value === type.value ? icon("check") : nothing}</span><span class="under">${t.says}</span>
+          ${t.enabled
+            ? nothing
+            : html`<button class="type-add" type="button" tabindex="-1" @mousedown=${(e) => e.preventDefault()} @click=${() => this.#slipFirst()}>
+                Add it to the Slip-Box first
+              </button>`}
+        </div>`,
+      )}
+    </div>`;
+  }
+
   #openSlip() {
     this.#slip = { open: !this.#slip.open, selected: 0 };
     this.requestUpdate();
@@ -1374,14 +1513,30 @@ class NoteEditor extends LitElement {
 
   // The home line (machine.js: homeOf decides what it names and offers).
   #home(snapshot, home) {
-    const items = [
-      ...home.books.map(
+    const type = home.type
+      ? html`<button
+          class="home-type"
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded=${this.#types.open}
+          title="Type of note"
+          aria-label=${`Type of note: ${home.type.options.find((t) => t.value === home.type.value).label}`}
+          @mousedown=${(e) => e.preventDefault()}
+          @click=${() => this.#openTypes(home.type)}
+        >
+          ${home.type.options.find((t) => t.value === home.type.value).label}
+        </button>`
+      : null;
+    const books = home.books.map(
         (b) => html`<span class="home-book" tabindex=${b.action ? "-1" : nothing}
           ><span title=${b.text}>${b.text}</span>${b.action
             ? html`<button class="relink" type="button" title=${b.action} @mousedown=${(e) => e.preventDefault()} @click=${this.#relink}>${b.action}</button>`
             : nothing}</span
         >`,
-      ),
+    );
+    const items = [
+      // The type leads the first line, beside the book when there is one.
+      ...(type && books.length ? [html`<span class="home-first">${type}${books[0]}</span>`, ...books.slice(1)] : type ? [type, ...books] : books),
       ...home.places.map(
         (p) => html`<span class="home-place"
           ><button class="home-open" type="button" title=${`Open ${p.label}`} @click=${() => this.#actor.send({ type: "_follow", id: p.id })}>${p.label}</button
@@ -1389,8 +1544,9 @@ class NoteEditor extends LitElement {
             ? html`<button
                 class="x"
                 type="button"
-                aria-label=${`Take it out of ${p.label}`}
-                title=${`Take it out of ${p.label}`}
+                ?disabled=${p.stays}
+                aria-label=${p.stays ? "A permanent note stays in the Slip-Box" : `Take it out of ${p.label}`}
+                title=${p.stays ? "A permanent note stays in the Slip-Box" : `Take it out of ${p.label}`}
                 @mousedown=${(e) => e.preventDefault()}
                 @click=${() => this.#actor.send({ type: "_unplace", id: p.id })}
               >
@@ -1416,10 +1572,11 @@ class NoteEditor extends LitElement {
           ]
         : []),
     ];
-    // A dot between the places and Add, never after the book, which ends its own line.
-    const first = home.books.length;
+    // A dot between the places and Add, never after the first line (the type and the book),
+    // which ends its own line; with no book, none after the type either.
+    const first = type && !books.length ? 0 : books.length;
     return html`<div class="home" role="group" aria-label="Where this note belongs">
-      ${items.map((item, i) => html`${i > first ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}${item}`)}${this.#slipList(snapshot)}
+      ${items.map((item, i) => html`${i > first ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}${item}`)}${home.type ? this.#typeMenu(snapshot, home.type) : nothing}${this.#slipList(snapshot)}
     </div>`;
   }
 
@@ -1498,6 +1655,7 @@ class NoteEditor extends LitElement {
     const home = subjecting || staged ? homeOf(snapshot) : null;
     const footer = footerOf(snapshot.context);
     if (!home && this.#slip.open) this.#slip = { open: false, selected: 0 };
+    if (!home?.type && this.#types.open) this.#types = { open: false, selected: 0 };
     const header = home
       ? html`<div class="header homed">${this.#home(snapshot, home)}${subjecting ? this.#openButton(id, isStaged(snapshot.context), vimKeys) : nothing}</div>`
       : subjecting

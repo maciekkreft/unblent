@@ -88,6 +88,17 @@ function firstPosition(context) {
   return between(null, min);
 }
 
+// A note's type (13): fleeting, literature or permanent. A note without one, as every
+// note from before types, is fleeting; a record keeps the field only when it holds a type.
+const TYPES = ["fleeting", "literature", "permanent"];
+export const typeOf = (value) => (TYPES.includes(value) ? value : undefined);
+const typed = (value) => (typeOf(value) ? { noteType: value } : {});
+
+// A save changes more than the text when it names links (D2) or a type the note does not
+// have yet; such a save is a step of its own (12, Undo), even with the same text.
+const restates = (current, event) =>
+  event.about !== undefined || (event.noteType !== undefined && typeOf(event.noteType) !== typeOf(current?.noteType));
+
 // An outbox row with text (a save or a delete), as against a row that only moves a note.
 const hasText = (row) => row != null && "title" in row;
 
@@ -100,6 +111,7 @@ const listRow = (record) => ({
   updatedAt: record.updatedAt,
   about: record.about ?? [],
   position: positionOf(record),
+  ...typed(record.noteType),
 });
 
 // The steps that last wrote a record's text and its place in this browser (12, Undo) are
@@ -269,7 +281,7 @@ function applySave(context, event, enqueue) {
 
   // The user left a note whose text notes already holds: the stretch of typing ends
   // (12, Undo), and nothing is written, so a pause already saved is no conflict either.
-  if (event.left === true && current && title === current.title && body === current.body && event.about === undefined) {
+  if (event.left === true && current && title === current.title && body === current.body && !restates(current, event)) {
     if (context.stretch?.note === id) {
       context.stretch = null;
       enqueue.assign({ stretch: null });
@@ -281,6 +293,8 @@ function applySave(context, event, enqueue) {
   // gets []. So a save that omits about (every save but a new note's) is a no-op when
   // its text is unchanged, and a save that carries about is always a change.
   const about = event.about !== undefined ? event.about : current ? current.about ?? [] : [];
+  // noteType is kept the same way: present replaces it, absent leaves it.
+  const noteType = event.noteType !== undefined ? typeOf(event.noteType) : typeOf(current?.noteType);
   // A new note takes a place before every note; a note without one keeps the place it
   // shows in now, written down, so the edit does not move it (5).
   const unplaced = !current || !isPosition(current.position);
@@ -296,10 +310,10 @@ function applySave(context, event, enqueue) {
       });
       return;
     }
-    if (current && title === current.title && body === current.body && event.about === undefined) return;
+    if (current && title === current.title && body === current.body && !restates(current, event)) return;
     const step = stepFor(context, current, event, about);
     const version = current ? current.version + 1 : baseVersion === null ? 1 : baseVersion + 1;
-    const record = { id, title, body, version, updatedAt: context.now(), about, position, ...stamps(current, step) };
+    const record = { id, title, body, version, updatedAt: context.now(), about, position, ...typed(noteType), ...stamps(current, step) };
     context.notes.set(id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     enqueue.emit(changed(record, false));
@@ -308,16 +322,16 @@ function applySave(context, event, enqueue) {
   }
 
   // Signed in: nothing pending and the same text is not a change (5, idempotent).
-  if (current && title === current.title && body === current.body && !context.outbox.has(id) && event.about === undefined) return;
-  const same = current && title === current.title && body === current.body && event.about === undefined;
+  if (current && title === current.title && body === current.body && !context.outbox.has(id) && !restates(current, event)) return;
+  const same = current && title === current.title && body === current.body && !restates(current, event);
   const step = same ? null : stepFor(context, current, event, about);
   const version = current ? current.version : 1;
-  const record = { id, title, body, version, updatedAt: context.now(), about, position, ...stamps(current, step) };
+  const record = { id, title, body, version, updatedAt: context.now(), about, position, ...typed(noteType), ...stamps(current, step) };
   context.notes.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const existing = context.outbox.get(id);
   // A row that only moved the note keeps no base; the edit is based on the held version.
-  const row = { id, title, body, about, baseVersion: hasText(existing) ? existing.baseVersion : current ? current.version : null };
+  const row = { id, title, body, about, noteType: noteType ?? null, baseVersion: hasText(existing) ? existing.baseVersion : current ? current.version : null };
   // The place rides the write only when this device set it (5: last write wins), so an
   // edit never carries a stale place over a move made on another device.
   if (unplaced || existing?.position !== undefined) row.position = position;
@@ -496,7 +510,9 @@ function place(context, enqueue, current, position, step) {
 
 // --- Steps (12, Undo) -------------------------------------------------------------------
 
-const textOf = (r) => ({ title: r.title, body: r.body, about: r.about ?? [] });
+// A step's text holds the type only when the note has one; without it the note is
+// fleeting, as every note was before types, so an Undo or Redo that names none clears it.
+const textOf = (r) => ({ title: r.title, body: r.body, about: r.about ?? [], ...typed(r.noteType) });
 
 // `prior` is the step that wrote a record before this one, so an Undo leaves the record
 // as that step left it and the step before can be undone next; a record no step of this
@@ -530,8 +546,8 @@ function stamps(current, step) {
 // written (the chapter label) is a step of its own.
 function textStep(context, current, event) {
   const open = context.stretch;
-  const joins = open != null && open.note === event.id && current?.step === open.id && event.about === undefined;
-  const closes = event.left === true || (current != null && event.about !== undefined && !joins);
+  const joins = open != null && open.note === event.id && current?.step === open.id && !restates(current, event);
+  const closes = event.left === true || (current != null && restates(current, event) && !joins);
   if (joins) return { id: open.id, before: open.before, closes };
   const before = current
     ? { kind: "note", id: current.id, ...textOf(current), deleted: false, ...priorOf(current.step) }
@@ -610,21 +626,22 @@ function recordText(context, enqueue, step, record) {
 // A step's text written back. A tombstone comes back with a restore write (5): signed in
 // it names the tombstone's version as its base, which the server accepts and versions
 // like any change; while the delete itself is still in the outbox, the write replaces it.
-function rewrite(context, enqueue, current, text, step) {
-  const { deleted, ...kept } = current;
+function rewrite(context, enqueue, current, written, step) {
+  const { deleted, noteType: held, ...kept } = current;
+  const { noteType, ...text } = written;
   const { id } = current;
   if (context.userId == null) {
-    const record = { ...kept, ...text, version: current.version + 1, updatedAt: context.now(), step };
+    const record = { ...kept, ...text, ...typed(noteType), version: current.version + 1, updatedAt: context.now(), step };
     context.notes.set(id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     enqueue.emit(changed(record, false));
     return;
   }
-  const record = { ...kept, ...text, updatedAt: context.now(), step };
+  const record = { ...kept, ...text, ...typed(noteType), updatedAt: context.now(), step };
   context.notes.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const existing = context.outbox.get(id);
-  const row = { id, ...text, baseVersion: hasText(existing) ? existing.baseVersion : current.version };
+  const row = { id, ...text, noteType: typeOf(noteType) ?? null, baseVersion: hasText(existing) ? existing.baseVersion : current.version };
   if (existing?.position !== undefined || current.deleted) row.position = positionOf(current);
   context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
@@ -659,7 +676,7 @@ function applyStep(context, event, enqueue) {
       return settle("applied");
     }
     if (typeof p.title !== "string" || typeof p.body !== "string") return settle("refused", "changed");
-    rewrite(context, enqueue, at, { title: p.title, body: p.body, about: Array.isArray(p.about) ? p.about : current.about ?? [] }, leaves(p));
+    rewrite(context, enqueue, at, { title: p.title, body: p.body, about: Array.isArray(p.about) ? p.about : current.about ?? [], noteType: p.noteType }, leaves(p));
     return settle("applied");
   }
   if (p.kind === "notes" && Array.isArray(p.notes)) {
@@ -670,7 +687,7 @@ function applyStep(context, event, enqueue) {
       if (n.deleted === true) {
         if (!r.deleted) tombstone(context, enqueue, r, leaves(n));
         else stamp(context, enqueue, r, { step: leaves(n) });
-      } else rewrite(context, enqueue, r, { title: n.title, body: n.body, about: Array.isArray(n.about) ? n.about : r.about ?? [] }, leaves(n));
+      } else rewrite(context, enqueue, r, { title: n.title, body: n.body, about: Array.isArray(n.about) ? n.about : r.about ?? [], noteType: n.noteType }, leaves(n));
     });
     return settle("applied");
   }
@@ -732,6 +749,7 @@ async function claim(store, ask, api) {
 // place, based on the version it holds, which the server adopts on first insert.
 function resendRow(note) {
   const row = { id: note.id, title: note.title, body: note.body, baseVersion: note.version, about: note.about ?? [] };
+  if (typeOf(note.noteType)) row.noteType = note.noteType;
   if (note.deleted) row.deleted = true;
   if (isPosition(note.position)) row.position = note.position;
   return row;
@@ -848,7 +866,9 @@ export const machine = setup({
       "versions itself, and signing in uploads every note with its history. A note's `about` " +
       "names what it is about, none, one or many: a save without `about` keeps the links, a " +
       "save with it replaces them, and a link to a book that carries a place and a quote makes " +
-      "the note a highlight. The open note is the note in the editor, kept in memory on this " +
+      "the note a highlight. A note has a type, `noteType`, fleeting, literature or permanent; a note without " +
+      "one is fleeting, and a save without `noteType` keeps it, so a change of type is a save of its " +
+      "own and one step. The open note is the note in the editor, kept in memory on this " +
       "device; `notes: open` answers with it in full, and is offered to the chat as \"Reading " +
       "the open note\". Two short lists, newest first and at most 20 unless more are asked " +
       "for (up to 50), with how many match in all, are offered to the chat: the notes without " +
@@ -1194,6 +1214,7 @@ function applySync(context, output, enqueue) {
       version: ack.version,
       updatedAt: ack.updatedAt,
       about: held ? held.about ?? [] : ack.about ?? [],
+      ...typed(held ? held.noteType : ack.noteType),
       ...stamps(held, null),
     };
     const position = held && isPosition(held.position) ? held.position : ack.position;
@@ -1211,7 +1232,7 @@ function applySync(context, output, enqueue) {
     enqueue(() => context.store.outboxDelete(conflict.id).catch(() => {}));
     const theirs = conflict.theirs;
     const wasVisible = visible(context.notes.get(conflict.id));
-    const record = { id: conflict.id, title: theirs.title, body: theirs.body, version: theirs.version, updatedAt: theirs.updatedAt, about: theirs.about ?? [] };
+    const record = { id: conflict.id, title: theirs.title, body: theirs.body, version: theirs.version, updatedAt: theirs.updatedAt, about: theirs.about ?? [], ...typed(theirs.noteType) };
     if (theirs.deleted) record.deleted = true;
     // The place was saved even though the text was refused (5: a place never conflicts).
     if (isPosition(theirs.position)) record.position = theirs.position;
@@ -1254,7 +1275,7 @@ function applySync(context, output, enqueue) {
     // still to be sent. Otherwise a live copy at a higher version is a restore write made
     // elsewhere, the one revival the server accepts.
     if (current && current.deleted && !note.deleted && context.outbox.get(note.id)?.deleted) continue;
-    const record = { id: note.id, title: note.title, body: note.body, version: note.version, updatedAt: note.updatedAt, about: note.about ?? [] };
+    const record = { id: note.id, title: note.title, body: note.body, version: note.version, updatedAt: note.updatedAt, about: note.about ?? [], ...typed(note.noteType) };
     const position = moving ? current?.position : isPosition(note.position) ? note.position : current?.position;
     if (isPosition(position)) record.position = position;
     if (note.deleted) {

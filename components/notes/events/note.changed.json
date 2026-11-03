@@ -10,6 +10,7 @@
     "version": { "type": "integer", "minimum": 1 },
     "pending": { "type": "boolean" },
     "updatedAt": { "type": "integer" },
+    "noteType": { "enum": ["fleeting", "literature", "permanent"], "description": "The note's type (13): fleeting, literature or permanent. Absent means fleeting." },
     "position": { "type": "string", "description": "The note's place in the list: a key that sorts by plain comparison, the list in ascending order (5)." },
     "about": {
       "type": "array",
