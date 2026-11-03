@@ -593,6 +593,77 @@ def check_steps(manifests: dict) -> None:
         fail(f"components/{name}/machine.js", "steps check (11.2)", detail)
 
 
+# --- Counts check (architecture.md 7.3, 11.2) -------------------------------------
+
+
+def counts_breaks(recs: dict, parties: dict) -> list:
+    """Section 7.3: a fact that declares `counts` classes every event a view emits into
+    one of its own `features`, by event name, or by the sending view when one event
+    belongs to different features. Planned views count too, as in the steps check, so
+    an event is classed when its view is agreed rather than when it is built. Pure over
+    recs ({name: manifest}) and _contract_parties, so a unit test needs no tree. Returns
+    a list of (fact, detail)."""
+    events = parties["events"]
+    views = {n for n, m in recs.items() if m["meta"].get("kind") == "view"}
+    from_views = {}
+    for ev, p in events.items():
+        emitters = sorted(p.get("emitters", set()) & views)
+        if emitters:
+            from_views[ev] = emitters
+    out = []
+    for name, m in sorted(recs.items()):
+        meta = m["meta"]
+        if "counts" not in meta:
+            continue
+        where = f"`meta.counts` in `components/{name}/machine.js`"
+        if meta.get("kind") != "fact":
+            out.append((name, "a view component has no `counts`; a fact classes the events views emit"))
+            continue
+        features = meta.get("features")
+        counts = meta["counts"]
+        if not (isinstance(features, list) and features and all(isinstance(f, str) for f in features)):
+            out.append((name, f"a fact with `counts` lists the feature ids it may use in `meta.features` "
+                              f"of `components/{name}/machine.js`"))
+            continue
+        if not isinstance(counts, dict):
+            out.append((name, f"{where} must map event names to a feature id or to {{view: feature id}}"))
+            continue
+        choose = ", ".join(features)
+        for ev, emitters in sorted(from_views.items()):
+            if ev in counts:
+                continue
+            out.append((name, f"`{ev}` is emitted by {', '.join(f'`{e}`' for e in emitters)} but not counted: "
+                              f"add \"{ev}\": \"<feature>\" to {where}, picking the feature the user is in "
+                              f"when they do this: {choose}; use a map {{\"<view>\": \"<feature>\"}} if the "
+                              f"event belongs to different features depending on the view that emits it"))
+        for ev, val in counts.items():
+            if ev not in from_views:
+                out.append((name, f"`{ev}` in {where} is not an event any view emits; remove it"))
+                continue
+            if isinstance(val, dict):
+                emitters = from_views[ev]
+                for view in emitters:
+                    if view not in val:
+                        out.append((name, f"`{ev}` is also emitted by `{view}`: add \"{view}\": \"<feature>\" "
+                                          f"to its map in {where}, one of: {choose}"))
+                for view, feat in val.items():
+                    if view not in emitters:
+                        out.append((name, f"`{view}` in the map of `{ev}` in {where} does not emit `{ev}`; remove it"))
+                    elif feat not in features:
+                        out.append((name, f"`{ev}` from `{view}` is counted as {feat!r}; a feature is one of: {choose}"))
+            elif val not in features:
+                out.append((name, f"`{ev}` is counted as {val!r}; a feature is one of: {choose}"))
+    return out
+
+
+def check_counts(manifests: dict) -> None:
+    """Section 7.3, 11.2: every user action is counted by each fact that counts them.
+    Defers the decision to counts_breaks."""
+    recs = {Path(p).parent.name: m for p, m in manifests.items()}
+    for name, detail in counts_breaks(recs, _contract_parties(manifests)):
+        fail(f"components/{name}/machine.js", "counts check (7.3)", detail)
+
+
 # --- Schema compatibility check (architecture.md 7.1, 7.2, 11.2) -----------------
 
 _SCHEMA_GLOBS = [
@@ -2418,6 +2489,7 @@ def main() -> None:
     _timed(timings, "send check", check_sends, manifests)
     _timed(timings, "supersession check", check_supersession, manifests)
     _timed(timings, "steps check", check_steps, manifests)
+    _timed(timings, "counts check", check_counts, manifests)
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "kit", check_kit, manifests)
     _timed(timings, "journeys", check_journeys)
