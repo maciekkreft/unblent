@@ -226,9 +226,22 @@ export const linkMissing = ({ notes, removed }) => (id) =>
 const marksPassage = (about) => links(about).some((l) => l.kind === "book" && l.place);
 
 // What the editor knows of each note a link may name, by id, from notes: list and
-// note.changed: { title, about (its first line under the title), highlight, updatedAt }.
+// note.changed: { title, about (its first line under the title), highlight, updatedAt,
+// parents (the notes it is under), passage (a highlight's book, place, quote and chapter) }.
 // A deleted note's entry stays, so its grey tag still says it was a note.
-const entryOf = (n) => ({ title: n.title ?? "", about: n.subtitle ?? "", highlight: marksPassage(n.about), updatedAt: n.updatedAt ?? 0 });
+const passageLink = (about) => links(about).find((l) => l.kind === "book" && l.place) ?? null;
+const passageOfLink = (link) =>
+  link ? { book: link.id, place: link.place, quote: link.quote?.exact ?? "", chapterTitle: link.chapterTitle ?? null } : null;
+// A line shown under a note's title in a list: its source links read as their labels.
+const plainLinks = (text) => String(text ?? "").replace(SOURCE_LINK, (_m, label) => label.replace(/\\(.)/g, "$1"));
+const entryOf = (n) => ({
+  title: n.title ?? "",
+  about: plainLinks(n.subtitle),
+  highlight: marksPassage(n.about),
+  updatedAt: n.updatedAt ?? 0,
+  parents: links(n.about).filter((l) => l.kind === "note").map((l) => l.id),
+  passage: passageOfLink(passageLink(n.about)),
+});
 const entriesOf = (notes) => Object.fromEntries(notes.map((n) => [n.id, entryOf(n)]));
 
 // The name a source link's tag shows (10): a note's title now, by the link's id, so a
@@ -273,6 +286,153 @@ export function linkableNotes(context) {
 
 const without = (list, id) => (list.includes(id) ? list.filter((x) => x !== id) : list);
 
+// --- The home line and the footer (Slip-Box) -------------------------------------------
+// While Slip-Box shows, a note says above its text where it belongs, its book and chapter
+// and its places in the Slip-Box, and at its bottom what it holds and what points at it.
+// All of it is worked out here from what notes reported, so it is tested in Node.
+
+// The Journal's book id (books/machine.js), copied because components never import each
+// other (11.2): its name is known before any subject has named it.
+const JOURNAL = "00000000000000000000000JRN";
+
+// Whether a note exists, as far as notes has said (all of them while it has not answered).
+const exists = (context, id) => id === SLIPBOX || context.notes === null || context.notes.includes(id);
+
+// Whether a note's chain of parents reaches the Slip-Box; a loop never does.
+export function inSlipBox(entries, id, seen = new Set()) {
+  if (id === SLIPBOX) return true;
+  if (seen.has(id)) return false;
+  seen.add(id);
+  return (entries[id]?.parents ?? []).some((p) => inSlipBox(entries, p, seen));
+}
+
+// Whether `id` is `under` or a note under it, at any depth, so a note is never put under
+// itself or under a note below it.
+const below = (entries, id, under, seen = new Set()) => {
+  if (id === under) return true;
+  if (seen.has(id)) return false;
+  seen.add(id);
+  return (entries[id]?.parents ?? []).some((p) => below(entries, p, under, seen));
+};
+
+// A place in the Slip-Box as the home line names it.
+const placeLabel = (context, id) => {
+  if (id === SLIPBOX) return "Slip-Box";
+  const title = nameOf(context.entries[id]?.title ?? (context.subject?.id === id ? context.subject.title : ""));
+  return inSlipBox(context.entries, id) ? `Slip-Box › ${title}` : title;
+};
+
+// The links the home line reads: the open note's, or, for a new note while following the
+// stage, the one it will be given at its first save (savedEvent).
+const homeLinks = (snapshot) => {
+  const { about, subjecting, subject, baseVersion } = snapshot.context;
+  if (links(about).length) return links(about);
+  const fresh = ["empty", "blank", "refollowing", "editing"].some((state) => snapshot.matches(state));
+  return subjecting && baseVersion === null && fresh && subject ? [{ kind: subject.kind, id: subject.id, ...chapterPart(subject) }] : [];
+};
+
+// Whether the open note can be given a new place or lose one: a written note, never the
+// Slip-Box itself, while Slip-Box shows.
+const rehomable = (context) => slipBoxShown(context.hidden) && context.id != null && context.id !== SLIPBOX && context.baseVersion !== null;
+
+// The home line, or null while Slip-Box is hidden or no note is open: `books`, each book
+// or Journal link as "<book> · <chapter>", with the chapter label's button (relinkOf) on
+// the first; `places`, each note the open note is under, by id and label; and `add`,
+// whether "Add to Slip-Box…" shows and whether it has anywhere to offer. A place has an ×
+// (removable) once the note is written.
+export function homeOf(snapshot) {
+  const { context } = snapshot;
+  const list = homeLinks(snapshot);
+  if (!slipBoxShown(context.hidden) || (context.id == null && list.length === 0)) return null;
+  const action = relinkOf(context)?.label ?? null;
+  const books = list
+    .filter((l) => l.kind === "book" && !l.place)
+    .map((l) => {
+      const title = context.titles?.[`book:${l.id}`] ?? (l.id === JOURNAL ? "Journal" : null);
+      const text = [title, l.chapterTitle].filter(Boolean).join(" · ");
+      return { id: l.id, text, action: list[0] === l ? action : null };
+    })
+    .filter((b) => b.text);
+  // A new note's place is the one it will be given at its first save, so it has no ×.
+  const places = list.filter((l) => l.kind === "note").map((l) => ({ id: l.id, label: placeLabel(context, l.id), removable: rehomable(context) }));
+  const add = rehomable(context) && !context.entries[context.id]?.highlight ? { enabled: slipBoxTargets(context).length > 0 } : null;
+  // Nothing to name or offer (the Slip-Box itself, a highlight, a fresh note about
+  // nothing): no line, so the editor keeps the header it has without Slip-Box.
+  if (!books.length && !places.length && !add) return null;
+  return { books, places, add };
+}
+
+// The places "Add to Slip-Box…" offers, { id, title, about } each: the Slip-Box, then
+// every note whose chain of parents reaches it, the most recently edited first; never the
+// open note, a note it is already under, or a note under it, so there is no loop.
+export function slipBoxTargets(context) {
+  if (!rehomable(context)) return [];
+  const own = new Set(links(context.about).filter((l) => l.kind === "note").map((l) => l.id));
+  const box = Object.entries(context.entries)
+    .filter(([id, e]) => id !== SLIPBOX && !e.highlight && exists(context, id) && inSlipBox(context.entries, id))
+    .filter(([id]) => !own.has(id) && !below(context.entries, id, context.id))
+    .sort(([, a], [, b]) => b.updatedAt - a.updatedAt)
+    .map(([id, e]) => ({ id, title: placeLabel(context, id), about: e.about }));
+  return [...(own.has(SLIPBOX) ? [] : [{ id: SLIPBOX, title: "Slip-Box", about: "" }]), ...box];
+}
+
+// The first words of a passage, quoted, as the footer shows it.
+const PASSAGE_WORDS = 7;
+const firstWords = (text) => {
+  const words = String(text ?? "").split(/\s+/).filter(Boolean);
+  if (!words.length) return "";
+  return `“${words.slice(0, PASSAGE_WORDS).join(" ")}${words.length > PASSAGE_WORDS ? "…" : ""}”`;
+};
+
+// The footer, or null while Slip-Box is hidden or no written note is open: `passages`, the
+// highlights the note holds (its links of kind "highlight"), each by its first words and
+// chapter, `gone` once the highlight is removed; `under`, the notes under it, only in the
+// panel's editor (null on the stage, where the side list shows them); `linked`, the notes
+// whose text links to it. Each list as { id, title } in the order shown.
+export function footerOf(context) {
+  // A fresh note holds nothing and nothing links to it yet; the Slip-Box always shows it.
+  if (!slipBoxShown(context.hidden) || context.id == null || (context.id !== SLIPBOX && context.baseVersion === null)) return null;
+  const passages = links(context.about)
+    .filter((l) => l.kind === "highlight")
+    .map((l) => {
+      const passage = exists(context, l.id) ? context.entries[l.id]?.passage : null;
+      return passage ? { id: l.id, words: firstWords(passage.quote), chapter: passage.chapterTitle, gone: false } : { id: l.id, words: "A removed passage", chapter: null, gone: true };
+    });
+  const notesOf = (ids) =>
+    ids
+      .filter((id) => id !== context.id && exists(context, id) && context.entries[id] && !context.entries[id].highlight)
+      .sort((a, b) => context.entries[b].updatedAt - context.entries[a].updatedAt)
+      .map((id) => ({ id, title: nameOf(context.entries[id].title) }));
+  const under = context.staged ? null : notesOf(Object.keys(context.entries).filter((id) => context.entries[id].parents.includes(context.id)));
+  return { passages, under, linked: notesOf(context.linked) };
+}
+
+// Linked from after a note's news: a note whose text holds a link to the open one's id is
+// in it, any other is not. A highlight never is, as notes: find leaves them out.
+const linksTo = (body, id) => typeof body === "string" && body.includes(`(note:${id})`);
+const linkedAfter = (context, event) => {
+  const id = context.linkedFor;
+  if (id == null || event.id === id) return context.linked;
+  const holds = !marksPassage(event.about) && linksTo(event.body, id);
+  if (holds) return context.linked.includes(event.id) ? context.linked : [...context.linked, event.id];
+  return without(context.linked, event.id);
+};
+
+// A change of the open note's links from the home line or the footer (4.3, fifth rule):
+// a save like the chapter label's, with the draft as it stands, carrying the new links;
+// one step (12, Undo). The links change on screen at once; the echo brings back what
+// notes now holds.
+const rehome = (aboutOf) =>
+  enqueueActions(({ context, event, enqueue }) => {
+    const about = aboutOf({ context, event });
+    enqueue.assign({ about, sent: { body: context.body }, finished: [], checkedText: context.body });
+    enqueue.emit({ ...savedEvent(context), about });
+  });
+
+// When to ask notes which notes link to the note shown: while Slip-Box shows, whenever
+// another note is shown.
+const linkedDue = (context) => slipBoxShown(context.hidden) && context.id !== context.linkedFor;
+
 // notes' news (4.3, fourth rule) for the source links: a note made, changed or brought
 // back (Undo) exists; a deleted one does not. Run on every note.changed and note.deleted,
 // whatever else the editor does with it.
@@ -280,10 +440,12 @@ const trackChanged = assign(({ context, event }) => ({
   notes: context.notes === null || context.notes.includes(event.id) ? context.notes : [...context.notes, event.id],
   removed: without(context.removed, event.id),
   entries: { ...context.entries, [event.id]: entryOf(event) },
+  linked: linkedAfter(context, event),
 }));
 const trackDeleted = assign(({ context, event }) => ({
   notes: context.notes === null ? null : without(context.notes, event.id),
   removed: context.notes === null ? [...without(context.removed, event.id), event.id] : context.removed,
+  linked: without(context.linked, event.id),
 }));
 
 // Which notes exist, from a list reply (the start's or a re-follow's), so a tag whose
@@ -508,6 +670,14 @@ export const machine = setup({
         () => {},
       );
     }),
+    // The notes whose text links to the note shown (Linked from); note.changed and
+    // note.deleted are held for us until the reply lands (notes: find supersededBy).
+    linked: fromCallback(({ input, sendBack }) => {
+      Promise.resolve(input.ask("notes", "find", { contains: `(note:${input.id})`, limit: 50 })).then(
+        (reply) => sendBack({ type: "_linked", id: input.id, reply }),
+        () => {},
+      );
+    }),
     // Following a source link asks notes for the note it names beside whatever the editor is
     // doing, so the draft and its state are untouched; the reply comes back as _followed.
     follow: fromCallback(({ input, sendBack }) => {
@@ -572,6 +742,12 @@ export const machine = setup({
       enqueue.assign({ checkedId: due.id, checkedText: due.text, ...(due.reset || !hashed ? { checks: null } : {}) });
       enqueue.stopChild("checks");
       if (hashed) enqueue.spawnChild("checks", { id: "checks", input: { ask: context.ask, id: due.id, text: due.text } });
+    }),
+    // Ask notes which notes link to the note shown (linkedDue).
+    readLinked: enqueueActions(({ context, enqueue }) => {
+      enqueue.assign({ linkedFor: context.id, linked: [] });
+      enqueue.stopChild("linked");
+      if (context.id != null) enqueue.spawnChild("linked", { id: "linked", input: { ask: context.ask, id: context.id } });
     }),
     // A pick opens its note, also while keepOpen is on; the note open before is left.
     open: enqueueActions(({ event, enqueue }) => {
@@ -640,7 +816,24 @@ export const machine = setup({
       "renames every tag that links to it and no linking text changes; the title written " +
       "in the link shows only, grey, when the note is gone. A click on it, or Enter in Vim's " +
       "normal mode, opens that note, found by the id alone: here, or, in the stage's editor, " +
-      "on a tab of its own on the stage; a link to the Slip-Box opens it on the stage. With `subject` the " +
+      "on a tab of its own on the stage; a link to the Slip-Box opens it on the stage. " +
+      "While Slip-Box is shown, a muted line above the text, in this editor and in the stage's, says where " +
+      "the note belongs, in place of the About line and the chapter label: its book and chapter (\"Journal · \" and the day " +
+      "for the Journal), with the chapter label's Link or Unlink button on hover; then each note it is under, " +
+      "as \"Slip-Box\" or \"Slip-Box › \" and that note's title (only the title for a note outside the " +
+      "Slip-Box), which opens that note on a click, with an × that takes it out of that place; then " +
+      "\"Add to Slip-Box…\", which opens a list in the look of the [[ list, never wider than the editor, of the " +
+      "Slip-Box and every note whose chain of parents reaches it, never the note itself, a place it has or a " +
+      "note under it, so no loop is made; the arrow keys or Ctrl+N and Ctrl+P (and j and k with Vim keys) " +
+      "choose, Enter, Tab or a click adds the note there, Escape or moving away closes it. Each of these " +
+      "changes is a save of the note's links, one step for Undo. Fixed at the bottom of a written note and of the Slip-Box, above the level bar, " +
+      "three sections fold each with its caret, the folds kept in this browser for every note: Passages, the " +
+      "highlights the note holds, each by its first seven words quoted and its chapter, a click opening the " +
+      "book at the passage and an × taking it out of the note (one step), a removed one grey; Notes under " +
+      "this, only here and not on the stage, where the side list shows them, a click opening it here; and " +
+      "Linked from, the notes whose text links to this one by its id, a click opening it here, or on a tab " +
+      "of its own from the stage. An empty section says so in one muted line. With Slip-Box hidden none of " +
+      "this shows. With `subject` the " +
       "header also has Open on stage (and `:tab split` or `:tab sp` while Vim " +
       "keys is on), which shows the note on the stage as a tab of its own; the button is " +
       "accent while the note has a tab there, its arrow points towards the stage, also after the " +
@@ -672,7 +865,7 @@ export const machine = setup({
     kind: "view",
     emits: ["note.saved", "note.opened", "passage.selected", "note.staged", "note.closed"],
     attributes: ["height", "follows", "subject", "stage"],
-    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read", "line-checks: read", "evaluators: list", "flags: read"],
+    asks: ["notes: list", "notes: read", "notes: find", "subject: read", "settings: read", "session: read", "line-checks: read", "evaluators: list", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -722,7 +915,9 @@ export const machine = setup({
     // D9): recalled from the view's own storage (3.1) and written back through
     // rememberTitles, like the open note.
     rememberTitles: input.rememberTitles,
-    titles: (input.subjecting ? input.recallTitles?.() : null) ?? {},
+    // The stage's editor reads them too, for its home line, and learns new ones from
+    // subject.changed without writing them back, which the panel's editor does.
+    titles: input.recallTitles?.() ?? {},
     // The "Vim keys" device preference (12), owned by `settings`: off until it says
     // otherwise, and off on a page without it (the ask replies no-answerer).
     vimKeys: false,
@@ -763,11 +958,17 @@ export const machine = setup({
     // The account's evaluators the "#" picker offers (evaluatorsOf); none until evaluators
     // answers.
     evaluators: [],
+    // The notes whose text links to the note shown (Linked from), and that note's id.
+    linked: [],
+    linkedFor: null,
   }),
   initial: "starting",
   // Asked after any change that shows another note or another text (checksDue), so no
   // state can forget it.
-  always: { guard: ({ context }) => checksDue(context) != null, actions: "readChecks" },
+  always: [
+    { guard: ({ context }) => checksDue(context) != null, actions: "readChecks" },
+    { guard: ({ context }) => linkedDue(context), actions: "readLinked" },
+  ],
   // Beside the states, so the preference arrives whatever the editor is doing and a
   // keystroke never waits for it. settings.changed that races it is held for us until
   // the reply lands (settings: read supersededBy).
@@ -848,6 +1049,31 @@ export const machine = setup({
         enqueue.assign({ about, sent: { body: context.body }, finished: [], checkedText: context.body });
         enqueue.emit({ ...savedEvent(context), about });
       }),
+    },
+    // The home line: a place picked in "Add to Slip-Box…", or one taken away with its ×.
+    _place: {
+      guard: ({ context, event }) => slipBoxTargets(context).some((t) => t.id === event.id),
+      actions: rehome(({ context, event }) => [...links(context.about), { kind: "note", id: event.id }]),
+    },
+    _unplace: {
+      guard: ({ context, event }) => rehomable(context) && links(context.about).some((l) => l.kind === "note" && l.id === event.id),
+      actions: rehome(({ context, event }) => links(context.about).filter((l) => !(l.kind === "note" && l.id === event.id))),
+    },
+    // The footer: a passage taken out of the note with its ×, or opened with a click.
+    _unpassage: {
+      guard: ({ context, event }) => rehomable(context) && links(context.about).some((l) => l.kind === "highlight" && l.id === event.id),
+      actions: rehome(({ context, event }) => links(context.about).filter((l) => !(l.kind === "highlight" && l.id === event.id))),
+    },
+    _passage: {
+      guard: ({ context, event }) => context.entries[event.id]?.passage != null && exists(context, event.id),
+      actions: emit(({ context, event }) => {
+        const { book, place } = context.entries[event.id].passage;
+        return { type: "passage.selected", book, id: event.id, place };
+      }),
+    },
+    _linked: {
+      guard: ({ context, event }) => event.id === context.linkedFor && Array.isArray(event.reply?.notes),
+      actions: assign({ linked: ({ event }) => event.reply.notes.map((n) => n.id).filter((id) => id !== event.id) }),
     },
     // `:q`, `:tabc` or `:tabclose` in the stage's editor closes the note's tab.
     _quit: {
@@ -937,6 +1163,8 @@ export const machine = setup({
           }),
         ],
       },
+      // Not following (the stage's editor): only the subject's title, for the home line.
+      { actions: assign({ titles: ({ context, event }) => withTitle(context.titles, event.subject) }) },
     ],
     // The fact's news that the open note is gone (4.3, fourth rule): fall back to the
     // empty page, where a keystroke starts a fresh note. A deletion of another note only

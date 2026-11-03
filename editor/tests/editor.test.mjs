@@ -44,6 +44,7 @@ import {
   notePicker,
   notesMatching,
   noteLink,
+  pickerKey,
   finishedLines,
 } from "../editor.js";
 
@@ -676,6 +677,22 @@ test("notes matching what is typed: by title, ignoring case, those it starts fir
   assert.deepEqual(notesMatching(notes, "hab").map((n) => n.id), ["2", "1"]);
   assert.deepEqual(notesMatching(notes, "").map((n) => n.id), ["1", "2", "3"]);
   assert.deepEqual(notesMatching(notes, "zz"), []);
+});
+
+test("a picker's keys: arrows and Ctrl+N/P choose, Enter or Tab picks, Escape closes, j and k only when asked", () => {
+  const key = (key, more = {}) => ({ key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, isComposing: false, ...more });
+  assert.equal(pickerKey(key("ArrowDown")), "down");
+  assert.equal(pickerKey(key("ArrowUp")), "up");
+  assert.equal(pickerKey(key("n", { ctrlKey: true })), "down");
+  assert.equal(pickerKey(key("p", { ctrlKey: true })), "up");
+  assert.equal(pickerKey(key("Enter")), "pick");
+  assert.equal(pickerKey(key("Tab")), "pick");
+  assert.equal(pickerKey(key("Escape")), "close");
+  assert.equal(pickerKey(key("Tab", { shiftKey: true })), null);
+  assert.equal(pickerKey(key("Enter", { isComposing: true })), null);
+  assert.equal(pickerKey(key("j")), null);
+  assert.equal(pickerKey(key("j"), { vim: true }), "down");
+  assert.equal(pickerKey(key("k"), { vim: true }), "up");
 });
 
 test("toRegister puts a text in Vim's unnamed register, which p pastes", () => {

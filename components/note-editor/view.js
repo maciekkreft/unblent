@@ -6,8 +6,8 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, refreshLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, notePicker, refreshPicker, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, hintOf, showing, startsTyping, linkMissing, linkTitleOf, linkHintOf, linkableNotes, notSynced, knownTags, lineMarksOf } from "./machine.js";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, refreshLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, notePicker, refreshPicker, pickerKey, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
+import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, hintOf, showing, startsTyping, linkMissing, linkTitleOf, linkHintOf, linkableNotes, notSynced, knownTags, lineMarksOf, homeOf, footerOf, slipBoxTargets } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
@@ -62,6 +62,28 @@ const titleStore = {
       localStorage.setItem(TITLES_KEY, JSON.stringify(titles));
     } catch {
       // No persistence available; the titles live only for this page.
+    }
+  },
+};
+
+// Which footer sections the user folded (passages, under, linked), kept in this browser
+// (3.1) for every note under a key beginning with its name. Wrapped like openStore: a
+// browser refusing storage, or a malformed value, reads nothing folded and drops the write.
+const FOLD_KEY = "note-editor.folded";
+const foldStore = {
+  recall() {
+    try {
+      const folded = JSON.parse(localStorage.getItem(FOLD_KEY));
+      return Array.isArray(folded) ? folded.filter((k) => typeof k === "string") : [];
+    } catch {
+      return [];
+    }
+  },
+  remember(folded) {
+    try {
+      localStorage.setItem(FOLD_KEY, JSON.stringify(folded));
+    } catch {
+      // No persistence available; the folds live only for this page.
     }
   },
 };
@@ -484,6 +506,266 @@ class NoteEditor extends LitElement {
     .open:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
+    }
+    /* The home line (while Slip-Box shows): where the note belongs, one muted line that
+       wraps: its book and chapter, each place in the Slip-Box with its ×, and Add to
+       Slip-Box…, whose list opens under it. */
+    .header.homed {
+      align-items: flex-start;
+    }
+    .home {
+      flex: 1;
+      min-width: 0;
+      position: relative;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-2xs) var(--space-xs);
+      font-size: var(--text-caption);
+      line-height: var(--leading-normal);
+      color: var(--color-body-mid);
+    }
+    .home .sep {
+      color: var(--color-mute);
+    }
+    .home-book,
+    .home-place {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      min-width: 0;
+      outline: none;
+    }
+    /* The book is a line of its own, as the About line was, so its hidden button's room
+       never leaves a gap among the places. */
+    .home-book {
+      flex: 1 0 100%;
+    }
+    .home-book > span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* The chapter label's button, shown only while the pointer or the keyboard is on the
+       book (a tap on a phone), as under the About line. */
+    .home-book .relink {
+      flex: none;
+    }
+    .home-book:hover .relink,
+    .home-book:focus-within .relink {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .home-open,
+    .home-add,
+    .home .x {
+      appearance: none;
+      border: 0;
+      background: none;
+      margin: 0;
+      font: inherit;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .home button:focus-visible,
+    .sections button:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .home-open {
+      padding: 0 var(--space-2xs);
+      color: var(--color-body);
+      text-align: left;
+    }
+    .home-open:hover {
+      color: var(--color-ink);
+    }
+    .home .x,
+    .sections .x {
+      display: inline-flex;
+      padding: var(--space-2xs);
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
+    .home .x:hover,
+    .sections .x:hover {
+      color: var(--color-ink);
+    }
+    .home-add {
+      padding: 0 var(--space-xs);
+      color: var(--color-body-mid);
+      white-space: nowrap;
+    }
+    .home-add:hover:not(:disabled),
+    .home-add[aria-expanded="true"] {
+      color: var(--color-ink);
+      background: var(--color-surface-hover);
+    }
+    .home-add:disabled {
+      color: var(--color-mute);
+      cursor: default;
+    }
+    /* Add to Slip-Box's list: the look of the editor kit's # and [[ lists, never wider than
+       the editor. */
+    .slip-list {
+      position: absolute;
+      left: 0;
+      top: calc(100% + var(--space-xs));
+      z-index: 2;
+      width: calc(var(--space-xl) * 7.5);
+      max-width: 100%;
+      max-height: calc(var(--space-xl) * 7);
+      overflow-y: auto;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+      padding: var(--space-xs);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-card);
+      line-height: var(--leading-tight);
+      outline: none;
+    }
+    .slip-row {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: var(--space-2xs);
+      padding: var(--space-xs) var(--space-sm);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      min-width: 0;
+    }
+    :host([narrow]) .slip-row {
+      min-height: calc(var(--space-xl) + var(--space-sm));
+      box-sizing: border-box;
+    }
+    .slip-row[aria-selected="true"] {
+      background: var(--color-surface-hover);
+    }
+    .slip-row .tag {
+      font-size: var(--text-sm);
+      color: var(--color-accent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .slip-row .under {
+      font-size: var(--text-caption);
+      color: var(--color-body);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* The footer (while Slip-Box shows), fixed at the bottom above the level bar: Passages,
+       Notes under this and Linked from, each folded with its caret. It scrolls on its own
+       when it holds more than fits. */
+    .sections {
+      flex: none;
+      max-height: calc(var(--space-xl) * 6.5);
+      overflow-y: auto;
+      border-top: var(--border-width) solid var(--color-border);
+      padding-top: var(--space-sm);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs);
+    }
+    .sections button {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      font: inherit;
+      margin: 0;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      text-align: left;
+    }
+    .sections .fold {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      margin-left: calc(-1 * var(--space-xs));
+      padding: var(--space-2xs) var(--space-xs);
+      font-size: var(--text-caption);
+      font-weight: var(--weight-semibold);
+      line-height: var(--leading-normal);
+      color: var(--color-body);
+    }
+    :host([narrow]) .sections .fold {
+      min-height: calc(var(--space-lg) + var(--space-sm));
+    }
+    .fold .caret {
+      display: inline-flex;
+      color: var(--color-mute);
+    }
+    .fold[aria-expanded="true"] .caret svg {
+      transform: rotate(90deg);
+    }
+    .fold:hover {
+      color: var(--color-ink);
+    }
+    .section-body {
+      padding-left: var(--space-md);
+    }
+    .section-body .none {
+      margin: 0;
+      font-size: var(--text-caption);
+      line-height: var(--leading-normal);
+      color: var(--color-body-mid);
+    }
+    .passage {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-xs);
+    }
+    .passage .x {
+      flex: none;
+      margin-top: var(--space-xs);
+    }
+    .row {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      width: calc(100% + var(--space-sm));
+      margin-left: calc(-1 * var(--space-xs));
+      padding: var(--space-2xs) var(--space-xs);
+      color: var(--color-body);
+    }
+    :host([narrow]) .row {
+      min-height: calc(var(--space-xl) + var(--space-sm));
+      box-sizing: border-box;
+      justify-content: center;
+    }
+    .row:hover:not(:disabled) {
+      background: var(--color-surface-hover);
+    }
+    .row:disabled {
+      cursor: default;
+    }
+    .row .words,
+    .row .name {
+      display: block;
+      max-width: 100%;
+      font-size: var(--text-sm);
+      line-height: var(--leading-normal);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row .name {
+      font-weight: var(--weight-semibold);
+    }
+    .row .chapter-of {
+      font-size: var(--text-caption);
+      line-height: var(--leading-tight);
+      color: var(--color-mute);
+    }
+    .row.gone .words {
+      color: var(--color-mute);
     }
     /* CM6 owns everything inside .region; it grows with content, capped at the
        container so the status stays in view and the page does not scroll. */
@@ -994,11 +1276,20 @@ class NoteEditor extends LitElement {
   // stage, and under it the chapter label's line. Open on stage is disabled while the
   // editor holds no note; its label names the action for assistive tech.
   #header(aboutTitle, chapter, id, onStage, vimKeys) {
-    const label = `${onStage ? "Show on stage" : "Open on stage"}${vimKeys ? " (:tab split)" : ""}`;
     return html`
       <div class="header">
         <span class="about" title=${aboutTitle ?? nothing}>${aboutTitle ? html`About: ${aboutTitle}` : nothing}</span>
-        <button
+        ${this.#openButton(id, onStage, vimKeys)}
+      </div>
+      <div class="place">${this.#chapter(chapter)}</div>
+    `;
+  }
+
+  // Open on stage, disabled while the editor holds no note; its label names the action
+  // for assistive tech.
+  #openButton(id, onStage, vimKeys) {
+    const label = `${onStage ? "Show on stage" : "Open on stage"}${vimKeys ? " (:tab split)" : ""}`;
+    return html`<button
           class=${this.#mirrored ? "open mirrored" : "open"}
           type="button"
           aria-pressed=${onStage}
@@ -1009,10 +1300,181 @@ class NoteEditor extends LitElement {
           @click=${this.#stageNote}
         >
           ${icon("arrow-square-out")}
+        </button>`;
+  }
+
+  // --- The home line and the footer (Slip-Box) ---------------------------------------
+
+  // Add to Slip-Box's list (UI state): open or not, and the row marked for Enter.
+  #slip = { open: false, selected: 0 };
+  // The footer sections the user folded, kept for every note (foldStore).
+  #folded = foldStore.recall();
+
+  #openSlip() {
+    this.#slip = { open: !this.#slip.open, selected: 0 };
+    this.requestUpdate();
+    // The keyboard goes to the list, where the picker's keys work (the kit's pickerKey).
+    if (this.#slip.open) this.updateComplete.then(() => this.renderRoot.querySelector(".slip-list")?.focus());
+  }
+
+  #closeSlip(refocus) {
+    if (!this.#slip.open) return;
+    this.#slip = { open: false, selected: 0 };
+    this.requestUpdate();
+    if (refocus) this.updateComplete.then(() => this.renderRoot.querySelector(".home-add")?.focus());
+  }
+
+  #pickSlip(targets, index) {
+    const target = targets[index];
+    if (!target) return;
+    this.#actor.send({ type: "_place", id: target.id });
+    this.#closeSlip(true);
+  }
+
+  #slipKey(e, targets, vimKeys) {
+    const key = pickerKey(e, { vim: vimKeys });
+    if (!key) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (key === "close") return this.#closeSlip(true);
+    if (key === "pick") return this.#pickSlip(targets, this.#slip.selected);
+    const n = targets.length;
+    this.#slip = { open: true, selected: (((this.#slip.selected + (key === "down" ? 1 : -1)) % n) + n) % n };
+    this.requestUpdate();
+    this.updateComplete.then(() => this.renderRoot.querySelector('.slip-row[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" }));
+  }
+
+  #slipList(snapshot) {
+    const targets = slipBoxTargets(snapshot.context);
+    if (!this.#slip.open || !targets.length) return nothing;
+    const selected = Math.min(this.#slip.selected, targets.length - 1);
+    return html`<div
+      class="slip-list"
+      role="listbox"
+      aria-label="Add to Slip-Box"
+      tabindex="-1"
+      aria-activedescendant=${`slip-${selected}`}
+      @keydown=${(e) => this.#slipKey(e, targets, snapshot.context.vimKeys)}
+      @focusout=${(e) => !e.currentTarget.contains(e.relatedTarget) && this.#closeSlip(false)}
+    >
+      ${targets.map(
+        (t, i) => html`<div
+          class="slip-row"
+          id=${`slip-${i}`}
+          role="option"
+          aria-selected=${i === selected}
+          @mousedown=${(e) => e.preventDefault()}
+          @click=${() => this.#pickSlip(targets, i)}
+        >
+          <span class="tag">${t.title}</span>${t.about ? html`<span class="under">${t.about}</span>` : nothing}
+        </div>`,
+      )}
+    </div>`;
+  }
+
+  // The home line (machine.js: homeOf decides what it names and offers).
+  #home(snapshot, home) {
+    const items = [
+      ...home.books.map(
+        (b) => html`<span class="home-book" tabindex=${b.action ? "-1" : nothing}
+          ><span title=${b.text}>${b.text}</span>${b.action
+            ? html`<button class="relink" type="button" title=${b.action} @mousedown=${(e) => e.preventDefault()} @click=${this.#relink}>${b.action}</button>`
+            : nothing}</span
+        >`,
+      ),
+      ...home.places.map(
+        (p) => html`<span class="home-place"
+          ><button class="home-open" type="button" title=${`Open ${p.label}`} @click=${() => this.#actor.send({ type: "_follow", id: p.id })}>${p.label}</button
+          >${p.removable
+            ? html`<button
+                class="x"
+                type="button"
+                aria-label=${`Take it out of ${p.label}`}
+                title=${`Take it out of ${p.label}`}
+                @mousedown=${(e) => e.preventDefault()}
+                @click=${() => this.#actor.send({ type: "_unplace", id: p.id })}
+              >
+                ${icon("x")}
+              </button>`
+            : nothing}</span
+        >`,
+      ),
+      ...(home.add
+        ? [
+            html`<button
+              class="home-add"
+              type="button"
+              aria-haspopup="listbox"
+              aria-expanded=${this.#slip.open}
+              ?disabled=${!home.add.enabled}
+              title=${home.add.enabled ? "Put this note under the Slip-Box or a note in it" : "There is no other place in the Slip-Box"}
+              @mousedown=${(e) => e.preventDefault()}
+              @click=${() => this.#openSlip()}
+            >
+              Add to Slip-Box…
+            </button>`,
+          ]
+        : []),
+    ];
+    // A dot between the places and Add, never after the book, which ends its own line.
+    const first = home.books.length;
+    return html`<div class="home" role="group" aria-label="Where this note belongs">
+      ${items.map((item, i) => html`${i > first ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}${item}`)}${this.#slipList(snapshot)}
+    </div>`;
+  }
+
+  #toggleFold(key) {
+    this.#folded = this.#folded.includes(key) ? this.#folded.filter((k) => k !== key) : [...this.#folded, key];
+    foldStore.remember(this.#folded);
+    this.requestUpdate();
+  }
+
+  // One foldable footer section: its caret and name, then its rows or a muted line.
+  #section(key, name, rows, none) {
+    const open = !this.#folded.includes(key);
+    return html`<div class="section">
+      <button class="fold" type="button" aria-expanded=${open} @click=${() => this.#toggleFold(key)}>
+        <span class="caret">${icon("caret-right")}</span><span>${name}</span>
+      </button>
+      ${open ? html`<div class="section-body">${rows.length ? rows : html`<p class="none">${none}</p>`}</div>` : nothing}
+    </div>`;
+  }
+
+  #noteRow(n) {
+    return html`<button class="row" type="button" title=${`Open ${n.title}`} @click=${() => this.#actor.send({ type: "_follow", id: n.id })}>
+      <span class="name">${n.title}</span>
+    </button>`;
+  }
+
+  // The footer (machine.js: footerOf decides what each section holds).
+  #sections(footer) {
+    const passages = footer.passages.map(
+      (p) => html`<div class="passage">
+        <button
+          class=${p.gone ? "row gone" : "row"}
+          type="button"
+          ?disabled=${p.gone}
+          title=${p.gone ? "This highlight was removed" : "Open the passage"}
+          @click=${() => this.#actor.send({ type: "_passage", id: p.id })}
+        >
+          <span class="words">${p.words}</span>${p.chapter ? html`<span class="chapter-of">${p.chapter}</span>` : nothing}
         </button>
-      </div>
-      <div class="place">${this.#chapter(chapter)}</div>
-    `;
+        <button
+          class="x"
+          type="button"
+          aria-label="Take this passage out of the note"
+          title="Take this passage out of the note"
+          @click=${() => this.#actor.send({ type: "_unpassage", id: p.id })}
+        >
+          ${icon("x")}
+        </button>
+      </div>`,
+    );
+    return html`<div class="sections">
+      ${this.#section("passages", "Passages", passages, "No passages yet.")}
+      ${footer.under ? this.#section("under", "Notes under this", footer.under.map((n) => this.#noteRow(n)), "No notes under this yet.") : nothing}
+      ${this.#section("linked", "Linked from", footer.linked.map((n) => this.#noteRow(n)), "No note links here yet.")}
+    </div>`;
   }
 
   // dock-desk's Ctrl+h/j/k/l (12) and list-then-item focus a panel by its host: land
@@ -1029,13 +1491,24 @@ class NoteEditor extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
-    const { subjecting, id, vimKeys } = snapshot.context;
+    const { subjecting, staged, id, vimKeys } = snapshot.context;
     const aboutTitle = this.#aboutTitle(snapshot);
+    // While Slip-Box shows, the home line takes the About line's place (and the stage's
+    // editor gets one too); the footer sits above the level bar.
+    const home = subjecting || staged ? homeOf(snapshot) : null;
+    const footer = footerOf(snapshot.context);
+    if (!home && this.#slip.open) this.#slip = { open: false, selected: 0 };
+    const header = home
+      ? html`<div class="header homed">${this.#home(snapshot, home)}${subjecting ? this.#openButton(id, isStaged(snapshot.context), vimKeys) : nothing}</div>`
+      : subjecting
+        ? this.#header(aboutTitle, chapterLabelOf(snapshot), id, isStaged(snapshot.context), vimKeys)
+        : nothing;
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.
     return html`
       <div class="editor">
-        ${subjecting ? this.#header(aboutTitle, chapterLabelOf(snapshot), id, isStaged(snapshot.context), vimKeys) : nothing}
+        ${header}
         <div class="region" role="textbox" aria-label="Note"></div>
+        ${footer ? this.#sections(footer) : nothing}
         <div class="footer">
           <p class="status">
             <span>${this.#status(snapshot)}</span><span class="sizer" aria-hidden="true">New note</span

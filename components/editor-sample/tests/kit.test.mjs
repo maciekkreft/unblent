@@ -431,6 +431,20 @@ for (const engine of ENGINES) {
       assert.ok(heights.every((h) => h >= 44), `every row at least 44px tall, saw ${heights}`);
     });
 
+    // Browser: rendering and layout.
+    run("on a screen narrower than the list, the list stays inside its editor", { viewport: { width: 320, height: 700 } }, async (page) => {
+      await page.keyboard.type("#");
+      await pickerShown(page, ["#in-my-control", "#inner-critic", "#thinking-traps"]);
+      await until(() => page.evaluate(() => document.querySelector("editor-sample").shadowRoot.querySelector(".cm-hashtag-picker").getBoundingClientRect().top > -1000));
+      const box = await page.evaluate(() => {
+        const root = document.querySelector("editor-sample").shadowRoot;
+        const card = root.querySelector(".cm-hashtag-picker").getBoundingClientRect();
+        const editor = root.querySelector(".cm-editor").getBoundingClientRect();
+        return { card: [card.left, card.right], editor: [editor.left, editor.right] };
+      });
+      assert.ok(box.card[0] >= box.editor[0] - 1 && box.card[1] <= box.editor[1] + 1, `the list within the editor, saw ${JSON.stringify(box)}`);
+    });
+
     // Browser: focus and keys.
     run("Down then Up returns to the first tag, Enter adds it and a space, and Enter after it starts a bullet below", {}, async (page) => {
       await page.keyboard.type("Tonight #in");
