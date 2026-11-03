@@ -298,7 +298,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: rendering and layout.
-    run("a line's marks stand at its right end, and its text never runs under them, on the desk and on a phone", { viewport: { width: 360, height: 640 } }, async (page) => {
+    run("a line's marks stand at the right of its first row, and its text never runs under them, on the desk and on a phone", { viewport: { width: 360, height: 640 } }, async (page) => {
       const long = "The rain kept on all evening and the trains stopped, so the plan for tonight had to change twice";
       await page.keyboard.insertText(`Short line\n${long}\nPlain`);
       await page.evaluate(
@@ -328,7 +328,11 @@ for (const engine of ENGINES) {
           const beside = rows.filter((r) => r.top < marks.bottom - 1 && r.bottom > marks.top + 1);
           assert.ok(beside.every((r) => r.right <= marks.left + 1), `${size.width}px line ${i}: no text runs under the marks`);
         }
-        if (size.width < 400) assert.ok(shape[1].rows.length >= 2, "the long line wraps on a phone");
+        if (size.width < 400) {
+          assert.ok(shape[1].rows.length >= 2, "the long line wraps on a phone");
+          const first = shape[1].rows[0];
+          assert.ok(shape[1].marks.top < first.bottom && shape[1].marks.bottom > first.top, "a wrapped line's marks are on its first row");
+        }
       }
       assert.equal(await text(page), `Short line\n${long}\nPlain`, "the marks are not text");
     });

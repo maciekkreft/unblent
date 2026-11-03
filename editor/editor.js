@@ -1254,11 +1254,10 @@ export function finishedLines(update) {
   return out;
 }
 
-// One editor's line marks. They are a widget after the line's text, not text: the cursor,
+// One editor's line marks. They are a widget before the line's text, not text: the cursor,
 // Vim and CodeMirror pass them by, and a press on one leaves the cursor where it is. The
-// marks float at the line's right end, inside the line, so the text wraps around them by
-// their real width, however long their names are; when the last row of the text leaves
-// no room, they move to a row of their own below it, still on the right.
+// marks float at the right of the line's first row, so a wrapped line shows them where it
+// begins, and the text wraps around them by their real width, however long their names are.
 export function lineMarks({ render }) {
   class MarksWidget extends WidgetType {
     constructor(marks) {
@@ -1295,9 +1294,9 @@ export function lineMarks({ render }) {
       const these = marks.get(line.text.trim());
       if (!these?.length) continue;
       ranges.push(Decoration.line({ class: `cm-checked cm-checked-${Math.min(these.length, 4)}` }).range(line.from));
-      ranges.push(Decoration.widget({ widget: new MarksWidget(these), side: 1 }).range(line.to));
+      ranges.push(Decoration.widget({ widget: new MarksWidget(these), side: -1 }).range(line.from));
     }
-    return Decoration.set(ranges);
+    return Decoration.set(ranges, true);
   });
 
   return [field, drawn, lineMarksTheme];
