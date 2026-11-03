@@ -6,7 +6,9 @@ import { setup, assign, fromPromise, fromCallback, enqueueActions, emit, spawnCh
 // notes: list and reopens a note, or takes a note by the load command or, when it
 // carries `follows`, by note.selected from the list (both ask notes: read); it follows
 // note.changed after (4.3); the same notes: list, with note.changed and note.deleted,
-// also tells which highlights the source links point at still exist. It emits
+// also tells which notes and highlights the source links point at still exist, and the
+// titles their tags show and the "[[" picker offers. It asks flags: read and follows
+// flags.changed for whether Slip-Box shows (3.1). It emits
 // note.saved at a short throttle while the user
 // types, and on blur. With the `subject` attribute it follows the stage (12): it opens
 // the newest note about the subject and re-follows when the subject changes, except while
@@ -216,7 +218,58 @@ export function passageOf(reply, id) {
 // notes no longer lists, once it has answered, or one a follow found gone. While notes has
 // not answered (a page without it), only a follow can tell. The same rule as the journal's
 // (journal-entry/machine.js), copied because components never import each other (11.2).
-export const linkMissing = ({ notes, removed }) => (id) => removed.includes(id) || (notes !== null && !notes.includes(id));
+// The Slip-Box is never missing: it is there before it has any text.
+export const linkMissing = ({ notes, removed }) => (id) =>
+  id !== SLIPBOX && (removed.includes(id) || (notes !== null && !notes.includes(id)));
+
+// A highlight is a note whose link to its book marks a passage (13, Highlight).
+const marksPassage = (about) => links(about).some((l) => l.kind === "book" && l.place);
+
+// What the editor knows of each note a link may name, by id, from notes: list and
+// note.changed: { title, about (its first line under the title), highlight, updatedAt }.
+// A deleted note's entry stays, so its grey tag still says it was a note.
+const entryOf = (n) => ({ title: n.title ?? "", about: n.subtitle ?? "", highlight: marksPassage(n.about), updatedAt: n.updatedAt ?? 0 });
+const entriesOf = (notes) => Object.fromEntries(notes.map((n) => [n.id, entryOf(n)]));
+
+// The name a source link's tag shows (10): a note's title now, by the link's id, so a
+// rename shows in every tag that links to it and no linking text is rewritten; null for
+// a highlight, whose tag keeps the passage written in the link, and for an id the editor
+// does not know, whose stored label shows grey. With Slip-Box hidden, every tag shows its
+// stored label, as before the feature.
+const nameOf = (title) => (title.trim() ? title : "Untitled");
+export const linkTitleOf = ({ entries, hidden }) => (id) => {
+  if (!slipBoxShown(hidden)) return null;
+  if (id === SLIPBOX) return "Slip-Box";
+  const entry = entries[id];
+  return entry && !entry.highlight ? nameOf(entry.title) : null;
+};
+
+// A tag's tooltip: what a click does, or that its target is gone.
+export const linkHintOf = ({ entries, hidden }) => (id, gone) => {
+  const note = slipBoxShown(hidden) && (id === SLIPBOX || (entries[id] && !entries[id].highlight));
+  if (note) return gone ? "This note was removed" : "Open the note";
+  return gone ? "This highlight was removed" : "Open the passage";
+};
+
+// Whether a follow's reply is a note to open, not a highlight: only while Slip-Box shows,
+// since only then are links to notes offered.
+const opensNote = (context, event) => slipBoxShown(context.hidden) && event.reply?.note != null && !marksPassage(event.reply.note.about);
+
+// Whether the Slip-Box feature shows (3.1): not until `flags` answers, and not on a page
+// without it, since the feature is not released until the admin releases it.
+export const slipBoxShown = (hidden) => Array.isArray(hidden) && !hidden.includes("slip-box");
+
+// The notes the "[[" picker offers, { id, title, about } each: while Slip-Box shows, the
+// Slip-Box first, then every note but the open one and the highlights, the most recently
+// edited first; none otherwise, so it never opens.
+export function linkableNotes(context) {
+  if (!slipBoxShown(context.hidden)) return [];
+  const rest = Object.entries(context.entries)
+    .filter(([id, e]) => id !== SLIPBOX && id !== context.id && !e.highlight && (context.notes === null || context.notes.includes(id)))
+    .sort(([, a], [, b]) => b.updatedAt - a.updatedAt)
+    .map(([id, e]) => ({ id, title: nameOf(e.title), about: e.about }));
+  return [...(context.id === SLIPBOX ? [] : [{ id: SLIPBOX, title: "Slip-Box", about: "" }]), ...rest];
+}
 
 const without = (list, id) => (list.includes(id) ? list.filter((x) => x !== id) : list);
 
@@ -226,6 +279,7 @@ const without = (list, id) => (list.includes(id) ? list.filter((x) => x !== id) 
 const trackChanged = assign(({ context, event }) => ({
   notes: context.notes === null || context.notes.includes(event.id) ? context.notes : [...context.notes, event.id],
   removed: without(context.removed, event.id),
+  entries: { ...context.entries, [event.id]: entryOf(event) },
 }));
 const trackDeleted = assign(({ context, event }) => ({
   notes: context.notes === null ? null : without(context.notes, event.id),
@@ -237,7 +291,10 @@ const trackDeleted = assign(({ context, event }) => ({
 // held for the list until its reply lands (notes: list supersededBy).
 const knownOf = (output) =>
   output && "known" in output ? output.known : Array.isArray(output?.notes) ? output.notes.map((n) => n.id) : null;
-const takeKnown = assign({ notes: ({ context, event }) => knownOf(event.output) ?? context.notes });
+const takeKnown = assign({
+  notes: ({ context, event }) => knownOf(event.output) ?? context.notes,
+  entries: ({ context, event }) => (knownOf(event.output) === null ? context.entries : { ...context.entries, ...entriesOf(event.output.notes) }),
+});
 
 const assignTyped = assign({ body: ({ event }) => event.body });
 
@@ -436,6 +493,8 @@ export const machine = setup({
     list: fromPromise(({ input }) => input.ask("notes", "list", {})),
     read: fromPromise(({ input }) => input.ask("notes", "read", { id: input.id })),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // Which features are hidden (3.1); flags.changed is held until the reply lands.
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
     // Every evaluator of the account, for the "#" picker: no book is named, so none is
@@ -449,7 +508,7 @@ export const machine = setup({
         () => {},
       );
     }),
-    // Following a source link asks notes for the highlight beside whatever the editor is
+    // Following a source link asks notes for the note it names beside whatever the editor is
     // doing, so the draft and its state are untouched; the reply comes back as _followed.
     follow: fromCallback(({ input, sendBack }) => {
       input.ask("notes", "read", { id: input.id }).then(
@@ -573,7 +632,15 @@ export const machine = setup({
       "or Enter on it in Vim's normal mode, opens the book at the passage. A tag turns grey " +
       "and struck through, and opens nothing, as soon as its highlight is removed, or at once " +
       "when the highlight was already gone as the note opens, and turns back when the removal " +
-      "is undone. With `subject` the " +
+      "is undone. While Slip-Box is shown, typing [[ opens a list of the notes by title, with " +
+      "each note's first line under it, the Slip-Box first, then the most recently edited, " +
+      "never a highlight or the open note, narrowed as the title is typed, with the same keys " +
+      "as the # list; picking one writes a link to that note by its id, drawn as a tag. " +
+      "Then a tag linking to a note shows that note's title as it is now, so renaming a note " +
+      "renames every tag that links to it and no linking text changes; the title written " +
+      "in the link shows only, grey, when the note is gone. A click on it, or Enter in Vim's " +
+      "normal mode, opens that note, found by the id alone: here, or, in the stage's editor, " +
+      "on a tab of its own on the stage; a link to the Slip-Box opens it on the stage. With `subject` the " +
       "header also has Open on stage (and `:tab split` or `:tab sp` while Vim " +
       "keys is on), which shows the note on the stage as a tab of its own; the button is " +
       "accent while the note has a tab there, its arrow points towards the stage, also after the " +
@@ -605,7 +672,7 @@ export const machine = setup({
     kind: "view",
     emits: ["note.saved", "note.opened", "passage.selected", "note.staged", "note.closed"],
     attributes: ["height", "follows", "subject", "stage"],
-    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read", "line-checks: read", "evaluators: list"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read", "line-checks: read", "evaluators: list", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -671,6 +738,11 @@ export const machine = setup({
     unsynced: [],
     // The ids of every note notes lists, for the source links' tags; null until it answers.
     notes: null,
+    // What is known of each note a link may name (entryOf), for the tags' titles and the
+    // "[[" picker.
+    entries: {},
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
     // Whether a kept note's reopening is in flight, so a not-found one chooses from the
     // start picture instead.
     restoring: false,
@@ -712,6 +784,12 @@ export const machine = setup({
       onError: { actions: assign({ signedIn: true }) },
     },
     {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : null) }) },
+      onError: { actions: [] },
+    },
+    {
       src: "evaluators",
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ evaluators: ({ event }) => evaluatorsOf(event.output) }) },
@@ -723,6 +801,7 @@ export const machine = setup({
     "evaluator.changed": { actions: assign({ evaluators: ({ context, event }) => withEvaluator(context.evaluators, event.evaluator) }) },
     "evaluator.deleted": { actions: assign({ evaluators: ({ context, event }) => context.evaluators.filter((e) => e.id !== event.id) }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     // Lines the user finished (the view sends them before the blur that also finishes them).
     _finished: { actions: enqueueActions(({ context, event, enqueue }) => finish(context, enqueue, event.lines)) },
     // line-checks' report for the note shown: from the read, or announced after a check.
@@ -780,15 +859,24 @@ export const machine = setup({
     "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     // A click on a source link, or Enter on it in Vim's normal mode: ask notes for the
-    // highlight. A second follow replaces one still waiting.
-    _follow: {
-      actions: [
-        stopChild("follow"),
-        spawnChild("follow", { id: "follow", input: ({ context, event }) => ({ ask: context.ask, id: event.id }) }),
-      ],
-    },
-    // The highlight's reply: the passage opens (passage.selected), or the highlight is
-    // gone and its tag is drawn removed.
+    // note the link's id names, never for its label. A second follow replaces one still
+    // waiting. The Slip-Box lives on the stage (13), so it goes there at once.
+    _follow: [
+      {
+        guard: ({ context, event }) => event.id === SLIPBOX && context.id !== SLIPBOX && slipBoxShown(context.hidden),
+        actions: emit({ type: "note.staged", id: SLIPBOX }),
+      },
+      {
+        guard: ({ event }) => event.id !== SLIPBOX,
+        actions: [
+          stopChild("follow"),
+          spawnChild("follow", { id: "follow", input: ({ context, event }) => ({ ask: context.ask, id: event.id }) }),
+        ],
+      },
+    ],
+    // The reply: a highlight opens its passage (passage.selected); a note opens in this
+    // editor, or, from the stage's editor, as a tab of its own on the stage (note.staged);
+    // a note that is gone has its tag drawn removed.
     _followed: [
       {
         guard: ({ event }) => passageOf(event.reply, event.id) != null,
@@ -796,6 +884,15 @@ export const machine = setup({
           assign({ removed: ({ context, event }) => without(context.removed, event.id) }),
           emit(({ event }) => ({ type: "passage.selected", ...passageOf(event.reply, event.id) })),
         ],
+      },
+      {
+        guard: ({ context, event }) => opensNote(context, event) && context.staged,
+        actions: [assign({ removed: ({ context, event }) => without(context.removed, event.id) }), emit(({ event }) => ({ type: "note.staged", id: event.id }))],
+      },
+      {
+        guard: ({ context, event }) => opensNote(context, event) && event.id !== context.id,
+        target: ".loading",
+        actions: [assign({ removed: ({ context, event }) => without(context.removed, event.id) }), "open"],
       },
       {
         guard: ({ event }) => event.reply?.error === "not-found",

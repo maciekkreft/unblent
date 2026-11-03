@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf, chapterLabelOf, relinkOf, sourceLinksIn, passageOf, linkMissing, isStaged, hintOf, showing, startsTyping, notSynced, NOT_SYNCED_MS } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, chapterLabelOf, relinkOf, sourceLinksIn, passageOf, linkMissing, linkTitleOf, linkableNotes, SLIPBOX, isStaged, hintOf, showing, startsTyping, notSynced, NOT_SYNCED_MS } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
@@ -205,7 +205,7 @@ test("on start it reopens the newest note notes lists", async () => {
   const { actor } = editor({
     ask: (target, name, payload) => {
       // The picker's evaluators are asked on their own (the last tests).
-      if (target !== "settings" && target !== "evaluators") asked.push([target, name, payload]);
+      if (target !== "settings" && target !== "evaluators" && target !== "flags") asked.push([target, name, payload]);
       if (name === "list") return Promise.resolve({ notes: [{ id: ID2, title: "N", updatedAt: 20 }, { id: ID, title: "O", updatedAt: 10 }] });
       return Promise.resolve({ note: { ...NOTE, id: ID2 } });
     },
@@ -251,7 +251,7 @@ test("load asks notes: read and lands per the reply", async () => {
   const asked = [];
   const withReply = async (reply) => {
     const { actor } = await started({
-      ask: (...args) => ((args[0] === "settings" || args[0] === "evaluators" || asked.push(args)), Promise.resolve(args[1] === "list" ? { notes: [] } : reply)),
+      ask: (...args) => ((args[0] === "settings" || args[0] === "evaluators" || args[0] === "flags" || asked.push(args)), Promise.resolve(args[1] === "list" ? { notes: [] } : reply)),
     });
     actor.send({ type: "load", id: ID });
     return actor;
@@ -1090,6 +1090,90 @@ test("on the empty page notes' news still reaches the tags, and without notes on
   assert.equal(missingNow(lone.actor)(GONE), false);
   lone.actor.send({ type: "note.deleted", id: GONE });
   assert.equal(missingNow(lone.actor)(GONE), true);
+});
+
+// Links to notes ([[, 10): a link names its note by id alone; the label written in it is
+// never used to find, open or name the note.
+const TARGET = { id: "01ARZ3NDEKTSV4RRFFQ69G5FE0", title: "First name", subtitle: "under it", body: "First name\nunder it", version: 3, pending: false, updatedAt: 5, about: [] };
+const DECOY = { id: "01ARZ3NDEKTSV4RRFFQ69G5FE1", title: "Old label", subtitle: "", body: "Old label", version: 1, pending: false, updatedAt: 6, about: [] };
+const LINKING = { id: ID, title: "L", body: `L\nsee [Old label](note:${TARGET.id})`, version: 7, pending: false, updatedAt: 9, about: [] };
+const linkAsk = ({ hidden = [] } = {}) => (target, name, payload) => {
+  if (target === "flags") return Promise.resolve({ hidden });
+  if (name === "list") return Promise.resolve({ notes: [TARGET, DECOY, LINKING, { ...HIGHLIGHT.note }] });
+  if (name === "read") {
+    const note = [TARGET, DECOY, LINKING].find((n) => n.id === payload.id);
+    return Promise.resolve(note ? { note } : { error: "not-found" });
+  }
+  return Promise.resolve({});
+};
+
+test("renaming a linked note changes its tag's title and nothing in the linking note's text", async () => {
+  const { actor, saved } = editor({ ask: linkAsk() });
+  await settle();
+  actor.send({ type: "load", id: ID });
+  await settle();
+  assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+  const title = () => linkTitleOf(actor.getSnapshot().context)(TARGET.id);
+  assert.equal(title(), "First name", "the tag shows the title, not the stored label");
+  actor.send({ type: "note.changed", ...TARGET, title: "Renamed", body: "Renamed\nunder it", version: 4 });
+  assert.equal(title(), "Renamed");
+  assert.equal(actor.getSnapshot().context.body, LINKING.body, "the linking text is as stored");
+  assert.deepEqual(saved, [], "nothing is saved");
+  // A highlight's tag keeps its passage, and an unknown id has no title.
+  assert.equal(linkTitleOf(actor.getSnapshot().context)(HL), null);
+  assert.equal(linkTitleOf(actor.getSnapshot().context)(GONE), null);
+});
+
+test("a link whose label is another note's title opens the note its id names", async () => {
+  const { actor, opened } = editor({ ask: linkAsk() });
+  await settle();
+  actor.send({ type: "load", id: ID });
+  await settle();
+  actor.send({ type: "_follow", id: TARGET.id });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, TARGET.id, "the note by id, not the one titled Old label");
+  assert.equal(actor.getSnapshot().context.body, TARGET.body);
+  assert.deepEqual(opened.slice(-1), [TARGET.id]);
+  // From the stage's editor it opens as a tab of its own on the stage.
+  const stage = editor({ ask: linkAsk(), staged: true });
+  await settle();
+  stage.actor.send({ type: "load", id: ID });
+  await settle();
+  stage.actor.send({ type: "_follow", id: TARGET.id });
+  await settle();
+  assert.deepEqual(stage.staged, [TARGET.id]);
+  assert.equal(stage.actor.getSnapshot().context.id, ID, "the stage's editor keeps its note");
+  // A link to the Slip-Box opens it on the stage.
+  const panel = editor({ ask: linkAsk(), subjecting: true });
+  await settle();
+  panel.actor.send({ type: "_follow", id: SLIPBOX });
+  assert.deepEqual(panel.staged, [SLIPBOX]);
+});
+
+test("the [[ list: only while Slip-Box shows, the Slip-Box first, never a highlight or the open note", async () => {
+  const { actor } = editor({ ask: linkAsk() });
+  await settle();
+  actor.send({ type: "load", id: ID });
+  await settle();
+  assert.deepEqual(linkableNotes(actor.getSnapshot().context), [
+    { id: SLIPBOX, title: "Slip-Box", about: "" },
+    { id: DECOY.id, title: "Old label", about: "" },
+    { id: TARGET.id, title: "First name", about: "under it" },
+  ]);
+  assert.equal(linkTitleOf(actor.getSnapshot().context)(SLIPBOX), "Slip-Box");
+  assert.equal(linkMissing(actor.getSnapshot().context)(SLIPBOX), false, "the Slip-Box is there before it has text");
+  actor.send({ type: "flags.changed", off: [], hidden: ["slip-box"], released: [], shown: [] });
+  assert.deepEqual(linkableNotes(actor.getSnapshot().context), [], "hidden: the list never opens");
+  const hidden = editor({ ask: linkAsk({ hidden: ["slip-box"] }) });
+  await settle();
+  assert.deepEqual(linkableNotes(hidden.actor.getSnapshot().context), []);
+  // Hidden, a tag keeps its stored label and following a note opens nothing, as before.
+  assert.equal(linkTitleOf(hidden.actor.getSnapshot().context)(TARGET.id), null);
+  hidden.actor.send({ type: "load", id: ID });
+  await settle();
+  hidden.actor.send({ type: "_follow", id: TARGET.id });
+  await settle();
+  assert.equal(hidden.actor.getSnapshot().context.id, ID);
 });
 
 test("a copied link or text goes into Vim's register", async () => {

@@ -845,8 +845,8 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
 }
 
 // --- Source links -------------------------------------------------------------------
-// A source link, `[label](note:<id>)`, is a link in an editor's text to a highlight (13).
-// It stays raw in the document, so what an editor stores is untouched; it is drawn as one
+// A source link, `[label](note:<id>)`, is a link in an editor's text to a highlight or to
+// a note (13), by the id alone. It stays raw in the document, so what an editor stores is untouched; it is drawn as one
 // tag and kept atomic the way a list item's marker is (overMarkers): the cursor never
 // rests inside it, and a deletion that reaches into it takes it whole (10).
 
@@ -861,28 +861,36 @@ export function sourceLinksIn(text) {
   return found;
 }
 
-// Which links' highlights are gone, as a test on the highlight's id: the editor learns it
-// from its own actor and hands it over with missingLinks.
+// Which links' targets are gone, as a test on the id: the editor learns it from its own
+// actor and hands it over with missingLinks. refreshLinks asks the tags' titles again.
 const setMissing = StateEffect.define();
+const redrawLinks = StateEffect.define();
+
+const passageHint = (_id, gone) => (gone ? "This highlight was removed" : "Open the passage");
 
 // One editor's tags: `follow(id)` runs on a click on a tag, or Enter on it in Vim's
 // normal mode, also in a read-only editor; `icon(element)` draws the link glyph into the
 // tag, because the kit knows no icons (11.2); `missing(id)` says which tags start grey.
-export function sourceLinks({ follow, icon = () => {}, missing = () => false }) {
+// `title(id)` gives the name a tag shows, looked up by the id, so a renamed note renames
+// every tag that links to it while the text stays as stored; without one (null), and
+// while the target is gone, the label stored in the text shows. `hint(id, gone)` gives
+// the tag's tooltip.
+export function sourceLinks({ follow, icon = () => {}, missing = () => false, title = () => null, hint = passageHint }) {
   class LinkTag extends WidgetType {
     constructor(label, id, gone) {
       super();
       this.label = label;
       this.id = id;
       this.gone = gone;
+      this.hint = hint(id, gone);
     }
     eq(other) {
-      return other.label === this.label && other.id === this.id && other.gone === this.gone;
+      return other.label === this.label && other.id === this.id && other.gone === this.gone && other.hint === this.hint;
     }
     toDOM() {
       const tag = document.createElement("span");
       tag.className = this.gone ? "cm-source-link removed" : "cm-source-link";
-      tag.title = this.gone ? "This highlight was removed" : "Open the passage";
+      tag.title = this.hint;
       const glyph = document.createElement("span");
       glyph.className = "cm-source-icon";
       icon(glyph);
@@ -895,19 +903,25 @@ export function sourceLinks({ follow, icon = () => {}, missing = () => false }) 
     }
   }
 
+  const shown = (l, gone) => (gone ? l.label : title(l.id) ?? l.label);
   const decos = (state, gone) =>
     Decoration.set(
-      sourceLinksIn(state.doc.toString()).map((l) =>
-        Decoration.replace({ widget: new LinkTag(l.label, l.id, Boolean(gone(l.id))) }).range(l.from, l.to),
-      ),
+      sourceLinksIn(state.doc.toString()).map((l) => {
+        const out = Boolean(gone(l.id));
+        return Decoration.replace({ widget: new LinkTag(shown(l, out), l.id, out) }).range(l.from, l.to);
+      }),
     );
 
   const field = StateField.define({
     create: (state) => ({ missing, deco: decos(state, missing) }),
     update(value, tr) {
       let gone = value.missing;
-      for (const e of tr.effects) if (e.is(setMissing)) gone = e.value;
-      if (!tr.docChanged && gone === value.missing) return value;
+      let redraw = false;
+      for (const e of tr.effects) {
+        if (e.is(setMissing)) gone = e.value;
+        if (e.is(redrawLinks)) redraw = true;
+      }
+      if (!tr.docChanged && !redraw && gone === value.missing) return value;
       return { missing: gone, deco: decos(tr.state, gone) };
     },
     provide: (f) => [EditorView.decorations.from(f, (v) => v.deco), EditorView.atomicRanges.of((view) => view.state.field(f).deco)],
@@ -989,6 +1003,12 @@ export function sourceLinks({ follow, icon = () => {}, missing = () => false }) 
 // only when its actor's answer changed, since each call redraws.
 export function missingLinks(view, missing) {
   view.dispatch({ effects: setMissing.of(missing) });
+}
+
+// The tags drawn again with their titles asked anew, for an editor whose title(id) reads
+// state that changed, such as a note renamed.
+export function refreshLinks(view) {
+  view.dispatch({ effects: redrawLinks.of(true) });
 }
 
 const linkTheme = EditorView.theme({
@@ -1231,12 +1251,182 @@ const hashtagTheme = EditorView.theme({
   ".cm-hashtag-unknown": { color: "var(--color-mute)" },
 });
 
+// --- The pickers ----------------------------------------------------------------------
+// Typing a word's opening, "#" or "[[", on an editable line opens a list the editor
+// supplies, narrowed as the rest is typed (10). It is drawn as a CodeMirror tooltip, not
+// CodeMirror's autocompletion, so its keys, its look and when it opens are the kit's own.
+// It opens only on typing, so a cursor moved onto a tag, or Vim's normal mode, never
+// opens it. `picker` is the general list; `hashtagPicker` and `notePicker` are its two uses.
+
+// { refresh } asks every picker's items again; each picker's own steps and closings are
+// its own effect, so two pickers in one editor never move each other.
+const refreshEffect = StateEffect.define();
+
+// One editor's picker:
+// - `find(state)` gives { from, typed } while the cursor ends what opens the list (from
+//   at its first character, typed what follows it), else null;
+// - `items(typed)` gives the rows, asked again on every keystroke while the list is open
+//   and on refreshPicker; none closes it;
+// - `insert(item)` gives the text that replaces everything from `from` to the cursor; a
+//   trailing space is not doubled when one already follows the cursor;
+// - `row(item)` gives { label, about }, the row's two lines;
+// - `className` names the list (its rows are `<className>-row`, the marked one
+//   `<className>-selected`, the lines `<className>-tag` and `<className>-about`), and
+//   `ariaLabel` names it for a screen reader.
+export function picker({ find, items, insert, row, className = "cm-picker", ariaLabel = "" }) {
+  const own = StateEffect.define();
+  const closed = (dismissed = null) => ({ open: false, dismissed });
+  const found = (state) => {
+    if (!takesTyping(state) || state.selection.ranges.length !== 1 || !state.selection.main.empty) return null;
+    return find(state);
+  };
+
+  const field = StateField.define({
+    create: () => closed(),
+    update(value, tr) {
+      let move = 0;
+      let close = null;
+      let refresh = false;
+      for (const e of tr.effects) {
+        if (e.is(refreshEffect)) refresh = true;
+        if (!e.is(own)) continue;
+        move += e.value.move ?? 0;
+        close = e.value.close ?? close;
+      }
+      if (!tr.docChanged && !tr.selection && !tr.reconfigured && !move && !close && !refresh) return value;
+      const at = found(tr.state);
+      // Leaving what opened it forgets an Esc on it, so typing it again opens the list.
+      if (!at) return closed();
+      const dismissed = value.dismissed == null ? null : tr.changes.mapPos(value.dismissed);
+      if (close === "escape") return closed(at.from);
+      if (close === "blur" || dismissed === at.from) return closed(dismissed);
+      const was = value.open && tr.changes.mapPos(value.from) === at.from;
+      if (!was && !tr.isUserEvent("input.type")) return closed(dismissed);
+      const shown = items(at.typed) ?? [];
+      if (!shown.length) return closed(dismissed);
+      const start = was && value.typed === at.typed ? value.selected : 0;
+      const selected = (((start + move) % shown.length) + shown.length) % shown.length;
+      return { open: true, from: at.from, to: tr.state.selection.main.head, typed: at.typed, items: shown, selected, dismissed: null, tooltip: was ? value.tooltip : pickerTooltip(at.from) };
+    },
+    provide: (f) => showTooltip.from(f, (v) => (v.open ? v.tooltip : null)),
+  });
+
+  // What was typed becomes the item's text, in one transaction, so one Undo takes it back.
+  const pick = (view, index) => {
+    const v = view.state.field(field);
+    const item = v.open && v.items[index];
+    if (!item) return false;
+    const text = insert(item);
+    const spaced = text.endsWith(" ") && view.state.sliceDoc(v.to, v.to + 1) === " ";
+    view.dispatch({
+      changes: { from: v.from, to: v.to, insert: spaced ? text.slice(0, -1) : text },
+      selection: EditorSelection.cursor(v.from + text.length),
+      scrollIntoView: true,
+      userEvent: "input.complete",
+    });
+    return true;
+  };
+
+  function pickerTooltip(from) {
+    return {
+      pos: from,
+      above: false,
+      create(view) {
+        const dom = document.createElement("div");
+        dom.className = `cm-picker ${className}`;
+        dom.setAttribute("role", "listbox");
+        dom.setAttribute("aria-label", ariaLabel);
+        // A finger needs taller rows (the phone preview, or a narrow window), read the way
+        // the editors read it.
+        const root = view.dom.ownerDocument.documentElement;
+        const rem = parseFloat(getComputedStyle(root).fontSize) || 16;
+        if (root.getAttribute("data-viewport") === "phone" || globalThis.innerWidth < 45 * rem) dom.classList.add("cm-picker-narrow", `${className}-narrow`);
+        // The press would move the focus out of the editor and close the list first.
+        dom.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          const at = event.target.closest?.(".cm-picker-row");
+          if (at) pick(view, Number(at.dataset.index));
+        });
+        let shown = null;
+        const draw = () => {
+          const v = view.state.field(field);
+          if (!v.open || v === shown) return;
+          shown = v;
+          dom.replaceChildren(
+            ...v.items.map((item, i) => {
+              const { label, about } = row(item);
+              const line = document.createElement("div");
+              line.className = i === v.selected ? `cm-picker-row ${className}-row cm-picker-selected ${className}-selected` : `cm-picker-row ${className}-row`;
+              line.dataset.index = String(i);
+              line.setAttribute("role", "option");
+              line.setAttribute("aria-selected", String(i === v.selected));
+              const name = document.createElement("span");
+              name.className = `cm-picker-tag ${className}-tag`;
+              name.textContent = label;
+              line.append(name);
+              if (about) {
+                const under = document.createElement("span");
+                under.className = `cm-picker-about ${className}-about`;
+                under.textContent = about;
+                line.append(under);
+              }
+              return line;
+            }),
+          );
+          dom.children[v.selected]?.scrollIntoView?.({ block: "nearest" });
+        };
+        draw();
+        return { dom, update: draw };
+      },
+    };
+  }
+
+  // Ahead of Vim and of every keymap, and only while the list is open, so Esc closes the
+  // list before it leaves Vim's insert mode, and Enter picks before it starts a line.
+  const keys = Prec.highest(
+    EditorView.domEventHandlers({
+      keydown(event, view) {
+        const v = view.state.field(field);
+        if (!v.open || event.isComposing || event.altKey || event.metaKey) return false;
+        const ctrl = event.ctrlKey;
+        const key = ctrl ? (event.key === "n" ? "down" : event.key === "p" ? "up" : null) : event.shiftKey ? null : event.key;
+        let done = false;
+        if (key === "ArrowDown" || key === "down") done = (view.dispatch({ effects: own.of({ move: 1 }) }), true);
+        else if (key === "ArrowUp" || key === "up") done = (view.dispatch({ effects: own.of({ move: -1 }) }), true);
+        else if (key === "Enter" || key === "Tab") done = pick(view, v.selected);
+        else if (key === "Escape") done = (view.dispatch({ effects: own.of({ close: "escape" }) }), true);
+        // The key is the list's: no view around the editor acts on it too.
+        if (done) event.stopPropagation();
+        return done;
+      },
+      blur(_event, view) {
+        if (view.state.field(field).open) view.dispatch({ effects: own.of({ close: "blur" }) });
+        return false;
+      },
+    }),
+  );
+
+  // The list stays within its editor's width, shifted left near the right edge, so it
+  // never covers the panel beside the stage; it may still run below a short editor.
+  const space = tooltips({
+    tooltipSpace: (view) => {
+      const { left, right } = view.dom.getBoundingClientRect();
+      const win = view.dom.ownerDocument.defaultView;
+      return { top: 0, bottom: win.innerHeight, left, right };
+    },
+  });
+
+  return [field, keys, space, pickerTheme];
+}
+
+// Every picker of the editor drawn again with its items asked anew, for an editor whose
+// items read state that changed; an open list narrows, or closes when nothing matches.
+export function refreshPicker(view) {
+  view.dispatch({ effects: refreshEffect.of(true) });
+}
+
 // --- The hashtag picker -------------------------------------------------------------
-// Typing "#" at the start of a word on an editable line opens a list of the tags the
-// editor supplies, narrowed as the name is typed (10). It is drawn as a CodeMirror
-// tooltip, not CodeMirror's autocompletion, so its keys, its look and when it opens are
-// the kit's own. It opens only on typing, so a cursor moved onto a tag, or Vim's normal
-// mode, never opens it.
+// "#" at the start of a word opens the tags the editor supplies (10).
 
 // A copy of `shortName` in components/line-checks/machine.js, which names an evaluator by
 // it when it reads a hashtag line. The two must stay identical, so the names the picker
@@ -1265,171 +1455,74 @@ export function tagsMatching(tags, typed) {
 const TYPED_TAG = /(?:^|\s)#([\p{L}\p{N}-]*)$/u;
 const TAG_CHAR = /^[\p{L}\p{N}-]/u;
 function typedTag(state) {
-  const range = state.selection.main;
-  if (state.selection.ranges.length !== 1 || !range.empty) return null;
-  const line = state.doc.lineAt(range.head);
-  const at = range.head - line.from;
+  const head = state.selection.main.head;
+  const line = state.doc.lineAt(head);
+  const at = head - line.from;
   const m = TYPED_TAG.exec(line.text.slice(0, at));
   if (!m || TAG_CHAR.test(line.text.slice(at))) return null;
-  return { from: range.head - m[1].length - 1, typed: m[1] };
+  return { from: head - m[1].length - 1, typed: m[1] };
 }
 
-// { move } steps the marked row, { close: "escape" | "blur" } closes the list, and
-// { refresh } asks the editor's tags again.
-const pickerEffect = StateEffect.define();
-
-// One editor's picker. `tags()` gives [{ tag, description }], the names the editor knows,
-// asked again on every keystroke while the list is open and on refreshHashtagPicker.
+// One editor's "#" picker. `tags()` gives [{ tag, description }], the names the editor
+// knows; picking one writes "#tag" and a space.
 export function hashtagPicker({ tags }) {
-  const closed = (dismissed = null) => ({ open: false, dismissed });
-
-  const field = StateField.define({
-    create: () => closed(),
-    update(value, tr) {
-      let move = 0;
-      let close = null;
-      let refresh = false;
-      for (const e of tr.effects) {
-        if (!e.is(pickerEffect)) continue;
-        move += e.value.move ?? 0;
-        close = e.value.close ?? close;
-        refresh ||= Boolean(e.value.refresh);
-      }
-      if (!tr.docChanged && !tr.selection && !tr.reconfigured && !move && !close && !refresh) return value;
-      const found = takesTyping(tr.state) ? typedTag(tr.state) : null;
-      // Leaving the tag forgets an Esc on it, so the next "#" opens the list again.
-      if (!found) return closed();
-      const dismissed = value.dismissed == null ? null : tr.changes.mapPos(value.dismissed);
-      if (close === "escape") return closed(found.from);
-      if (close === "blur" || dismissed === found.from) return closed(dismissed);
-      const was = value.open && tr.changes.mapPos(value.from) === found.from;
-      if (!was && !tr.isUserEvent("input.type")) return closed(dismissed);
-      const items = tagsMatching(tags(), found.typed);
-      if (!items.length) return closed(dismissed);
-      const start = was && value.typed === found.typed ? value.selected : 0;
-      const selected = (((start + move) % items.length) + items.length) % items.length;
-      return { open: true, from: found.from, to: tr.state.selection.main.head, typed: found.typed, items, selected, dismissed: null, tooltip: was ? value.tooltip : pickerTooltip(found.from) };
-    },
-    provide: (f) => showTooltip.from(f, (v) => (v.open ? v.tooltip : null)),
+  return picker({
+    find: typedTag,
+    items: (typed) => tagsMatching(tags(), typed),
+    insert: (item) => "#" + item.tag + " ",
+    row: (item) => ({ label: "#" + item.tag, about: item.description }),
+    className: "cm-hashtag-picker",
+    ariaLabel: "Tags",
   });
-
-  // The typed "#part" becomes "#tag" and a space, in one transaction, so one Undo takes
-  // it back. A space already after the cursor is used rather than doubled.
-  const pick = (view, index) => {
-    const v = view.state.field(field);
-    const item = v.open && v.items[index];
-    if (!item) return false;
-    const spaced = view.state.sliceDoc(v.to, v.to + 1) === " ";
-    const insert = "#" + item.tag + (spaced ? "" : " ");
-    view.dispatch({
-      changes: { from: v.from, to: v.to, insert },
-      selection: EditorSelection.cursor(v.from + item.tag.length + 2),
-      scrollIntoView: true,
-      userEvent: "input.complete",
-    });
-    return true;
-  };
-
-  function pickerTooltip(from) {
-    return {
-      pos: from,
-      above: false,
-      create(view) {
-        const dom = document.createElement("div");
-        dom.className = "cm-hashtag-picker";
-        dom.setAttribute("role", "listbox");
-        dom.setAttribute("aria-label", "Tags");
-        // A finger needs taller rows (the phone preview, or a narrow window), read the way
-        // the editors read it.
-        const root = view.dom.ownerDocument.documentElement;
-        const rem = parseFloat(getComputedStyle(root).fontSize) || 16;
-        if (root.getAttribute("data-viewport") === "phone" || globalThis.innerWidth < 45 * rem) dom.classList.add("cm-hashtag-picker-narrow");
-        // The press would move the focus out of the editor and close the list first.
-        dom.addEventListener("mousedown", (event) => {
-          event.preventDefault();
-          const row = event.target.closest?.(".cm-hashtag-picker-row");
-          if (row) pick(view, Number(row.dataset.index));
-        });
-        let shown = null;
-        const draw = () => {
-          const v = view.state.field(field);
-          if (!v.open || v === shown) return;
-          shown = v;
-          dom.replaceChildren(
-            ...v.items.map((item, i) => {
-              const row = document.createElement("div");
-              row.className = i === v.selected ? "cm-hashtag-picker-row cm-hashtag-picker-selected" : "cm-hashtag-picker-row";
-              row.dataset.index = String(i);
-              row.setAttribute("role", "option");
-              row.setAttribute("aria-selected", String(i === v.selected));
-              const tag = document.createElement("span");
-              tag.className = "cm-hashtag-picker-tag";
-              tag.textContent = "#" + item.tag;
-              row.append(tag);
-              if (item.description) {
-                const about = document.createElement("span");
-                about.className = "cm-hashtag-picker-about";
-                about.textContent = item.description;
-                row.append(about);
-              }
-              return row;
-            }),
-          );
-          dom.children[v.selected]?.scrollIntoView?.({ block: "nearest" });
-        };
-        draw();
-        return { dom, update: draw };
-      },
-    };
-  }
-
-  // Ahead of Vim and of every keymap, and only while the list is open, so Esc closes the
-  // list before it leaves Vim's insert mode, and Enter picks before it starts a line.
-  const keys = Prec.highest(
-    EditorView.domEventHandlers({
-      keydown(event, view) {
-        const v = view.state.field(field);
-        if (!v.open || event.isComposing || event.altKey || event.metaKey) return false;
-        const ctrl = event.ctrlKey;
-        const key = ctrl ? (event.key === "n" ? "down" : event.key === "p" ? "up" : null) : event.shiftKey ? null : event.key;
-        let done = false;
-        if (key === "ArrowDown" || key === "down") done = (view.dispatch({ effects: pickerEffect.of({ move: 1 }) }), true);
-        else if (key === "ArrowUp" || key === "up") done = (view.dispatch({ effects: pickerEffect.of({ move: -1 }) }), true);
-        else if (key === "Enter" || key === "Tab") done = pick(view, v.selected);
-        else if (key === "Escape") done = (view.dispatch({ effects: pickerEffect.of({ close: "escape" }) }), true);
-        // The key is the list's: no view around the editor acts on it too.
-        if (done) event.stopPropagation();
-        return done;
-      },
-      blur(_event, view) {
-        if (view.state.field(field).open) view.dispatch({ effects: pickerEffect.of({ close: "blur" }) });
-        return false;
-      },
-    }),
-  );
-
-  // The list stays within its editor's width, shifted left near the right edge, so it
-  // never covers the panel beside the stage; it may still run below a short editor.
-  const space = tooltips({
-    tooltipSpace: (view) => {
-      const { left, right } = view.dom.getBoundingClientRect();
-      const win = view.dom.ownerDocument.defaultView;
-      return { top: 0, bottom: win.innerHeight, left, right };
-    },
-  });
-
-  return [field, keys, space, pickerTheme];
 }
 
-// The list drawn again with the editor's tags asked anew, for an editor whose tags()
-// reads state that changed; an open list narrows, or closes when nothing matches.
-export function refreshHashtagPicker(view) {
-  view.dispatch({ effects: pickerEffect.of({ refresh: true }) });
+// The "#" picker drawn again with the editor's tags asked anew.
+export const refreshHashtagPicker = refreshPicker;
+
+// --- The note picker ----------------------------------------------------------------
+// "[[" opens the notes the editor supplies, by title with their first line under it, and
+// picking one writes a source link to it, `[<title>](note:<id>)` (10). The link names the
+// note by its id; the title in it is only for the text read outside the app.
+
+// The notes whose title holds what is typed, ignoring case, those it starts first, in
+// the order given otherwise, each id once and at most 50, so a large box draws quickly.
+export function notesMatching(given, typed) {
+  const part = String(typed ?? "").trim().toLowerCase();
+  const seen = new Set();
+  const all = (given ?? []).filter((n) => n?.id && !seen.has(n.id) && seen.add(n.id) && String(n.title ?? "").toLowerCase().includes(part));
+  const starts = all.filter((n) => String(n.title ?? "").toLowerCase().startsWith(part));
+  return [...starts, ...all.filter((n) => !starts.includes(n))].slice(0, 50);
+}
+
+// A source link to a note, its title escaped so it reads back whole (sourceLinksIn).
+export const noteLink = (title, id) => `[${String(title ?? "").replace(/[\\\[\]]/g, "\\$&")}](note:${id})`;
+
+// "[[" and what follows it up to the cursor on the same line, with no bracket in between.
+const TYPED_LINK = /\[\[([^\[\]\n]*)$/;
+function typedLink(state) {
+  const head = state.selection.main.head;
+  const line = state.doc.lineAt(head);
+  const m = TYPED_LINK.exec(line.text.slice(0, head - line.from));
+  return m ? { from: head - m[0].length, typed: m[1] } : null;
+}
+
+// One editor's "[[" picker. `targets()` gives [{ id, title, about }], the notes it may
+// link to, about being the line shown under the title; picking one writes its link and a
+// space.
+export function notePicker({ targets }) {
+  return picker({
+    find: typedLink,
+    items: (typed) => notesMatching(targets(), typed),
+    insert: (item) => noteLink(item.title, item.id) + " ",
+    row: (item) => ({ label: item.title, about: item.about }),
+    className: "cm-note-picker",
+    ariaLabel: "Notes",
+  });
 }
 
 // `&.cm-editor` outranks CodeMirror's own light and dark tooltip colors.
 const pickerTheme = EditorView.theme({
-  "&.cm-editor .cm-tooltip.cm-hashtag-picker": {
+  "&.cm-editor .cm-tooltip.cm-picker": {
     width: "calc(var(--space-xl) * 7.5)",
     maxHeight: "calc(var(--space-xl) * 7)",
     overflowY: "auto",
@@ -1444,10 +1537,10 @@ const pickerTheme = EditorView.theme({
     fontFamily: "var(--font-sans)",
     lineHeight: "var(--leading-tight)",
   },
-  "&.cm-editor .cm-tooltip.cm-hashtag-picker-narrow": {
+  "&.cm-editor .cm-tooltip.cm-picker-narrow": {
     width: "calc(var(--viewport-phone) - 2 * var(--space-md))",
   },
-  ".cm-hashtag-picker-row": {
+  ".cm-picker-row": {
     display: "flex",
     flexDirection: "column",
     justifyContent: "center",
@@ -1457,13 +1550,13 @@ const pickerTheme = EditorView.theme({
     cursor: "pointer",
     minWidth: "0",
   },
-  ".cm-hashtag-picker-narrow .cm-hashtag-picker-row": {
+  ".cm-picker-narrow .cm-picker-row": {
     minHeight: "calc(var(--space-xl) + var(--space-sm))",
     boxSizing: "border-box",
   },
-  ".cm-hashtag-picker-selected": { background: "var(--color-surface-hover)" },
-  ".cm-hashtag-picker-tag": { fontSize: "var(--text-sm)", color: "var(--color-accent)" },
-  ".cm-hashtag-picker-about": {
+  ".cm-picker-selected": { background: "var(--color-surface-hover)" },
+  ".cm-picker-tag": { fontSize: "var(--text-sm)", color: "var(--color-accent)" },
+  ".cm-picker-about": {
     fontSize: "var(--text-caption)",
     color: "var(--color-body)",
     whiteSpace: "nowrap",

@@ -479,6 +479,31 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
+    run("typing [[ offers the notes by title, and Enter writes a link by id drawn with the note's title", {}, async (page) => {
+      const notes = () =>
+        page.evaluate(() =>
+          [...document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-note-picker-row")].map((row) => [
+            row.querySelector(".cm-note-picker-tag").textContent,
+            row.querySelector(".cm-note-picker-about")?.textContent ?? null,
+          ]),
+        );
+      await page.keyboard.type("See [[");
+      await until(async () => (await notes()).length === 2);
+      assert.deepEqual(await notes(), [["Habits of mind", "How a habit forms"], ["On attention", null]]);
+      await page.keyboard.type("att");
+      await until(async () => JSON.stringify(await notes()) === JSON.stringify([["On attention", null]]));
+      await page.keyboard.press("Enter");
+      await until(async () => (await text(page)) === "See [On attention](note:01ARZ3NDEKTSV4RRFFQ69G5FC2) ");
+      assert.deepEqual(await notes(), []);
+      // A stored label that is not the title still shows the note's title, found by its id.
+      await page.keyboard.insertText("and [Old name](note:01ARZ3NDEKTSV4RRFFQ69G5FC1)");
+      await until(async () =>
+        (await page.evaluate(() => [...document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-source-label")].map((l) => l.textContent).join("|"))) ===
+        "On attention|Habits of mind",
+      );
+    });
+
+    // Browser: focus and keys.
     run("with Vim keys the picker works in insert mode, and Esc closes it before it leaves insert mode", { vim: true }, async (page) => {
       await page.keyboard.press("i");
       await page.keyboard.type("#in-");

@@ -3,7 +3,7 @@ import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { baseExtensions, setVim, paragraphs, sourceLinks, webLinks, hashtags, refreshHashtags, hashtagPicker, lineMarks, setLineMarks } from "editor";
+import { baseExtensions, setVim, paragraphs, sourceLinks, webLinks, hashtags, refreshHashtags, hashtagPicker, notePicker, lineMarks, setLineMarks } from "editor";
 import { machine } from "./machine.js";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -41,6 +41,14 @@ const SAMPLE_TAGS = [
   { tag: "inner-critic", description: "Whether a line speaks in the voice of the inner critic" },
   { tag: "thinking-traps", description: "" },
 ];
+
+// A fixed list stands in for the account's notes, which this page has none of (8). A tag
+// linking to one shows the title here, whatever label its text stores.
+const SAMPLE_NOTES = [
+  { id: "01ARZ3NDEKTSV4RRFFQ69G5FC1", title: "Habits of mind", about: "How a habit forms" },
+  { id: "01ARZ3NDEKTSV4RRFFQ69G5FC2", title: "On attention", about: "" },
+];
+const sampleTitle = (id) => SAMPLE_NOTES.find((n) => n.id === id)?.title ?? null;
 
 class EditorSample extends LitElement {
   // `text` is the editor's text both ways: the page gives the starting text, setting it
@@ -97,11 +105,12 @@ class EditorSample extends LitElement {
       ...baseExtensions({ vim: this.#actor.snapshot?.context.vimKeys === true }),
       paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       // A source link needs `notes` to follow it, and this page has none (8).
-      sourceLinks({ follow: () => {}, icon: (into) => render(icon("link"), into) }),
+      sourceLinks({ follow: () => {}, icon: (into) => render(icon("link"), into), title: sampleTitle }),
       webLinks(),
       hashtags({ known: (name) => this.known.includes(name) }),
       // A fixed list stands in for the account's evaluators, which this page has none of (8).
       hashtagPicker({ tags: () => SAMPLE_TAGS }),
+      notePicker({ targets: () => SAMPLE_NOTES }),
       // The kit's style sheet sits in the shadow root, so a mark drawn here takes .mark.
       lineMarks({ render: (into, marks) => render(marks.map((m) => html`<span class="mark">${m}</span>`), into) }),
       fill,

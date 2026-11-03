@@ -6,8 +6,8 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, refreshHashtagPicker, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, hintOf, showing, startsTyping, linkMissing, notSynced, knownTags, lineMarksOf } from "./machine.js";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, refreshLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, notePicker, refreshPicker, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
+import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, hintOf, showing, startsTyping, linkMissing, linkTitleOf, linkHintOf, linkableNotes, notSynced, knownTags, lineMarksOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
@@ -684,8 +684,10 @@ class NoteEditor extends LitElement {
   // The hashtags that name an evaluator, and the report they and the marks were drawn from.
   #known = new Set();
   #checksFrom = undefined;
-  // The evaluator list an open "#" picker was last asked to show.
+  // The evaluator list an open "#" picker was last asked to show, and the notes, feature
+  // and open note the "[[" picker and the tags' titles were last drawn from.
   #evaluatorsFrom = undefined;
+  #linksFrom = null;
 
   #extensions() {
     return [
@@ -702,12 +704,17 @@ class NoteEditor extends LitElement {
         follow: (id) => this.#actor.send({ type: "_follow", id }),
         icon: (into) => render(icon("link"), into),
         missing: (id) => this.#missing(id),
+        // A link names its note by id; the tag shows that note's title as it is now.
+        title: (id) => (this.#actor.snapshot ? linkTitleOf(this.#actor.snapshot.context)(id) : null),
+        hint: (id, gone) => (this.#actor.snapshot ? linkHintOf(this.#actor.snapshot.context)(id, gone) : gone ? "This highlight was removed" : "Open the passage"),
       }),
       // A web address is drawn as a link that opens in a new tab (the editor kit, 10).
       webLinks(),
       // Hashtags and Jev's answers at the lines they name (the editor kit, 10).
       hashtags({ known: (name) => this.#known.has(name) }),
       hashtagPicker({ tags: () => pickerTags(this.#actor.snapshot?.context.evaluators) }),
+      // "[[" offers the notes to link to, only while Slip-Box is shown (linkableNotes).
+      notePicker({ targets: () => (this.#actor.snapshot ? linkableNotes(this.#actor.snapshot.context) : []) }),
       lineMarks({ render: drawMarks }),
       this.#history.of(history()),
       this.#hint.of([]),
@@ -847,7 +854,13 @@ class NoteEditor extends LitElement {
     }
     if (snapshot.context.evaluators !== this.#evaluatorsFrom) {
       this.#evaluatorsFrom = snapshot.context.evaluators;
-      refreshHashtagPicker(this.#view);
+      refreshPicker(this.#view);
+    }
+    const { entries, hidden, id } = snapshot.context;
+    if (entries !== this.#linksFrom?.entries || hidden !== this.#linksFrom?.hidden || id !== this.#linksFrom?.id) {
+      this.#linksFrom = { entries, hidden, id };
+      refreshPicker(this.#view);
+      refreshLinks(this.#view);
     }
     if (notes !== this.#missingFrom?.notes || removed !== this.#missingFrom?.removed) {
       this.#missingFrom = { notes, removed };
