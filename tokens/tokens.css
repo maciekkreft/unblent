@@ -41,6 +41,18 @@
      is never mistaken for the orange text selection that can lie over it. */
   --color-highlight: light-dark(rgba(250, 204, 21, 0.38), rgba(250, 204, 21, 0.26));
 
+  /* Features: one colour per feature in the Usage tab, so a feature keeps its colour in
+     every chart. Hues far apart in both schemes; Other is grey, so it never reads as one. */
+  --color-feature-journal: light-dark(#f08a3c, #fb9a50);
+  --color-feature-reading: light-dark(#4f7fd1, #7aa2ec);
+  --color-feature-highlights: light-dark(#d4a514, #e6c04a);
+  --color-feature-notes: light-dark(#3d9970, #5cc08f);
+  --color-feature-chats: light-dark(#8b6bd6, #a98ff0);
+  --color-feature-evaluators: light-dark(#d0587e, #ee7fa2);
+  --color-feature-choice: light-dark(#2a9d9d, #4cc3c3);
+  --color-feature-values: light-dark(#a0784f, #c79e74);
+  --color-feature-other: light-dark(#b5afa3, #7d766b);
+
   /* Border */
   --color-border: light-dark(#e8e3db, #322b25);
   --color-border-strong: light-dark(#d0cabe, #473f37);

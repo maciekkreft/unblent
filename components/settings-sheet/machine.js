@@ -181,7 +181,7 @@ const chosen = (context, event) => {
 // Choosing the further evaluator of a box, or None (null) to drop it again.
 const alsoChosen = (context, event) => ({ ...shownBox(context, event.field), also: alsoOf(evaluatorOf(context, event.evaluator)) });
 
-const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, keepOpen: false, editors: {} };
+const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, keepOpen: false, usageCounting: false, editors: {} };
 
 const adopt = (event) => ({
   nav: event.nav.map((r) => ({ ...r })),
@@ -190,6 +190,7 @@ const adopt = (event) => ({
   arranging: event.arranging,
   vimKeys: event.vimKeys === true,
   keepOpen: event.keepOpen === true,
+  usageCounting: event.usageCounting === true,
   editors: { ...(event.editors ?? {}) },
 });
 

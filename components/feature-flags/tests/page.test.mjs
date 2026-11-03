@@ -11,7 +11,8 @@ const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.en
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
-const FEATURES = ["choice-points"];
+// Usage is not released here, so the admin also sees a row held back and a guest does not.
+const FEATURES = ["choice-points", "usage"];
 
 const text = (page) => page.evaluate(() => document.querySelector("feature-flags").shadowRoot.textContent.replace(/\s+/g, " ").trim());
 
@@ -61,7 +62,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test(`the admin holds back a feature and releases it again, and a refused switch goes back, in ${engine.name}`, async () => {
       const { context, page, problems, state, tab } = await open(browser, { admin: true, name: "Admin" });
       try {
-        await until(async () => (await tab.getByRole("switch").count()) === 2);
+        await until(async () => (await tab.getByRole("switch").count()) === 4);
         const said = await text(page);
         for (const line of ["Features", "Release", "Show", "Values and Choice Points"]) {
           assert.ok(said.includes(line), `the tab says "${line}": ${said}`);

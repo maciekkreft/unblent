@@ -200,6 +200,7 @@ test("_reset emits the defaults", async () => {
     arranging: true,
     vimKeys: false,
     keepOpen: false,
+    usageCounting: false,
     editors: {},
   });
 });

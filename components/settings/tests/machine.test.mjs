@@ -58,6 +58,7 @@ test("garbage parses to defaults, arranging on", () => {
     arranging: true,
     vimKeys: false,
     keepOpen: false,
+    usageCounting: false,
     editors: {},
     profile: "workshop",
   });
@@ -171,6 +172,7 @@ test("the product page starts in the product profile with its own defaults", () 
     arranging: false,
     vimKeys: false,
     keepOpen: false,
+    usageCounting: false,
     editors: {},
     profile: "product",
   });

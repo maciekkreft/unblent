@@ -35,7 +35,7 @@ FROZEN = _HERE / "released.json"
 
 # The features that have a flag, in the order the Features tab shows them; the
 # browser half of this component holds the same list (machine.js).
-FEATURES = ("choice-points",)
+FEATURES = ("choice-points", "usage")
 
 COLUMNS = ("release", "show")
 

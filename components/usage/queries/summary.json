@@ -1,0 +1,54 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Whose usage is wanted: you, this account on all its devices; all, every account added up, which only the admin may ask for and not while viewing as someone.",
+    "type": "object",
+    "properties": {
+      "who": { "enum": ["you", "all"] }
+    },
+    "required": ["who"],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The time spent in each feature on each of the last 182 days, oldest day first; a day and feature with no time is left out.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "The day, by the browser's local date, as YYYY-MM-DD." },
+                "feature": {
+                  "enum": ["journal", "reading", "highlights", "notes", "chats", "evaluators", "choice", "values", "other"],
+                  "description": "The feature the time was spent in."
+                },
+                "ms": { "type": "integer", "minimum": 0, "description": "The time spent, in milliseconds." }
+              },
+              "required": ["day", "feature", "ms"],
+              "additionalProperties": false
+            }
+          },
+          "accounts": { "type": "integer", "minimum": 0, "description": "How many accounts the totals add up: 1 for you, the number of accounts with any usage for all." }
+        },
+        "required": ["days", "accounts"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": {
+            "enum": ["signed-out", "not-admin", "unavailable"],
+            "description": "signed-out: no one is signed in. not-admin: all was asked by someone who is not the admin, or while viewing as someone. unavailable: no total could be read."
+          }
+        },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": []
+}
