@@ -42,7 +42,9 @@ for (const engine of ENGINES) {
       await signedIn(context, forgeCookie("shelf-slipbox"));
       await showAll(context);
       const page = await context.newPage();
-      const problems = watch(page);
+      // A reload cuts the first page's pulls short, which WebKit reports as "access control
+      // checks" or a cancelled load; nothing is lost, since a pull runs again at load (5).
+      const problems = watch(page, [], { ignore: [/due to access control checks|Load request cancelled/] });
       await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
       await until(async () => {
         const titles = (await tiles(page)).map((t) => t.title);
