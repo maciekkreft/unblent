@@ -35,8 +35,13 @@ const STAGE_CHAT_INPUT = "chat-input#stage-chat-input";
 // A note's or a chat's tab says its title, or Untitled while it has none.
 const noteLabel = (title) => (title === "" ? "Untitled" : title);
 
+// The Slip-Box (13): one fixed note, opened from the shelf. Its id is fixed, like the
+// journal's. It exists before it has text, when `notes` does not list it yet.
+export const SLIPBOX = "00000000000000000000000SBX";
+
 // A tab's label, or undefined while it is not known yet, so the tab is not drawn.
 const labelFor = (context, id) => {
+  if (id === SLIPBOX && context.notes.includes(id)) return "Slip-Box";
   if (context.notes.includes(id)) return id in context.titles ? noteLabel(context.titles[id]) : undefined;
   if (context.chats.includes(id)) return id in context.chatTitles ? noteLabel(context.chatTitles[id]) : undefined;
   return context.labels[id];
@@ -240,10 +245,11 @@ export const machine = setup({
       "closed. The desk's ‹ › move the tab in front one place earlier or later, and the new " +
       "order is kept like the rest; a move past either end does nothing. A deleted book's tab goes the same way, and a book the account no longer has " +
       "(after View as) loses its tab. A note opened on the stage (`note.staged`, the Notes " +
-      "panel's Open on stage) gets a tab of its own at the end, or its tab comes to the front; " +
+      "panel's Open on stage, or the shelf's Slip-Box) gets a tab of its own at the end, or its tab comes to the front; " +
       "while a note's tab is in front the stage shows a third view, the note editor with id " +
       "`stage`, which it tells which note to show. A note's tab says the note's title, or " +
-      "Untitled; picking it never opens a book, so the open book, and what the panels follow, " +
+      "Untitled, and the Slip-Box's always says Slip-Box and stays after a reload even before it " +
+      "has any text; picking a note's tab never opens a book, so the open book, and what the panels follow, " +
       "stays. Picking a book's tab, or a book opened anywhere, brings the book back to the " +
       "front, and so does picking a chapter, a passage or a journal day of the open book, such as " +
       "from a lookup in the chat. A note's tab closes like a book's, also by `:q` or `:tabc` in its editor, and the " +
@@ -408,7 +414,7 @@ export const machine = setup({
                 // A title kept before the reply is a note staged while it was on its way.
                 const titles = { ...context.titles, ...Object.fromEntries(notes.map((n) => [n.id, n.title])) };
                 let next = settle(context, enqueue, { titles });
-                for (const id of context.notes.filter((n) => !(n in titles))) next = drop(next, enqueue, id);
+                for (const id of context.notes.filter((n) => n !== SLIPBOX && !(n in titles))) next = drop(next, enqueue, id);
               }),
             },
             onError: "known",

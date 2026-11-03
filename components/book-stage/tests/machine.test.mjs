@@ -407,6 +407,27 @@ test("stored note tabs come back with the book tabs, and one the account does no
   assert.deepEqual(JSON.parse(storage.data[NOTES_KEY]), [NOTE_A]);
 });
 
+// The Slip-Box (13) is a note that exists before it has text, so notes: list may not hold it.
+const SLIPBOX = "00000000000000000000000SBX";
+
+test("the Slip-Box's tab says Slip-Box and comes back after a reload though notes does not list it", async () => {
+  const first = await staging();
+  first.actor.send({ type: "note.staged", id: SLIPBOX });
+  assert.deepEqual(first.last().tabs.at(-1), { id: SLIPBOX, label: "Slip-Box", closable: true });
+  const { last } = await staging({ stored: JSON.parse(first.storage.data[KEY]), storedNotes: JSON.parse(first.storage.data[NOTES_KEY]) });
+  assert.deepEqual(last().tabs, [
+    { id: BOOK, label: "Dune", closable: true },
+    { id: SLIPBOX, label: "Slip-Box", closable: true },
+  ]);
+});
+
+test("the Slip-Box's tab keeps its name when the note gets a title", async () => {
+  const { actor, last } = await staging();
+  actor.send({ type: "note.staged", id: SLIPBOX });
+  actor.send({ type: "note.changed", id: SLIPBOX, title: "How it is arranged" });
+  assert.equal(last().tabs.at(-1).label, "Slip-Box");
+});
+
 test("a list stored before note tabs reads as books", async () => {
   const { last } = await staging({ stored: [OTHER, BOOK] });
   assert.deepEqual(ids(last()), [OTHER, BOOK]);

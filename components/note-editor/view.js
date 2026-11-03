@@ -3,11 +3,11 @@ import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
 import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode } from "@codemirror/state";
-import { EditorView, Decoration } from "@codemirror/view";
+import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, refreshHashtagPicker, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, showing, startsTyping, linkMissing, notSynced, knownTags, lineMarksOf } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, hintOf, showing, startsTyping, linkMissing, notSynced, knownTags, lineMarksOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
@@ -673,6 +673,10 @@ class NoteEditor extends LitElement {
   // outside empties the history, or "u" would walk back into the notes shown before
   // it and save each of them over this one.
   #history = new Compartment();
+  // The muted line on an empty Slip-Box (machine.js: hintOf), drawn by CodeMirror where the
+  // text starts, and the hint it was last set to.
+  #hint = new Compartment();
+  #hintFor = null;
   // Which source links' highlights are gone, as last handed to the editor's tags, and the
   // actor's facts it was made from.
   #missing = () => false;
@@ -706,6 +710,7 @@ class NoteEditor extends LitElement {
       hashtagPicker({ tags: () => pickerTags(this.#actor.snapshot?.context.evaluators) }),
       lineMarks({ render: drawMarks }),
       this.#history.of(history()),
+      this.#hint.of([]),
       EditorView.updateListener.of(this.#onUpdate),
       EditorView.domEventHandlers({
         // Leaving the editor finishes every line.
@@ -805,6 +810,7 @@ class NoteEditor extends LitElement {
     });
     this.#shown = body; // before the leveling dispatch, so #onUpdate sees no change
     this.#checksFrom = undefined;
+    this.#hintFor = null;
     this.#view.dispatch({ effects: setAllLevels.of(levels) });
     this.#syncLevel(this.#view.state);
   }
@@ -828,6 +834,11 @@ class NoteEditor extends LitElement {
     if (!snapshot || !this.#view) return;
     const { body, vimKeys, notes, removed, checks } = snapshot.context;
     setVim(this.#view, vimKeys);
+    const hint = hintOf(snapshot.context);
+    if (hint !== this.#hintFor) {
+      this.#hintFor = hint;
+      this.#view.dispatch({ effects: this.#hint.reconfigure(hint ? placeholder(hint) : []) });
+    }
     if (checks !== this.#checksFrom) {
       this.#checksFrom = checks;
       this.#known = knownTags(checks);

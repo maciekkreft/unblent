@@ -50,6 +50,26 @@ export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId !=
 // A tile the user can delete: an imported book on the shelf, never the journal.
 const removable = (context, id) => context.books.some((b) => b.id === id && !b.written);
 
+// The Slip-Box (13): the one note at the top of the user's notes, opened from the shelf
+// as a note on the stage. Its id is fixed, like the journal's, and valid as a ULID.
+export const SLIPBOX = "00000000000000000000000SBX";
+
+// Whether the Slip-Box feature shows (3.1): not until `flags` answers, and not on a page
+// without `flags`, since the feature is not released until the admin releases it.
+export const slipBoxShown = (hidden) => Array.isArray(hidden) && !hidden.includes("slip-box");
+
+// The Slip-Box's tile: written by the user like the journal, so it has no rename, no
+// delete and no chapter count; it is not a book, so it is never in `books`.
+const SLIPBOX_TILE = { id: SLIPBOX, title: "Slip-Box", author: null, cover: null, chapterCount: 0, pending: false, addedAt: 0, written: true, slipBox: true };
+
+// The tiles the shelf draws: the books, and while the feature shows the Slip-Box right
+// after the journal.
+export const tilesOf = (context) => {
+  if (!slipBoxShown(context.hidden)) return context.books;
+  const at = context.books.filter((b) => b.written).length;
+  return [...context.books.slice(0, at), SLIPBOX_TILE, ...context.books.slice(at)];
+};
+
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
 export const machine = setup({
@@ -57,6 +77,8 @@ export const machine = setup({
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
     // races it is held for us until the reply lands (settings: read supersededBy).
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // Which features are hidden (3.1); flags.changed is held until the reply lands.
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     // The starting picture (4.3): the library from books, and who is signed in from
     // session, since session.changed only fires on a change and a fresh signed-out
     // load is no change — the empty invite would never appear from the event alone.
@@ -94,11 +116,16 @@ export const machine = setup({
       "Signed out it shows only \"Sign in to see your books.\": no tiles, not even the " +
       "journal's, and no Add a book. The books stay kept in this browser and come back, with " +
       "the open one highlighted, when the user signs in, without a reload. On a try page a visitor not " +
-      "yet signed in still sees the shelf.",
+      "yet signed in still sees the shelf. While the Slip-Box feature is shown, the second tile, " +
+      "right after the journal, is the Slip-Box: a card with a stack of cards above its name, " +
+      "which reads \"Written by you\" like the journal's. Opening it, by a click or Enter, shows " +
+      "the Slip-Box note on the stage as a tab of its own; it is not a book, so it has no rename " +
+      "or delete, dd ignores it, and it is never highlighted as the open book. While the feature " +
+      "is hidden, and on a page that cannot say, there is no Slip-Box tile.",
     kind: "view",
-    emits: ["book.picked", "book.selected", "book.discarded", "book.renamed", "book.restored"],
+    emits: ["book.picked", "book.selected", "book.discarded", "book.renamed", "book.restored", "note.staged"],
     attributes: ["renames"],
-    asks: ["books: list", "session: read", "books: open", "settings: read"],
+    asks: ["books: list", "session: read", "books: open", "settings: read", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -120,14 +147,24 @@ export const machine = setup({
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
     tryPage: Boolean(input.tryPage),
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
   }),
-  // Beside the states, so the preference arrives whatever the view is doing.
-  invoke: {
-    src: "settings",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
-    onError: { actions: [] },
-  },
+  // Beside the states, so the preference and the features arrive whatever the view is doing.
+  invoke: [
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : null) }) },
+      onError: { actions: [] },
+    },
+  ],
   initial: "loading",
   states: {
     loading: {
@@ -152,6 +189,7 @@ export const machine = setup({
   },
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     // Who is signed in now (4.3): signing in re-asks books: list, because the fact
     // pulls the library then. Signing out hides the tiles and keeps them, and forgets
     // the book dd deleted, which p could no longer bring back to this account.
@@ -207,10 +245,17 @@ export const machine = setup({
     },
     // The user opened a book (7.2, internal gesture): announce it. The highlight comes
     // back as book.opened from the fact, so there is one source of what is open.
-    _select: {
-      guard: ({ context, event }) => context.books.some((b) => b.id === event.id),
-      actions: emit(({ event }) => ({ type: "book.selected", id: event.id })),
-    },
+    _select: [
+      {
+        guard: ({ context, event }) => context.books.some((b) => b.id === event.id),
+        actions: emit(({ event }) => ({ type: "book.selected", id: event.id })),
+      },
+      // The Slip-Box is a note: the stage gives it a tab of its own (4.3, fifth rule).
+      {
+        guard: ({ context, event }) => event.id === SLIPBOX && slipBoxShown(context.hidden),
+        actions: emit({ type: "note.staged", id: SLIPBOX }),
+      },
+    ],
     // The user edited a title and author in place (D11, 7.2 internal gesture): announce
     // the trimmed texts as book.renamed, which books turns into a user title and author
     // (last write wins) and the book.changed that redraws the tile. Unchanged text emits
