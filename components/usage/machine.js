@@ -264,6 +264,7 @@ export const machine = setup({
       "book.progressed": "reading",
       "book.renamed": "reading",
       "book.discarded": "reading",
+      "book.restored": "reading",
       "book.switched": "reading",
       "book.closed": { "book-reader": "reading", "journal-entry": "journal" },
       "chapter.selected": "reading",
