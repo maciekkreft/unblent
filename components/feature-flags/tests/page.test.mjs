@@ -11,7 +11,7 @@ const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.en
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
-const FEATURES = ["choice-points"];
+const FEATURES = ["choice-points", "slip-box"];
 
 const text = (page) => page.evaluate(() => document.querySelector("feature-flags").shadowRoot.textContent.replace(/\s+/g, " ").trim());
 
@@ -61,14 +61,15 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test(`the admin holds back a feature and releases it again, and a refused switch goes back, in ${engine.name}`, async () => {
       const { context, page, problems, state, tab } = await open(browser, { admin: true, name: "Admin" });
       try {
-        await until(async () => (await tab.getByRole("switch").count()) === 2);
+        await until(async () => (await tab.getByRole("switch").count()) === 4);
         const said = await text(page);
-        for (const line of ["Features", "Release", "Show", "Values and Choice Points"]) {
+        for (const line of ["Features", "Release", "Show", "Values and Choice Points", "Slip-Box"]) {
           assert.ok(said.includes(line), `the tab says "${line}": ${said}`);
         }
         assert.ok(!said.includes("Undo"), `Undo has no row: ${said}`);
         const release = tab.getByRole("switch", { name: "Release Values and Choice Points" });
         assert.equal(await release.isChecked(), true, "released at first");
+        assert.equal(await tab.getByRole("switch", { name: "Release Slip-Box" }).isChecked(), false, "Slip-Box is not released at first");
         await release.click();
         await until(async () => state.puts.length === 1 && !(await release.isChecked()));
         assert.deepEqual(state.puts, [{ feature: "choice-points", on: false, column: "release" }]);
@@ -95,6 +96,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await tab.getByRole("switch").count()) === 1);
         const said = await text(page);
         assert.ok(!said.includes("Release") && !said.includes("Undo"), `no Release and no row for Undo: ${said}`);
+        assert.ok(!said.includes("Slip-Box"), `no row for Slip-Box, which is not released: ${said}`);
         const show = tab.getByRole("switch", { name: "Show Values and Choice Points" });
         await show.click();
         await until(async () => state.puts.length === 1 && !(await show.isChecked()));

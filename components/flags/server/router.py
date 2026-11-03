@@ -35,7 +35,12 @@ FROZEN = _HERE / "released.json"
 
 # The features that have a flag, in the order the Features tab shows them; the
 # browser half of this component holds the same list (machine.js).
-FEATURES = ("choice-points",)
+FEATURES = ("choice-points", "slip-box")
+
+# The features that start not released (3.1): one with no row in `turned_on` is held
+# back, so a fresh data directory and a server that never stored it both hide it until
+# the admin releases it.
+STARTS_OFF = ("slip-box",)
 
 COLUMNS = ("release", "show")
 
@@ -62,13 +67,19 @@ def released() -> list[str]:
         return [f for f in FEATURES if not isinstance(frozen, list) or f in frozen]
     with _connect(DATA / "flags.db", _RELEASE) as connection:
         held = {row[0] for row in connection.execute("SELECT feature FROM off")}
-    return [f for f in FEATURES if f not in held]
+        turned_on = {row[0] for row in connection.execute("SELECT feature FROM turned_on")}
+    return [f for f in FEATURES if f not in held and (f not in STARTS_OFF or f in turned_on)]
 
 
 def release(feature: str, on: bool) -> None:
     with _connect(DATA / "flags.db", _RELEASE) as connection:
         now = int(time.time() * 1000)
-        if on:
+        if feature in STARTS_OFF:
+            if on:
+                connection.execute("INSERT OR IGNORE INTO turned_on (feature, at) VALUES (?, ?)", (feature, now))
+            else:
+                connection.execute("DELETE FROM turned_on WHERE feature = ?", (feature,))
+        elif on:
             connection.execute("DELETE FROM off WHERE feature = ?", (feature,))
         else:
             connection.execute("INSERT OR IGNORE INTO off (feature, at) VALUES (?, ?)", (feature, now))

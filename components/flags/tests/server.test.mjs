@@ -55,12 +55,17 @@ out["someone"] = call("GET", someone)
 out["admin"] = call("GET", admin)
 out["adminViewing"] = call("GET", viewing)
 out["back"] = call("PUT", admin, {"feature": "choice-points", "on": True})
+out["slipOn"] = call("PUT", admin, {"feature": "slip-box", "on": True})
+out["slipOnTwice"] = call("PUT", admin, {"feature": "slip-box", "on": True})
+out["someoneSlip"] = call("GET", someone)
 out["showSignedOut"] = call("PUT", None, {"feature": "choice-points", "on": False, "column": "show"})
 out["guestHides"] = call("PUT", guest, {"feature": "choice-points", "on": False, "column": "show"})
 out["someoneElse"] = call("GET", someone)
 out["guestAgain"] = call("GET", guest)
 out["guestShows"] = call("PUT", guest, {"feature": "choice-points", "on": True, "column": "show"})
 out["adminHides"] = call("PUT", admin, {"feature": "choice-points", "on": False, "column": "show"})
+out["slipOff"] = call("PUT", admin, {"feature": "slip-box", "on": False})
+out["someoneSlipOff"] = call("GET", someone)
 
 # The local edition (3.4): Release is the frozen list, or everything without it.
 os.environ["UNBLENT_LOCAL_USER"] = "l1"
@@ -82,29 +87,35 @@ test("anyone reads Release and Show; only the admin on the website releases, eve
         env: { ...process.env, UNBLENT_DATA: data, SESSION_SECRET: "flags-test-secret", UNBLENT_LOCAL_USER: "" },
       }),
     );
-    const p = (released, hidden, shown = ["choice-points"]) => [200, { off: ["choice-points"].filter((f) => !released.includes(f)), hidden, released, shown }];
-    assert.deepEqual(out.fresh, p(["choice-points"], []), "every feature is released at first, and a row kept for Undo is ignored");
+    const ALL = ["choice-points", "slip-box"];
+    const p = (released, hidden, shown = ALL) => [200, { off: ALL.filter((f) => !released.includes(f)), hidden, released, shown }];
+    assert.deepEqual(out.fresh, p(["choice-points"], ["slip-box"]), "every feature is released at first, except Slip-Box, and a row kept for Undo is ignored");
     assert.deepEqual(out.someoneFresh, out.fresh, "a Show row kept for Undo is ignored");
     assert.deepEqual(out.notAdmin, [403, { error: "not-admin" }]);
     assert.deepEqual(out.viewing, [403, { error: "not-admin" }], "not while the admin views as someone");
     assert.deepEqual(out.bad, [400, 400, 400, 400, 400, 400, 400, 400], "an unknown feature, Undo included, is refused");
     assert.deepEqual(out.held, p([], []), "the admin on the website still sees what is not released");
     assert.deepEqual(out.twice, out.held, "holding back twice is once");
-    assert.deepEqual(out.signedOut, p([], ["choice-points"]));
+    assert.deepEqual(out.signedOut, p([], ALL));
     assert.deepEqual(out.someone, out.signedOut);
     assert.deepEqual(out.admin, out.held);
     assert.deepEqual(out.adminViewing, out.signedOut, "the admin viewing as someone sees what they see");
     assert.deepEqual(out.back, p(["choice-points"], []));
+    assert.deepEqual(out.slipOn, p(ALL, []), "the admin releases Slip-Box");
+    assert.deepEqual(out.slipOnTwice, out.slipOn, "releasing twice is once");
+    assert.deepEqual(out.someoneSlip, p(ALL, []), "released for everyone");
     assert.deepEqual(out.showSignedOut, [401, { error: "signed-out" }]);
-    assert.deepEqual(out.guestHides, p(["choice-points"], ["choice-points"], []), "a guest hides a feature from itself");
-    assert.deepEqual(out.someoneElse, p(["choice-points"], []), "and from no one else");
+    assert.deepEqual(out.guestHides, p(ALL, ["choice-points"], ["slip-box"]), "a guest hides a feature from itself");
+    assert.deepEqual(out.someoneElse, p(ALL, []), "and from no one else");
     assert.deepEqual(out.guestAgain, out.guestHides, "kept for the account");
-    assert.deepEqual(out.guestShows, p(["choice-points"], []));
-    assert.deepEqual(out.adminHides, p(["choice-points"], ["choice-points"], []), "Show hides from the admin too");
-    assert.deepEqual(out.localNone, p(["choice-points"], []), "a Mac without the frozen list releases everything");
-    assert.deepEqual(out.localFrozen, p([], ["choice-points"]), "a Mac hides what the frozen list does not release, from its admin too");
+    assert.deepEqual(out.guestShows, p(ALL, []));
+    assert.deepEqual(out.adminHides, p(ALL, ["choice-points"], ["slip-box"]), "Show hides from the admin too");
+    assert.deepEqual(out.slipOff, p(["choice-points"], ["choice-points"], ["slip-box"]), "held back again, the admin still sees it");
+    assert.deepEqual(out.someoneSlipOff, p(["choice-points"], ["slip-box"]));
+    assert.deepEqual(out.localNone, p(ALL, []), "a Mac without the frozen list releases everything");
+    assert.deepEqual(out.localFrozen, p([], ALL), "a Mac hides what the frozen list does not release, from its admin too");
     assert.deepEqual(out.localRelease, [403, { error: "not-admin" }], "Release is set only on the website");
-    assert.deepEqual(out.localShow, p([], ["choice-points"], []), "Show works on a Mac");
+    assert.deepEqual(out.localShow, p([], ALL, ["slip-box"]), "Show works on a Mac");
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

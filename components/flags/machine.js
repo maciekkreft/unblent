@@ -9,18 +9,23 @@ import { ulid } from "ulid";
 // definition importable in Node.
 
 // The features that have a flag (3.1). Pages name them in `flag="…"` (8).
-export const FEATURES = ["choice-points"];
+export const FEATURES = ["choice-points", "slip-box"];
 
 const list = (value) => (Array.isArray(value) ? value.filter((f) => typeof f === "string") : null);
 
 // A picture as the server or the device gives it, or null when it is not one. A
 // picture kept from before Release and Show reads as released where not off, and shown.
+// A feature a kept picture names neither off nor released did not exist when it was
+// kept, so it is hidden until the server answers (3.1: a new feature may start off).
 export const pictureOf = (value) => {
-  const off = list(value?.off);
-  const hidden = list(value?.hidden);
+  let off = list(value?.off);
+  let hidden = list(value?.hidden);
   if (!off || !hidden) return null;
   const released = list(value?.released) ?? FEATURES.filter((f) => !off.includes(f));
   const shown = list(value?.shown) ?? [...FEATURES];
+  const unknown = FEATURES.filter((f) => !off.includes(f) && !released.includes(f));
+  off = [...off, ...unknown.filter((f) => !off.includes(f))];
+  hidden = [...hidden, ...unknown.filter((f) => !hidden.includes(f))];
   return { off, hidden, released, shown };
 };
 
@@ -60,7 +65,7 @@ const read = [
 const LIST = { release: "released", show: "shown" };
 const isOn = (picture, feature, column) => picture[LIST[column]].includes(feature);
 
-const NAMES = { "choice-points": "Values and Choice Points" };
+const NAMES = { "choice-points": "Values and Choice Points", "slip-box": "Slip-Box" };
 const labelOf = (feature, column, on) =>
   column === "release" ? `${on ? "release" : "hold back"} ${NAMES[feature] ?? feature}` : `${on ? "show" : "hide"} ${NAMES[feature] ?? feature}`;
 
@@ -97,15 +102,16 @@ export const machine = setup({
   id: "flags",
   meta: {
     description:
-      "Owns which features each person sees: Values and Choice Points. Each has " +
+      "Owns which features each person sees: Values and Choice Points, and Slip-Box. Each has " +
       "two switches in the Features tab. Release, set by the admin on the website, gives the " +
       "feature to everyone; one not released is hidden from everyone but the admin on the " +
       "website. Show, set by each account for itself, hides a released feature from that " +
-      "account alone. A Mac that is not connected reads Release " +
+      "account alone. Slip-Box starts not released, on a new server as on one that has " +
+      "never stored it, until the admin releases it. A Mac that is not connected reads Release " +
       "from the list frozen into the app when its version was built, and without that list " +
       "every feature counts as released. The last answer of the server is kept on this device, so a reload or " +
       "an offline start hides the same features; with no answer yet every feature that has " +
-      "a flag is hidden. It reads again whenever the account changes, and forgets the kept " +
+      "a flag is hidden, and so is one the kept answer does not know yet. It reads again whenever the account changes, and forgets the kept " +
       "answer when the browser is about to change account. A switch that cannot be saved, " +
       "for example offline, changes nothing, and the same picture is announced again so the " +
       "tab can say so. Each switch pressed is a step Undo and Redo reverse, refused when " +
