@@ -39,6 +39,10 @@ const slotted = (page) =>
 const text = (page, tag) =>
   page.evaluate((tag) => document.querySelector(tag).shadowRoot.textContent.replace(/\s+/g, " ").trim(), tag);
 const openGear = (page) => page.locator("dock-desk .controls button.pill").click();
+// data/flags.db is shared by every test (feature-flags' test says why), so the features
+// are answered by request routing: every one released and shown.
+const FLAGS = { off: [], hidden: [], released: ["choice-points", "usage"], shown: ["choice-points", "usage"] };
+const released = (context) => context.route(/\/api\/flags$/, (route) => route.fulfill({ json: FLAGS }));
 
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
   describe(`the gear's sheet in ${engine.name}`, { timeout: 30000 }, () => {
@@ -56,6 +60,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       try {
         context.setDefaultTimeout(4000);
         await signedIn(context, forgeCookie("admin"));
+        await released(context);
         await context.route(/\/api\/session\/me$/, async (route) => {
           const response = await route.fetch();
           await route.fulfill({ response, json: { ...(await response.json()), admin: true, name: "Admin" } });
@@ -74,8 +79,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
-        await until(async () => (await tabs(page)).length === 5);
-        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "People", "Features"]);
+        await until(async () => (await tabs(page)).length === 6);
+        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "People", "Features", "Usage"]);
         assert.deepEqual(await slotted(page), ["settings-sheet"], "Settings is shown first");
 
         await page.locator('settings-tabs [role="tab"]', { hasText: "People" }).click();
@@ -138,6 +143,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       try {
         context.setDefaultTimeout(4000);
         await signedIn(context, forgeCookie("admin"));
+        await released(context);
         await context.route(/\/api\/session\/me$/, async (route) => {
           const response = await route.fetch();
           await route.fulfill({ response, json: { ...(await response.json()), admin: true, name: "Admin" } });
@@ -162,11 +168,12 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
-    test(`everyone else sees Settings, Generators and Features, and the People tab asks nothing, in ${engine.name}`, async () => {
+    test(`everyone else sees Settings, Generators, Features and Usage, and the People tab asks nothing, in ${engine.name}`, async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       try {
         context.setDefaultTimeout(4000);
         await signedIn(context, forgeCookie("account"));
+        await released(context);
         const asked = [];
         context.on("request", (req) => /\/api\/(session\/people|llm\/spending)$/.test(req.url()) && asked.push(req.url()));
         const page = await context.newPage();
@@ -174,8 +181,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
         await page.locator("settings-sheet h3").first().waitFor();
-        await until(async () => (await tabs(page)).length === 4);
-        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "Features"], "no People tab");
+        await until(async () => (await tabs(page)).length === 5);
+        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "Features", "Usage"], "no People tab");
         assert.deepEqual(await slotted(page), ["settings-sheet"]);
         assert.deepEqual(asked, [], "the People tab never asks for anyone but the admin");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);

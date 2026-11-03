@@ -45,8 +45,14 @@ for (const engine of ENGINES) {
       try {
         const page = await context.newPage();
         const problems = watch(page);
+        // usage counts only once it has loaded its store and then confirmed who is signed
+        // in, its second read of session; a click before that is not counted, which on a
+        // busy host left nothing to count. The trace's console line says when it landed.
+        let confirmed = 0;
+        page.on("console", (m) => /reply read session → usage replied/.test(m.text()) && confirmed++);
         await page.addInitScript(() => localStorage.setItem("settings:product", JSON.stringify({ nav: [], usageCounting: true })));
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+        await until(async () => confirmed >= 2);
         await page.locator("book-shelf .tile:not(.adding)").filter({ hasText: "Journal" }).click();
         await until(async () => (await totals(page)).some((r) => r.ms > 0));
         await page.reload({ waitUntil: "domcontentloaded" });
