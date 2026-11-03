@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown, plain, showing } from "../machine.js";
+import { machine, shown, plain, showing, chaptered, deletable } from "../machine.js";
 
 // A long stretch of simulated time, to show nothing waits on a clock.
 const LATER = 10000;
@@ -52,7 +52,7 @@ test("the starting picture is notes: list, sorted newest first", async () => {
   const { actor } = list({
     ask: (...args) => {
       // The Vim keys read (12) and who is signed in are their own concerns.
-      if (args[0] !== "settings" && args[0] !== "session") asked.push(args);
+      if (args[0] !== "settings" && args[0] !== "session" && args[0] !== "flags") asked.push(args);
       return Promise.resolve({ notes: [{ id: A, title: "A", updatedAt: 10 }, { id: B, title: "B", updatedAt: 20 }] });
     },
   });
@@ -198,7 +198,7 @@ test("with the attribute off, the subject is not asked and every note shows", as
   const { actor } = list({
     following: false,
     ask: (...args) => {
-      if (args[0] !== "settings" && args[0] !== "session") asked.push(args);
+      if (args[0] !== "settings" && args[0] !== "session" && args[0] !== "flags") asked.push(args);
       return answeringList([{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }])(...args);
     },
   });
@@ -535,4 +535,103 @@ test("dd does nothing on the New note row", async () => {
   actor.send({ type: "_dd", id: MINTED });
   assert.deepEqual(discarded, []);
   assert.equal(actor.getSnapshot().context.deleted, null);
+});
+
+// --- A note as the subject, and the Slip-Box (Slip-Box shown) -------------------------
+
+const SLIPBOX = "00000000000000000000000SBX";
+const PARENT = { kind: "note", id: A };
+const DUNE = { kind: "book", id: "dune", chapter: "one", chapterTitle: "One" };
+
+// A following list that answers flags: read with Slip-Box shown or hidden.
+function tree({ notes, subject, hidden = [] }) {
+  const ask = (target, name) => {
+    if (target === "flags") return Promise.resolve({ hidden });
+    return answering({ notes, subject })(target, name);
+  };
+  const out = list({ ask, following: true });
+  out.moved = [];
+  out.actor.on("note.moved", ({ type, ...e }) => out.moved.push(e));
+  return out;
+}
+
+test("a note as the subject lists the notes under it, with no chapter switch", async () => {
+  const { actor } = tree({
+    subject: { kind: "note", id: A, title: "Parent", view: "book-stage" },
+    notes: [
+      { id: A, title: "Parent", updatedAt: 10, about: [] },
+      { id: B, title: "Child", updatedAt: 20, about: [PARENT] },
+      { id: C, title: "Beside Dune", updatedAt: 30, about: [DUNE] },
+    ],
+  });
+  await tick();
+  assert.deepEqual(shownIds(actor), [B]);
+  assert.equal(chaptered(actor.getSnapshot().context), null);
+});
+
+test("a note with notes under it cannot be deleted, by the trash, a swipe or dd", async () => {
+  const { actor, discarded } = tree({
+    subject: null,
+    notes: [
+      { id: A, title: "Parent", updatedAt: 10, about: [] },
+      { id: B, title: "Child", updatedAt: 20, about: [PARENT] },
+    ],
+  });
+  await tick();
+  assert.equal(deletable(actor.getSnapshot().context, A), false);
+  actor.send({ type: "_discard", id: A });
+  actor.send({ type: "_dd", id: A });
+  assert.deepEqual(discarded, []);
+  assert.equal(actor.getSnapshot().context.deleted, null);
+  // Once the child is gone, the parent can be deleted.
+  actor.send({ type: "note.deleted", id: B });
+  assert.equal(deletable(actor.getSnapshot().context, A), true);
+  actor.send({ type: "_dd", id: A });
+  assert.deepEqual(discarded, [A]);
+});
+
+test("the Slip-Box note is never listed, from the list or a change", async () => {
+  const { actor } = tree({
+    subject: null,
+    notes: [{ id: SLIPBOX, title: "How it is arranged", updatedAt: 10, about: [] }, { id: A, title: "A", updatedAt: 5, about: [] }],
+  });
+  await tick();
+  assert.deepEqual(ids(actor), [A]);
+  actor.send({ type: "note.changed", id: SLIPBOX, title: "Again", body: "Again", version: 2, pending: false, updatedAt: 40 });
+  assert.deepEqual(ids(actor), [A]);
+  assert.equal(deletable(actor.getSnapshot().context, SLIPBOX), false);
+});
+
+test("p in a list about another thing brings the note back under it; in its own list it keeps its links", async () => {
+  const notes = [
+    { id: A, title: "Parent", updatedAt: 10, about: [] },
+    { id: B, title: "Beside Dune", updatedAt: 20, about: [DUNE] },
+  ];
+  const { actor, moved } = tree({ subject: { kind: "book", id: "dune", title: "Dune", view: "book-stage", ...{ chapter: "one", chapterTitle: "One" } }, notes });
+  await tick();
+  actor.send({ type: "_dd", id: B });
+  actor.send({ type: "note.deleted", id: B });
+  actor.send({ type: "_paste", after: null, before: null });
+  assert.deepEqual(moved.at(-1), { id: B, after: null, before: null }, "the same book: no link");
+  actor.send({ type: "note.changed", id: B, title: "Beside Dune", body: "x", version: 3, pending: false, updatedAt: 20, about: [DUNE] });
+  actor.send({ type: "_dd", id: B });
+  actor.send({ type: "note.deleted", id: B });
+  actor.send({ type: "subject.changed", subject: { kind: "note", id: A, title: "Parent", view: "book-stage" } });
+  actor.send({ type: "_paste", after: null, before: null });
+  assert.deepEqual(moved.at(-1), { id: B, after: null, before: null, about: { kind: "note", id: A } });
+});
+
+test("with Slip-Box hidden p brings the note back with its links, as before", async () => {
+  const { actor, moved } = tree({
+    hidden: ["slip-box"],
+    subject: { kind: "book", id: "emma", title: "Emma", view: "book-stage" },
+    notes: [{ id: B, title: "Beside Dune", updatedAt: 20, about: [DUNE] }],
+  });
+  await tick();
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "dune", title: "Dune", view: "book-stage" } });
+  actor.send({ type: "_dd", id: B });
+  actor.send({ type: "note.deleted", id: B });
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "emma", title: "Emma", view: "book-stage" } });
+  actor.send({ type: "_paste", after: null, before: null });
+  assert.deepEqual(moved.at(-1), { id: B, after: null, before: null });
 });

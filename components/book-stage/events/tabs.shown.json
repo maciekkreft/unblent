@@ -12,7 +12,8 @@
         "properties": {
           "id": { "type": "string", "description": "What the tab stands for, as the view names it." },
           "label": { "type": "string", "description": "The text on the tab." },
-          "closable": { "type": "boolean", "description": "The user may close this tab." }
+          "closable": { "type": "boolean", "description": "The user may close this tab." },
+          "kind": { "enum": ["book", "note", "chat"], "description": "What the tab stands for: a book, a note or a chat. Absent from a view that does not say." }
         },
         "required": ["id", "label", "closable"],
         "additionalProperties": false

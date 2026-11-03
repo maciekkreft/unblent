@@ -101,7 +101,7 @@ const open = async (actor, id) => {
 test("the open book gets a tab at the start, labelled, announced once, and stored", async () => {
   const { shownEvents, storage } = await tabbed({ openId: BOOK });
   assert.equal(shownEvents.length, 1);
-  assert.deepEqual(shownEvents[0], { type: "tabs.shown", view: "book-stage", tabs: [{ id: BOOK, label: "Dune", closable: false }], active: BOOK });
+  assert.deepEqual(shownEvents[0], { type: "tabs.shown", view: "book-stage", tabs: [{ id: BOOK, label: "Dune", closable: false, kind: "book" }], active: BOOK });
   assert.deepEqual(JSON.parse(storage.data[KEY]), [BOOK]);
 });
 
@@ -306,8 +306,8 @@ test("a staged note gets a tab at the end, in front, labelled by its title, and 
   const { actor, last, sent, switched, storage } = await staging();
   actor.send({ type: "note.staged", id: NOTE_A });
   assert.deepEqual(last().tabs, [
-    { id: BOOK, label: "Dune", closable: true },
-    { id: NOTE_A, label: "Plans", closable: true },
+    { id: BOOK, label: "Dune", closable: true, kind: "book" },
+    { id: NOTE_A, label: "Plans", closable: true, kind: "note" },
   ]);
   assert.equal(last().active, NOTE_A);
   assert.equal(shownOf(actor.getSnapshot().context), "note");
@@ -413,11 +413,11 @@ const SLIPBOX = "00000000000000000000000SBX";
 test("the Slip-Box's tab says Slip-Box and comes back after a reload though notes does not list it", async () => {
   const first = await staging();
   first.actor.send({ type: "note.staged", id: SLIPBOX });
-  assert.deepEqual(first.last().tabs.at(-1), { id: SLIPBOX, label: "Slip-Box", closable: true });
+  assert.deepEqual(first.last().tabs.at(-1), { id: SLIPBOX, label: "Slip-Box", closable: true, kind: "note" });
   const { last } = await staging({ stored: JSON.parse(first.storage.data[KEY]), storedNotes: JSON.parse(first.storage.data[NOTES_KEY]) });
   assert.deepEqual(last().tabs, [
-    { id: BOOK, label: "Dune", closable: true },
-    { id: SLIPBOX, label: "Slip-Box", closable: true },
+    { id: BOOK, label: "Dune", closable: true, kind: "book" },
+    { id: SLIPBOX, label: "Slip-Box", closable: true, kind: "note" },
   ]);
 });
 
@@ -512,8 +512,8 @@ test("a staged chat gets a tab at the end, in front, labelled by its title, and 
   const { actor, last, sent, switched, storage } = await chatStaging();
   actor.send({ type: "conversation.staged", id: CHAT_A });
   assert.deepEqual(last().tabs, [
-    { id: BOOK, label: "Dune", closable: true },
-    { id: CHAT_A, label: "About Dune", closable: true },
+    { id: BOOK, label: "Dune", closable: true, kind: "book" },
+    { id: CHAT_A, label: "About Dune", closable: true, kind: "chat" },
   ]);
   assert.equal(shownOf(actor.getSnapshot().context), "chat");
   assert.deepEqual(sent, [

@@ -16,7 +16,25 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // which holds the reader and the journal's page, and the reader on its own. A view with
 // no row is about the subject and never changes it. The first row is the shower before
 // any view has been in front (a desk never arranged), so it names the product's stage.
+// While Slip-Box shows the book stage may also show a note, when a note's tab is in
+// front of it (noteInFront).
 const STAGE_KINDS = { "book-stage": "book", "book-reader": "book" };
+
+// Whether the Slip-Box feature shows (3.1): not until `flags` answers, and not on a page
+// without `flags`, since the feature is not released until the admin releases it.
+const slipBoxShown = (hidden) => Array.isArray(hidden) && !hidden.includes("slip-box");
+
+// The note in front of the showing view, as { id, label }, while Slip-Box shows: the stage
+// says which of its tabs is in front and whether that tab is a note's (tabs.shown). A note
+// there is the subject; any other tab in front leaves the subject the open book.
+const noteInFront = (context) => {
+  if (!slipBoxShown(context.hidden)) return null;
+  const front = context.fronts[showing(context)];
+  return front?.kind === "note" ? front : null;
+};
+
+// The tab in front of a view's tabs.shown, or null when none is.
+const frontOf = (event) => (Array.isArray(event.tabs) ? event.tabs.find((t) => t.id === event.active) ?? null : null);
 
 // A stage is a view address, `book-reader` or `book-reader#2` when a page holds more
 // than one (4.1); the kind is keyed on the base name.
@@ -79,7 +97,13 @@ const noBook = { chapters: [], at: null, written: false };
 // The subject the current context makes: an open id and a title we have resolved, of
 // the kind the showing view shows, with its open chapter when it has one. Missing either
 // is null.
-const subjectOf = (context) =>
+const subjectOf = (context) => {
+  const note = noteInFront(context);
+  if (note) return { kind: "note", id: note.id, title: note.label, view: showing(context) };
+  return bookSubjectOf(context);
+};
+
+const bookSubjectOf = (context) =>
   context.openId != null && context.title != null
     ? { kind: kindOf(context), id: context.openId, title: context.title, view: showing(context), ...chapterOf(context) }
     : null;
@@ -99,12 +123,18 @@ export const machine = setup({
     // are held for us until the replies land (their supersededBy), so nothing is lost; a
     // page with no journal answers no-answerer, and the day stays unknown.
     load: fromPromise(async ({ input }) => {
-      const [dock, open, journal] = await Promise.all([
+      const [dock, open, journal, flags] = await Promise.all([
         input.ask("dock", "read", {}),
         input.ask("books", "open", {}),
         input.ask("journal", "open", {}),
+        input.ask("flags", "read", {}),
       ]);
-      return { stage: dock?.stage ?? null, openId: open?.id ?? null, day: journal?.shown?.day ?? null };
+      return {
+        stage: dock?.stage ?? null,
+        openId: open?.id ?? null,
+        day: journal?.shown?.day ?? null,
+        hidden: Array.isArray(flags?.hidden) ? flags.hidden : null,
+      };
     }),
     // The open book's title and chapters. book.changed and book.deleted for it are held until this
     // reply lands (books: read supersededBy), so a change that races it is applied after.
@@ -116,6 +146,12 @@ export const machine = setup({
     found: ({ event }) => "book" in event.output,
   },
   actions: {
+    keepFront: assign({
+      fronts: ({ context, event }) => {
+        const front = frontOf(event);
+        return { ...context.fronts, [event.view]: front ? { id: front.id, label: front.label, kind: front.kind } : null };
+      },
+    }),
     // Announce the subject only when it actually differs (D3): a view about the subject
     // coming to the front, or an echo of the same book, changes nothing.
     settle: enqueueActions(({ context, enqueue }) => {
@@ -130,7 +166,7 @@ export const machine = setup({
   meta: {
     description:
       "Owns what the user is working on, as a kind, an id, a title and the view that shows it, " +
-      "or nothing; it stores nothing and combines what `dock` and `books` announce. Some views " +
+      "or nothing; it stores nothing and combines what `dock`, `books` and the stage's tabs announce. Some views " +
       "show a thing, today `book-stage` and `book-reader`, which show the open book; the subject " +
       "is the thing " +
       "shown by the one of those last in front on the stage, and it stays while any other view " +
@@ -142,13 +178,17 @@ export const machine = setup({
       "the chapter of the reading place, its title in lowercase letters, digits and hyphens " +
       "(none when the title has no letter or digit); for the Journal, the day its page shows, " +
       "named by its date. It announces a change only when the answer differs, so moving to " +
-      "another chapter is a change and moving within one is not.",
+      "another chapter is a change and moving within one is not. While the Slip-Box feature " +
+      "shows, a note's tab in front of `book-stage` (a note opened on the stage, or the Slip-Box) " +
+      "makes that note the subject, as kind note, its id, the tab's title and `book-stage`, " +
+      "with no chapter; a book's or a chat's tab in front gives the open book back. With " +
+      "Slip-Box hidden, or on a page without `flags`, a note's tab changes nothing.",
     kind: "fact",
     shape: "local-only",
     owns: "current subject",
-    steps: { "day.shown": "navigation" },
+    steps: { "day.shown": "navigation", "tabs.shown": "navigation" },
     emits: ["subject.changed"],
-    asks: ["dock: read", "books: open", "books: read", "journal: open"],
+    asks: ["dock: read", "books: open", "books: read", "journal: open", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -163,6 +203,11 @@ export const machine = setup({
     subject: null,
     ...noBook,
     day: null,
+    // The features `flags` reports hidden (3.1); null until it answers. Then the tab in
+    // front of each view that announces tabs (tabs.shown), by the view's address, as
+    // { id, label, kind }, or null.
+    hidden: null,
+    fronts: {},
   }),
   initial: "starting",
   on: {
@@ -172,6 +217,10 @@ export const machine = setup({
     // The day is not held for the journal: open ask (journal.changed supersedes it), so a
     // day.shown that lands while starting is kept here and wins over the older reply.
     "day.shown": { actions: assign({ day: ({ event }) => event.day }) },
+    // Kept while starting, so a stage's tabs or a flag that lands before the first asks
+    // reply count once they do. flags.changed is held until flags: read replies.
+    "tabs.shown": { actions: "keepFront" },
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
   },
   states: {
     // Ask the stage and the open book before answering anything but null.
@@ -185,6 +234,8 @@ export const machine = setup({
             shower: ({ context, event }) => showerAfter(context.shower, event.output.stage),
             openId: ({ event }) => event.output.openId,
             day: ({ context, event }) => context.day ?? event.output.day,
+            // A flags.changed released before the other asks replied is newer than the reply.
+            hidden: ({ context, event }) => context.hidden ?? event.output.hidden,
           }),
         },
         onError: "active",
@@ -213,6 +264,10 @@ export const machine = setup({
           actions: assign(({ context, event }) => ({ title: event.title, ...bookParts(context, event) })),
           target: ".reconcile",
         },
+        // A stage's tabs changed: a note's tab in front makes that note the subject while
+        // Slip-Box shows (3.1), and a book's or a chat's gives the open book back.
+        "tabs.shown": { actions: "keepFront", target: ".reconcile" },
+        "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }), target: ".reconcile" },
         // The journal page moved to another day: the Journal's open chapter.
         "day.shown": {
           actions: assign({ day: ({ event }) => event.day }),
