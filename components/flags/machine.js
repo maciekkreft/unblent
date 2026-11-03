@@ -9,7 +9,7 @@ import { ulid } from "ulid";
 // definition importable in Node.
 
 // The features that have a flag (3.1). Pages name them in `flag="…"` (8).
-export const FEATURES = ["choice-points", "undo"];
+export const FEATURES = ["choice-points"];
 
 const list = (value) => (Array.isArray(value) ? value.filter((f) => typeof f === "string") : null);
 
@@ -60,7 +60,7 @@ const read = [
 const LIST = { release: "released", show: "shown" };
 const isOn = (picture, feature, column) => picture[LIST[column]].includes(feature);
 
-const NAMES = { "choice-points": "Values and Choice Points", undo: "Undo" };
+const NAMES = { "choice-points": "Values and Choice Points" };
 const labelOf = (feature, column, on) =>
   column === "release" ? `${on ? "release" : "hold back"} ${NAMES[feature] ?? feature}` : `${on ? "show" : "hide"} ${NAMES[feature] ?? feature}`;
 
@@ -97,12 +97,11 @@ export const machine = setup({
   id: "flags",
   meta: {
     description:
-      "Owns which features each person sees: Values and Choice Points, and Undo. Each has " +
+      "Owns which features each person sees: Values and Choice Points. Each has " +
       "two switches in the Features tab. Release, set by the admin on the website, gives the " +
       "feature to everyone; one not released is hidden from everyone but the admin on the " +
       "website. Show, set by each account for itself, hides a released feature from that " +
-      "account alone. Undo starts not released, on a new server as on one that has never " +
-      "stored it, until the admin releases it. A Mac that is not connected reads Release " +
+      "account alone. A Mac that is not connected reads Release " +
       "from the list frozen into the app when its version was built, and without that list " +
       "every feature counts as released. The last answer of the server is kept on this device, so a reload or " +
       "an offline start hides the same features; with no answer yet every feature that has " +

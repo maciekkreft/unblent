@@ -11,7 +11,7 @@ const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.en
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
-const FEATURES = ["choice-points", "undo"];
+const FEATURES = ["choice-points"];
 
 const text = (page) => page.evaluate(() => document.querySelector("feature-flags").shadowRoot.textContent.replace(/\s+/g, " ").trim());
 
@@ -58,22 +58,24 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: rendering and layout.
-    test(`the admin releases a feature and shows it, and a refused switch goes back, in ${engine.name}`, async () => {
+    test(`the admin holds back a feature and releases it again, and a refused switch goes back, in ${engine.name}`, async () => {
       const { context, page, problems, state, tab } = await open(browser, { admin: true, name: "Admin" });
       try {
-        await until(async () => (await tab.getByRole("switch").count()) === 4);
+        await until(async () => (await tab.getByRole("switch").count()) === 2);
         const said = await text(page);
-        for (const line of ["Features", "Release", "Show", "Values and Choice Points", "Undo", "hidden from everyone but you"]) {
+        for (const line of ["Features", "Release", "Show", "Values and Choice Points"]) {
           assert.ok(said.includes(line), `the tab says "${line}": ${said}`);
         }
-        const release = tab.getByRole("switch", { name: "Release Undo" });
-        assert.equal(await release.isChecked(), false, "Undo is not released at first");
+        assert.ok(!said.includes("Undo"), `Undo has no row: ${said}`);
+        const release = tab.getByRole("switch", { name: "Release Values and Choice Points" });
+        assert.equal(await release.isChecked(), true, "released at first");
         await release.click();
-        await until(async () => state.puts.length === 1 && (await release.isChecked()));
-        assert.deepEqual(state.puts, [{ feature: "undo", on: true, column: "release" }]);
+        await until(async () => state.puts.length === 1 && !(await release.isChecked()));
+        assert.deepEqual(state.puts, [{ feature: "choice-points", on: false, column: "release" }]);
+        assert.ok((await text(page)).includes("hidden from everyone but you"), "a feature held back says who still sees it");
         // Switching back is the undo.
         await release.click();
-        await until(async () => state.puts.length === 2 && !(await release.isChecked()));
+        await until(async () => state.puts.length === 2 && (await release.isChecked()));
 
         state.offline = true;
         const show = tab.getByRole("switch", { name: "Show Values and Choice Points" });

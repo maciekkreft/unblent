@@ -18,7 +18,7 @@ const flush = async () => {
 };
 
 function server() {
-  const state = { released: ["choice-points"], shown: ["choice-points", "undo"] };
+  const state = { released: ["choice-points"], shown: ["choice-points"] };
   const picture = () => ({ off: [], hidden: [], released: [...state.released], shown: [...state.shown] });
   const saves = [];
   return {
@@ -66,17 +66,17 @@ test("a Release and a Show switch are one step each, and Undo then Redo bring th
   const srv = server();
   const { actor, steps, settled } = start(srv);
   await flush();
-  actor.send({ type: "flag.switched", feature: "undo", on: true, column: "release" });
+  actor.send({ type: "flag.switched", feature: "choice-points", on: false, column: "release" });
   await flush();
   actor.send({ type: "flag.switched", feature: "choice-points", on: false, column: "show" });
   await flush();
-  assert.deepEqual(steps.map((s) => s.label), ["release Undo", "hide Values and Choice Points"]);
+  assert.deepEqual(steps.map((s) => s.label), ["hold back Values and Choice Points", "hide Values and Choice Points"]);
   await undo(actor, steps[1]);
   await undo(actor, steps[0]);
-  assert.deepEqual(srv.state, { released: ["choice-points"], shown: ["undo", "choice-points"] });
+  assert.deepEqual(srv.state, { released: ["choice-points"], shown: ["choice-points"] });
   await redo(actor, steps[0]);
   await redo(actor, steps[1]);
-  assert.deepEqual(srv.state, { released: ["choice-points", "undo"], shown: ["undo"] });
+  assert.deepEqual(srv.state, { released: [], shown: [] });
   assert.deepEqual(settled.map((s) => s.outcome), ["applied", "applied", "applied", "applied"]);
   assert.equal(steps.length, 2, "an Undo or Redo records no step of its own");
 });
@@ -90,7 +90,7 @@ test("a switch that is already where it is pressed to, or one that could not be 
   srv.save = async () => Promise.reject(new Error("offline"));
   const down = start(srv);
   await flush();
-  down.actor.send({ type: "flag.switched", feature: "undo", on: true });
+  down.actor.send({ type: "flag.switched", feature: "choice-points", on: false });
   await flush();
   assert.equal(steps.length + down.steps.length, 0);
 });
@@ -99,9 +99,9 @@ test("a step is refused when the switch was changed since, on any device", async
   const srv = server();
   const { actor, steps, settled } = start(srv);
   await flush();
-  actor.send({ type: "flag.switched", feature: "undo", on: true });
+  actor.send({ type: "flag.switched", feature: "choice-points", on: false });
   await flush();
-  // Another device held Undo back again, and this one read it.
+  // Another device released it again, and this one read it.
   srv.state.released = ["choice-points"];
   actor.send({ type: "session.changed", userId: "u1" });
   await flush();

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, keyOf, hiddenBy } from "../machine.js";
+import { machine, keyOf } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const STEP = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", label: "remove value Courage" };
@@ -33,8 +33,8 @@ test("a key a view used, or one typed in a text box, is left alone", () => {
   assert.equal(keyOf(key("z", { ctrlKey: true, altKey: true })), null);
 });
 
-function start({ undo = null, redo = null, vimKeys = false, hidden = [] } = {}) {
-  const replies = { undo: { undo, redo }, settings: { vimKeys }, flags: { off: hidden, hidden } };
+function start({ undo = null, redo = null, vimKeys = false } = {}) {
+  const replies = { undo: { undo, redo }, settings: { vimKeys } };
   const ask = (target) => Promise.resolve(replies[target]);
   const actor = createActor(machine, { input: { ask } });
   const requested = [];
@@ -65,24 +65,4 @@ test("a page without undo leaves both greyed", async () => {
   await flush();
   assert.equal(actor.getSnapshot().context.undo, null);
   assert.equal(actor.getSnapshot().context.redo, null);
-});
-
-test("Undo hidden by flags draws nothing and asks for no step, until flags shows it", async () => {
-  const { actor, requested } = start({ undo: STEP, hidden: ["undo"] });
-  assert.equal(actor.getSnapshot().context.hidden, true, "hidden until flags answers");
-  await flush();
-  assert.equal(actor.getSnapshot().context.hidden, true);
-  actor.send({ type: "_request", direction: "undo" });
-  assert.deepEqual(requested, []);
-  actor.send({ type: "flags.changed", off: ["chats"], hidden: ["chats"] });
-  actor.send({ type: "_request", direction: "undo" });
-  assert.deepEqual(requested, ["undo"]);
-  actor.send({ type: "flags.changed", off: ["undo"], hidden: ["undo"] });
-  assert.equal(actor.getSnapshot().context.hidden, true);
-});
-
-test("a page without flags shows Undo", () => {
-  assert.equal(hiddenBy({ error: "no-answerer" }), false);
-  assert.equal(hiddenBy(undefined), true);
-  assert.equal(hiddenBy({ off: [], hidden: [] }), false);
 });

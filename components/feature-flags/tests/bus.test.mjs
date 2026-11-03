@@ -9,10 +9,10 @@ assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py set
 const { wire, until } = await import(process.env.UNBLENT_KIT);
 
 test("a switch in the tab is saved by flags, and a refused one goes back", async () => {
-  let shown = ["choice-points", "undo"];
+  let shown = ["choice-points"];
   let offline = false;
   const saved = [];
-  const picture = () => ({ off: [], hidden: [], released: ["choice-points", "undo"], shown });
+  const picture = () => ({ off: [], hidden: [], released: ["choice-points"], shown });
   const { actors, unwire } = await wire(["flags", "feature-flags"], {
     flags: {
       cached: null,
@@ -28,17 +28,17 @@ test("a switch in the tab is saved by flags, and a refused one goes back", async
   });
   try {
     const view = actors["feature-flags"];
-    await until(() => view.getSnapshot().context.released?.length === 2);
+    await until(() => view.getSnapshot().context.released?.length === 1);
     // session is not mounted here, so the view takes the account as signed in by hand.
     view.send({ type: "session.changed", userId: "u1" });
-    view.send({ type: "_switch", column: "show", feature: "undo", on: false });
+    view.send({ type: "_switch", column: "show", feature: "choice-points", on: false });
     await until(() => Object.keys(view.getSnapshot().context.waiting).length === 0);
-    assert.deepEqual(saved, [["undo", false, "show"]]);
-    assert.deepEqual(view.getSnapshot().context.shown, ["choice-points"]);
+    assert.deepEqual(saved, [["choice-points", false, "show"]]);
+    assert.deepEqual(view.getSnapshot().context.shown, []);
     offline = true;
-    view.send({ type: "_switch", column: "show", feature: "undo", on: true });
-    await until(() => view.getSnapshot().context.refused?.id === "undo");
-    assert.deepEqual(view.getSnapshot().context.shown, ["choice-points"], "nothing changed");
+    view.send({ type: "_switch", column: "show", feature: "choice-points", on: true });
+    await until(() => view.getSnapshot().context.refused?.id === "choice-points");
+    assert.deepEqual(view.getSnapshot().context.shown, [], "nothing changed");
   } finally {
     unwire();
   }

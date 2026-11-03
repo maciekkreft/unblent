@@ -26,18 +26,18 @@ test("with no answer yet every feature is hidden; the server's answer replaces i
   let answer;
   const { emitted, kept, read } = start({ load: () => new Promise((r) => (answer = r)) });
   assert.deepEqual(await read(), { off: FEATURES, hidden: FEATURES, released: [], shown: FEATURES });
-  answer(picture(["undo"], ["undo", "choice-points"], { shown: ["undo"] }));
+  answer(picture([], ["choice-points"], { shown: [] }));
   await flush();
-  const expected = { off: ["undo"], hidden: ["undo", "choice-points"], released: ["choice-points"], shown: ["undo"] };
+  const expected = { off: [], hidden: ["choice-points"], released: ["choice-points"], shown: [] };
   assert.deepEqual(emitted, [expected]);
   assert.deepEqual(kept, [expected]);
   assert.deepEqual(await read(), expected);
 });
 
 test("a reload or an offline start hides what the device kept, a picture from before Release and Show included", async () => {
-  const { emitted, read } = start({ cached: { off: ["undo"], hidden: ["undo"] }, load: async () => Promise.reject(new Error("offline")) });
+  const { emitted, read } = start({ cached: { off: ["choice-points"], hidden: ["choice-points"] }, load: async () => Promise.reject(new Error("offline")) });
   await flush();
-  assert.deepEqual(await read(), { off: ["undo"], hidden: ["undo"], released: ["choice-points"], shown: FEATURES });
+  assert.deepEqual(await read(), { off: ["choice-points"], hidden: ["choice-points"], released: [], shown: FEATURES });
   assert.deepEqual(emitted, [], "nothing changed, nothing is announced");
 });
 
@@ -66,29 +66,30 @@ test("a switch is saved with its column and announced; a refused one announces t
   });
   await flush();
   emitted.length = 0;
-  actor.send({ type: "flag.switched", feature: "undo", on: false });
+  actor.send({ type: "flag.switched", feature: "choice-points", on: false });
   await flush();
-  assert.deepEqual(saved, [["undo", false, "release"]], "a switch without a column is a Release");
-  assert.deepEqual(emitted, [{ off: ["undo"], hidden: [], released: ["choice-points"], shown: FEATURES }]);
+  assert.deepEqual(saved, [["choice-points", false, "release"]], "a switch without a column is a Release");
+  assert.deepEqual(emitted, [{ off: ["choice-points"], hidden: [], released: [], shown: FEATURES }]);
   actor.send({ type: "flag.switched", feature: "choice-points", on: false, column: "show" });
   await flush();
   assert.deepEqual(saved.at(-1), ["choice-points", false, "show"]);
-  assert.deepEqual(emitted.at(-1), { off: [], hidden: ["choice-points"], ...ALL, shown: ["undo"] });
+  assert.deepEqual(emitted.at(-1), { off: [], hidden: ["choice-points"], ...ALL, shown: [] });
   refuse = true;
   actor.send({ type: "flag.switched", feature: "choice-points", on: true, column: "show" });
   await flush();
   assert.deepEqual(emitted.at(-1), emitted.at(-2), "the same picture again");
   actor.send({ type: "flag.switched", feature: "chats", on: false });
+  actor.send({ type: "flag.switched", feature: "undo", on: false });
   await flush();
-  assert.equal(saved.length, 3, "a feature without a flag is not sent");
+  assert.equal(saved.length, 3, "a feature without a flag, Undo included, is not sent");
 });
 
 test("an answer that arrives after a newer one is dropped", async () => {
   const pending = [];
   const { actor, read } = start({ save: (feature, on) => new Promise((r) => pending.push(() => r(picture(on ? [] : [feature])))) });
   await flush();
-  actor.send({ type: "flag.switched", feature: "undo", on: false });
-  actor.send({ type: "flag.switched", feature: "undo", on: true });
+  actor.send({ type: "flag.switched", feature: "choice-points", on: false });
+  actor.send({ type: "flag.switched", feature: "choice-points", on: true });
   await flush();
   pending[1]();
   await flush();

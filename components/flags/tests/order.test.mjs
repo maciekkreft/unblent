@@ -14,7 +14,7 @@ const flush = () => new Promise((r) => setTimeout(r, 20));
 
 // What the server says and the device kept: Values and Choice Points hidden, so an
 // asker that read nothing (and so hides nothing) is told apart from one that read it.
-const PICTURE = { off: [], hidden: ["choice-points"], released: ["choice-points", "undo"], shown: ["undo"] };
+const PICTURE = { off: [], hidden: ["choice-points"], released: ["choice-points"], shown: [] };
 const flags = { cached: PICTURE, load: async () => PICTURE, save: async () => PICTURE };
 
 const memory = () => ({
@@ -28,7 +28,7 @@ const memory = () => ({
 });
 
 // Each asker, with what it needs to start, and what it took from flags: its hidden
-// features, or for undo-bar whether Undo is hidden, or for feature-flags the Show column.
+// features, or for feature-flags the Show column.
 const ASKERS = {
   "book-toc": {},
   "journal-days": {},
@@ -40,13 +40,12 @@ const ASKERS = {
   evaluators: { store: memory() },
   generators: { store: memory() },
   conversations: { flags: () => ask(conversations, "flags", "read", {}) },
-  "undo-bar": {},
   "feature-flags": {},
 };
-const seen = (name, context) => (name === "undo-bar" ? context.hidden : name === "feature-flags" ? context.shown : context.hidden);
-const read = (name) => (name === "undo-bar" ? false : name === "feature-flags" ? PICTURE.shown : PICTURE.hidden);
-const unknown = (name) => (name === "undo-bar" ? true : null);
-const nothing = (name) => (name === "undo-bar" ? false : name === "feature-flags" ? null : []);
+const seen = (name, context) => (name === "feature-flags" ? context.shown : context.hidden);
+const read = (name) => (name === "feature-flags" ? PICTURE.shown : PICTURE.hidden);
+const unknown = () => null;
+const nothing = (name) => (name === "feature-flags" ? null : []);
 
 for (const [name, input] of Object.entries(ASKERS)) {
   test(`${name} takes what flags says whether flags mounts before it or after it`, async () => {
