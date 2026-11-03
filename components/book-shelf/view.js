@@ -2,12 +2,13 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, showing } from "./machine.js";
+import { machine, showing, tilesOf } from "./machine.js";
 import picked from "./events/book.picked.json" with { type: "json" };
 import selected from "./events/book.selected.json" with { type: "json" };
 import discarded from "./events/book.discarded.json" with { type: "json" };
 import renamed from "./events/book.renamed.json" with { type: "json" };
 import restored from "./events/book.restored.json" with { type: "json" };
+import staged from "./events/note.staged.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -23,7 +24,7 @@ class ActorController {
         // A try page (8) shows the shelf signed out.
         tryPage: location.pathname.startsWith("/try/"),
       },
-      events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded, "book.renamed": renamed, "book.restored": restored },
+      events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded, "book.renamed": renamed, "book.restored": restored, "note.staged": staged },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -340,7 +341,7 @@ class BookShelf extends LitElement {
   #editingId = null;
 
   #tiles(snapshot) {
-    return snapshot.context.books;
+    return tilesOf(snapshot.context);
   }
 
   #focusTile(tiles, selected) {
@@ -674,7 +675,7 @@ class BookShelf extends LitElement {
     const cover = t.cover
       ? html`<img src=${t.cover} alt=${`Cover of ${t.title}`} />`
       : t.written
-        ? html`<div class="placeholder written">${icon("notebook")}<span>${t.title}</span></div>`
+        ? html`<div class="placeholder written">${t.slipBox ? icon("cards-three") : icon("notebook")}<span>${t.title}</span></div>`
         : html`<div class="placeholder">${t.title}</div>`;
     return html`
       <li

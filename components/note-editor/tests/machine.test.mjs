@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf, chapterLabelOf, relinkOf, sourceLinksIn, passageOf, linkMissing, isStaged, showing, startsTyping, notSynced, NOT_SYNCED_MS } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, chapterLabelOf, relinkOf, sourceLinksIn, passageOf, linkMissing, isStaged, hintOf, showing, startsTyping, notSynced, NOT_SYNCED_MS } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
@@ -1436,4 +1436,11 @@ test("evaluator.changed renames one in its place or adds a new one; evaluator.de
 test("without evaluators to ask, offline or not on the page, the picker offers nothing", async () => {
   assert.deepEqual((await picking({ error: "no-answerer" })).list(), []);
   assert.deepEqual((await picking(new Error("offline"))).list(), []);
+});
+
+test("only the stage's editor showing the Slip-Box gives the empty page a hint", () => {
+  const SLIPBOX = "00000000000000000000000SBX";
+  assert.equal(hintOf({ staged: true, id: SLIPBOX }), "Write how your Slip-Box is arranged. The notes under it are beside.");
+  assert.equal(hintOf({ staged: false, id: SLIPBOX }), null, "not in the Notes panel");
+  assert.equal(hintOf({ staged: true, id: "01J0000000000000000000000A" }), null, "not for another note");
 });

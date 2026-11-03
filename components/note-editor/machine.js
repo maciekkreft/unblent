@@ -272,6 +272,15 @@ const announceOpened = (context, enqueue, id) => {
 export const isStaged = (context) =>
   context.id != null && Object.values(context.stageTabs).some((ids) => ids.includes(context.id));
 
+// The Slip-Box (13): one fixed note, opened from the shelf onto the stage. Its id is
+// fixed, like the journal's.
+export const SLIPBOX = "00000000000000000000000SBX";
+
+// The muted line the stage's editor shows while the Slip-Box has no text, so the empty
+// page says what it is for; null for every other note and in every other editor.
+export const hintOf = (context) =>
+  context.staged && context.id === SLIPBOX ? "Write how your Slip-Box is arranged. The notes under it are beside." : null;
+
 // A first keystroke into an editor holding no note mints its id (a ULID, the
 // browser's own, 5) and starts editing it. The id changed, so the note it now shows
 // is announced (note.opened), the same as a load or a reopen does on entering
@@ -572,7 +581,9 @@ export const machine = setup({
       "disabled while the editor holds no note. With `stage` it is the editor the stage shows " +
       "for a note tab: it follows no subject and no selection, is never kept, has no header, never " +
       "announces its note, shows the note the stage names by `load`, and `:q`, `:tabc` or " +
-      "`:tabclose` closes the tab without changing the note. Signed out it shows only \"Sign " +
+      "`:tabclose` closes the tab without changing the note. While it shows the Slip-Box and " +
+      "the Slip-Box has no text, a muted line in its place says \"Write how your Slip-Box is " +
+      "arranged. The notes under it are beside.\" until the first letter is typed. Signed out it shows only \"Sign " +
       "in to see your notes.\" and nothing of the note it holds, also when it was in front " +
       "before a reload; the note stays kept in this browser and comes back when the user signs " +
       "in, without a reload. On a try page a visitor not yet signed in still sees the editor." +

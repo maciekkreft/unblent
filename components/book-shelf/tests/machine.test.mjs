@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, showing } from "../machine.js";
+import { machine, showing, tilesOf } from "../machine.js";
 
 // The shelf's actor is where the rename decision lives (D11): the view turns Enter or
 // blur into a _rename gesture carrying the fields' texts, and the machine announces it
@@ -214,4 +214,59 @@ test("a second dd replaces the remembered book; the book coming back another way
   assert.equal(ctx().deleted, null, "an Undo brought it back");
   actor.send({ type: "_paste" });
   assert.deepEqual(restored, []);
+});
+
+// The Slip-Box tile (13): shown only while `flags` says the feature is not hidden (3.1).
+const SLIPBOX = "00000000000000000000000SBX";
+const JOURNAL = "00000000000000000000000JRN";
+
+function startWith(flags) {
+  const answer = (target, name) => {
+    if (target === "flags") return Promise.resolve(flags);
+    if (target === "session") return Promise.resolve({ userId: "u1", registrationOpen: false });
+    if (name === "list") return Promise.resolve({ books: [{ ...changed(ID, "Dune"), chapterCount: 1, written: false }, { ...changed(JOURNAL, "Journal"), written: true }] });
+    return Promise.resolve({ id: null });
+  };
+  const actor = createActor(machine, { input: { ask: answer } });
+  const out = [];
+  for (const type of ["note.staged", "book.selected", "book.discarded", "book.renamed"]) actor.on(type, (e) => out.push(e));
+  actor.start();
+  return { actor, out };
+}
+
+const ids = (actor) => tilesOf(actor.getSnapshot().context).map((t) => t.id);
+
+test("the Slip-Box tile comes right after the journal while the feature is shown", async () => {
+  const { actor } = startWith({ off: [], hidden: [], released: ["slip-box"], shown: ["slip-box"] });
+  await flush();
+  assert.deepEqual(ids(actor), [JOURNAL, SLIPBOX, ID]);
+});
+
+test("no Slip-Box tile while the feature is hidden, before flags answers, or on a page without flags", async () => {
+  const hidden = startWith({ off: ["slip-box"], hidden: ["slip-box"], released: [], shown: ["slip-box"] });
+  const none = startWith({ error: "no-answerer" });
+  assert.deepEqual(tilesOf(hidden.actor.getSnapshot().context), [], "nothing before the replies");
+  await flush();
+  assert.deepEqual(ids(hidden.actor), [JOURNAL, ID]);
+  assert.deepEqual(ids(none.actor), [JOURNAL, ID]);
+  hidden.actor.send({ type: "flags.changed", off: [], hidden: [], released: ["slip-box"], shown: ["slip-box"] });
+  assert.deepEqual(ids(hidden.actor), [JOURNAL, SLIPBOX, ID], "flags.changed shows it");
+});
+
+test("opening the Slip-Box stages the note; it cannot be renamed or deleted", async () => {
+  const { actor, out } = startWith({ off: [], hidden: [], released: ["slip-box"], shown: ["slip-box"] });
+  await flush();
+  actor.send({ type: "_select", id: SLIPBOX });
+  actor.send({ type: "_rename", id: SLIPBOX, title: "Box", author: "" });
+  actor.send({ type: "_discard", id: SLIPBOX });
+  actor.send({ type: "_dd", id: SLIPBOX });
+  assert.deepEqual(out, [{ type: "note.staged", id: SLIPBOX }]);
+  assert.equal(actor.getSnapshot().context.deleted, null);
+});
+
+test("while the feature is hidden opening the Slip-Box's id does nothing", async () => {
+  const { actor, out } = startWith({ off: ["slip-box"], hidden: ["slip-box"], released: [], shown: [] });
+  await flush();
+  actor.send({ type: "_select", id: SLIPBOX });
+  assert.deepEqual(out, []);
 });
