@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, showing, chaptered, placement } from "./machine.js";
+import { machine, shown, showing, chaptered, placement, deletable } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import moved from "./events/note.moved.json" with { type: "json" };
@@ -280,8 +280,14 @@ class NoteList extends LitElement {
     .row:focus-within .bin {
       visibility: visible;
     }
-    .bin:hover {
+    .bin:hover:not([aria-disabled="true"]) {
       color: var(--color-danger);
+    }
+    /* aria-disabled rather than disabled, so the button still takes the pointer and its
+       title says what to do first. */
+    .bin[aria-disabled="true"] {
+      cursor: default;
+      color: var(--color-mute);
     }
     /* The chapter switch, the top row of the list: two equal halves across the list's
        width in one rectangular box, the pressed one raised. Its edges stand on the rows'
@@ -411,7 +417,7 @@ class NoteList extends LitElement {
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
     if (vim === "delete") {
       // The keyboard moves to the row below, as in Vim, or above from the last row.
-      if (!context.notes.some((n) => n.id === current)) return;
+      if (!deletable(context, current)) return;
       const at = rows.findIndex((r) => r.id === current);
       const next = rows[at + 1] ?? rows[at - 1];
       this.#actor.send({ type: "_dd", id: current });
@@ -487,6 +493,8 @@ class NoteList extends LitElement {
 
   #pointerdown(event, id) {
     if (event.button != null && event.button !== 0) return;
+    // A row that cannot be deleted offers no swipe to delete it (12).
+    if (!deletable(this.#actor.snapshot.context, id)) return;
     // A swipe's delete removes its row at once, so the click its release would fire may
     // land nowhere; a new press is never that click.
     this.#swallowClick = false;
@@ -664,8 +672,18 @@ class NoteList extends LitElement {
     }
 
     const untitled = !r.title;
+    // A note with notes under it keeps its trash, greyed out, so its tooltip says what to do first.
+    const locked = !deletable(this.#actor.snapshot.context, r.id);
     const trailing = html`<span class="time">${when(r.updatedAt)}</span
-      ><button class="bin" type="button" tabindex="-1" aria-label="Delete note" @click=${(e) => this.#discard(e, r.id)}>
+      ><button
+        class="bin"
+        type="button"
+        tabindex="-1"
+        aria-label="Delete note"
+        aria-disabled=${locked ? "true" : "false"}
+        title=${locked ? "Move or delete the notes under it first" : nothing}
+        @click=${(e) => (locked ? e.stopPropagation() : this.#discard(e, r.id))}
+      >
         ${icon("trash-simple")}
       </button>`;
 

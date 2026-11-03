@@ -52,10 +52,20 @@ const row = ({ id, title, subtitle, updatedAt, about, position }) => ({
   position,
 });
 
+// The Slip-Box (13): one fixed note, the top of the tree, opened from the shelf. It is the
+// stage's, never a row, so it is never listed and never deleted here.
+export const SLIPBOX = "00000000000000000000000SBX";
+const listed = (note) => note.id !== SLIPBOX;
+
+// Whether the Slip-Box feature shows (3.1): not until `flags` answers, and not on a page
+// without `flags`, since the feature is not released until the admin releases it.
+const slipBoxShown = (hidden) => Array.isArray(hidden) && !hidden.includes("slip-box");
+
 // Fold one changed note into the rows: replace the row with its id if present, else
 // add it, then re-sort. Only the fields a row shows (and its links) are kept (a
 // note.changed carries the whole note, 4.3, third rule).
-const upsert = (notes, changed) => sorted([...notes.filter((n) => n.id !== changed.id), row(changed)]);
+const upsert = (notes, changed) =>
+  listed(changed) ? sorted([...notes.filter((n) => n.id !== changed.id), row(changed)]) : notes;
 
 // A note is about the subject when one of its links matches the subject's kind and id
 // (D4: a follower compares kind + id, it never learns what kinds exist).
@@ -130,8 +140,22 @@ export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn =
 // A gesture on a row counts only while the rows are shown.
 const shows = ({ context }) => showing(context) === "show";
 
-// A note row the user can delete: a real note, shown.
-const live = (context, id) => context.notes.some((n) => n.id === id);
+// A note with notes under it: one of the rows links to it as its parent.
+const hasChildren = (context, id) => context.notes.some((n) => links(n).some((l) => l.kind === "note" && l.id === id));
+
+// A note row the user can delete: a real note, shown, with no notes under it, so a delete
+// never leaves a note without the place it was put in.
+export const deletable = (context, id) => context.notes.some((n) => n.id === id) && !hasChildren(context, id);
+
+// The link a note brought back with p or P takes (12): while Slip-Box shows and the list
+// is about a thing the deleted note was not about, that thing, with its open chapter, as
+// a new note there would be linked; otherwise none, and the note keeps its links.
+export const pasteLink = ({ following, subject, hidden, deletedAbout }) => {
+  if (!following || subject == null || !slipBoxShown(hidden)) return undefined;
+  if ((deletedAbout ?? []).some((l) => l.kind === subject.kind && l.id === subject.id)) return undefined;
+  const chapter = subject.chapter ? { chapter: subject.chapter, chapterTitle: subject.chapterTitle } : {};
+  return { kind: subject.kind, id: subject.id, ...chapter };
+};
 
 export const machine = setup({
   actors: {
@@ -152,6 +176,8 @@ export const machine = setup({
       input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
+    // Which features are hidden (3.1); flags.changed is held until the reply lands.
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
   },
 }).createMachine({
   id: "note-list",
@@ -164,9 +190,15 @@ export const machine = setup({
       "move (section 12). With Vim keys on, never while typing in a field: dd deletes the row " +
       "at once, with the same notice, and the keyboard moves to the next row; the list keeps " +
       "the last note it deleted in memory, and p brings it back below the row the cursor is " +
-      "on and P above, one step that Undo deletes again. p and P do nothing once that note " +
+      "on and P above, one step that Undo deletes again; while the Slip-Box feature shows, p or P " +
+      "in a list about another thing than the deleted note brings it back under that thing, " +
+      "in place of its link of the same kind. p and P do nothing once that note " +
       "is back by another way (an Undo, another device) or after signing out. u is the " +
-      "global Undo. o makes a new note " +
+      "global Undo. A note with notes under it cannot be deleted: its trash is greyed out " +
+      "with the tooltip \"Move or delete the notes under it first\", and dd and a swipe do nothing " +
+      "on it. The Slip-Box note is never listed. While a note is the subject (a note in front on " +
+      "the stage), the list shows the notes under it, with no chapter switch, and New note writes " +
+      "one under it. o makes a new note " +
       "below the cursor row and O above it, opened in the editor. The New note row stays " +
       "put: dd does nothing there. A moved or new note goes right below or above the " +
       "row it was placed at, also in the whole order, so notes hidden by the subject or the " +
@@ -193,7 +225,7 @@ export const machine = setup({
     // no filtering, every note shown. On, the list shows only the notes about the
     // subject on the stage, with the chapter switch while the subject has an open chapter.
     attributes: ["subject"],
-    asks: ["notes: list", "subject: read", "settings: read", "session: read"],
+    asks: ["notes: list", "subject: read", "settings: read", "session: read", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -217,6 +249,11 @@ export const machine = setup({
     // The last note deleted with Vim's dd (12), which p or P brings back; null when none.
     // Like Vim's register it is UI state, kept in memory only.
     deleted: null,
+    // The links the note dd deleted had, so p or P can tell whether this list is about
+    // another thing (pasteLink).
+    deletedAbout: [],
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
     // A new note made with o or O (12): where it goes once the user writes in it, as
     // { id, after, before }, the draft's id; null when none.
     placing: null,
@@ -251,6 +288,12 @@ export const machine = setup({
       onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
       onError: { actions: assign({ signedIn: true }) },
     },
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : null) }) },
+      onError: { actions: [] },
+    },
   ],
   initial: "loading",
   states: {
@@ -262,7 +305,7 @@ export const machine = setup({
           {
             guard: ({ event }) => Array.isArray(event.output.notes),
             target: "ready",
-            actions: assign({ notes: ({ event }) => sorted(event.output.notes.map(row)) }),
+            actions: assign({ notes: ({ event }) => sorted(event.output.notes.filter(listed).map(row)) }),
           },
           // notes could not answer (offline, no answerer): an honest empty list.
           { target: "failed" },
@@ -274,6 +317,7 @@ export const machine = setup({
     failed: {},
   },
   on: {
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Who is signed in now (4.3). Signing out hides the rows and keeps them, and forgets
     // the note dd deleted, which p could no longer bring back to this account.
@@ -319,22 +363,29 @@ export const machine = setup({
     // The trash on a row, or a swipe past its threshold: the note is deleted at once,
     // one step with the short notice and its Undo (12, Undo).
     _discard: {
-      guard: ({ context, event }) => shows({ context }) && live(context, event.id),
+      guard: ({ context, event }) => shows({ context }) && deletable(context, event.id),
       actions: emit(({ event }) => ({ type: "note.discarded", id: event.id })),
     },
     // Vim's dd on a note row (12): the same delete, and the list remembers the note so p
     // or P can bring it back. A second dd replaces it, as Vim's register holds one.
     _dd: {
-      guard: ({ context, event }) => shows({ context }) && live(context, event.id),
-      actions: [assign({ deleted: ({ event }) => event.id }), emit(({ event }) => ({ type: "note.discarded", id: event.id }))],
+      guard: ({ context, event }) => shows({ context }) && deletable(context, event.id),
+      actions: [
+        assign({
+          deleted: ({ event }) => event.id,
+          deletedAbout: ({ context, event }) => context.notes.find((n) => n.id === event.id)?.about ?? [],
+        }),
+        emit(({ event }) => ({ type: "note.discarded", id: event.id })),
+      ],
     },
     // p or P: the deleted note comes back between these neighbours; `notes` restores it
-    // there as one step.
+    // there as one step, under the thing this list is about when it is another (pasteLink).
     _paste: {
       guard: ({ context }) => shows({ context }) && context.deleted != null,
       actions: enqueueActions(({ context, event, enqueue }) => {
-        enqueue.assign({ deleted: null });
-        enqueue.emit({ type: "note.moved", id: context.deleted, after: event.after ?? null, before: event.before ?? null });
+        const about = pasteLink(context);
+        enqueue.assign({ deleted: null, deletedAbout: [] });
+        enqueue.emit({ type: "note.moved", id: context.deleted, after: event.after ?? null, before: event.before ?? null, ...(about ? { about } : {}) });
       }),
     },
     // o or O (12): a new note, opened in the editor like New note, that goes between

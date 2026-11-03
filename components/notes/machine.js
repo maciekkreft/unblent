@@ -406,7 +406,7 @@ function applyMove(context, event, enqueue) {
   };
   const position = between(neighbour(event.after), neighbour(event.before));
   if (current.deleted) {
-    if (!highlightLink(current)) applyRestore(context, enqueue, current, position);
+    if (!highlightLink(current)) applyRestore(context, enqueue, current, position, event.about);
     return;
   }
   if (position === current.position) return;
@@ -429,11 +429,15 @@ function applyMove(context, event, enqueue) {
 // restore write an Undo of its delete uses, as one step after the delete's: its undo
 // deletes it again where it stood before it was deleted, so the delete's own Undo puts it
 // back in its first row; its redo restores it at the place it was moved to. Its place
-// step is left as it was, so an older move's Undo still finds its stamp.
-function applyRestore(context, enqueue, current, position) {
+// step is left as it was, so an older move's Undo still finds its stamp. Brought back in
+// a list about another thing (`about`, the thing that list is about), the note comes back
+// under it: its link of the same kind is replaced and its other links kept, in the same
+// step, so the delete's own Undo still brings back the links it had.
+function applyRestore(context, enqueue, current, position, about) {
   const step = context.mint();
   const before = positionOf(current);
-  rewrite(context, enqueue, { ...current, position }, textOf(current), step);
+  const text = about ? { ...textOf(current), about: relinked(current.about ?? [], about) } : textOf(current);
+  rewrite(context, enqueue, { ...current, position }, text, step);
   context.stretch = null;
   enqueue.assign({ stretch: null });
   enqueue.emit({
@@ -442,9 +446,21 @@ function applyRestore(context, enqueue, current, position) {
     owner: "notes",
     label: `restore ${nameOf(current)}`,
     undo: { kind: "note", id: current.id, deleted: true, position: before, ...priorOf(current.step) },
-    redo: { kind: "note", id: current.id, ...textOf(current), deleted: false, position, ...priorOf(current.step) },
+    redo: { kind: "note", id: current.id, ...text, deleted: false, position, ...priorOf(current.step) },
   });
 }
+
+// A note's links with `link` in place of its links of that kind, where the first of them
+// stood, or last when it had none; a link with a place (a passage) is never one a list
+// replaces.
+const relinked = (about, link) => {
+  const same = (l) => l.kind === link.kind && !l.place;
+  const at = about.findIndex(same);
+  const kept = about.filter((l) => !same(l));
+  if (at < 0) return [...kept, link];
+  const before = about.slice(0, at).filter((l) => !same(l)).length;
+  return [...kept.slice(0, before), link, ...kept.slice(before)];
+};
 
 // Set a note's place: last write wins (5), so it bumps no version.
 function place(context, enqueue, current, position, step) {
@@ -827,7 +843,7 @@ export const machine = setup({
       "narrowed by a book and a chapter. A deleted note is kept as a tombstone with its title " +
       "and body, so it can still be shown or restored. Each note has a place in the list, the " +
       "same on every device: a new note goes first, an edit never moves a note, and a move " +
-      "from the list puts it between its new neighbours; a move of a deleted note that is not a highlight (Vim's p in the list) restores it there, one step labelled restore, whose Undo deletes it again where it stood before it was deleted. A place is last write wins: it " +
+      "from the list puts it between its new neighbours; a move of a deleted note that is not a highlight (Vim's p in the list) restores it there, one step labelled restore, whose Undo deletes it again where it stood before it was deleted; when that list is about another thing, the move names it, and the note comes back linked to it in place of its link of the same kind, keeping its other links, in the same step. A place is last write wins: it " +
       "changes no version, so a move never conflicts with an edit. A note from before places " +
       "keeps the order it had, newest first, until it is edited or moved. Every change is a " +
       "step Undo and Redo reverse (section 12): one stretch of typing in one note, from " +

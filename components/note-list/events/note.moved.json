@@ -1,11 +1,24 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user moved a note in the list: it now stands between these neighbours, the note above it (after) and the note below it (before), null at the list's end. notes gives it a place between theirs.",
+  "description": "The user moved a note in the list: it now stands between these neighbours, the note above it (after) and the note below it (before), null at the list's end. notes gives it a place between theirs, and brings a deleted note back there.",
   "type": "object",
   "properties": {
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
     "after": { "oneOf": [{ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, { "type": "null" }] },
-    "before": { "oneOf": [{ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, { "type": "null" }] }
+    "before": { "oneOf": [{ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, { "type": "null" }] },
+    "about": {
+      "description": "The thing the list is about, when a deleted note is brought back in a list about another thing than it was: the note comes back linked to it in place of its link of the same kind. Absent otherwise.",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "chapter": { "type": "string", "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2}|[a-z0-9]+(-[a-z0-9]+)*)$", "description": "The open chapter of the thing, named as a link names it." },
+        "chapterTitle": { "type": "string", "minLength": 1, "description": "The open chapter's title; present exactly when chapter is." }
+      },
+      "required": ["kind", "id"],
+      "dependentRequired": { "chapter": ["chapterTitle"], "chapterTitle": ["chapter"] },
+      "additionalProperties": false
+    }
   },
   "required": ["id", "after", "before"],
   "additionalProperties": false

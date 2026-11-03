@@ -196,3 +196,49 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }
   });
 }
+
+for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
+  // Browser: rendering and layout.
+  test(`a note with notes under it shows its trash greyed out with what to do first in ${engine.name}`, async () => {
+    const cookie = forgeCookie("note-list-parent");
+    const parent = "01K0000000000000000000PRNT";
+    const child = "01K0000000000000000000CH1D";
+    const put = (id, title, about) =>
+      fetch(`${BASE_URL}/api/notes/${id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` },
+        body: JSON.stringify({ title, body: `${title}\nbody`, baseVersion: null, about }),
+      });
+    assert.equal((await put(parent, "Parent", [])).status, 200);
+    assert.equal((await put(child, "Child", [{ kind: "note", id: parent }])).status, 200);
+    const browser = await engine.launch();
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    context.setDefaultTimeout(4000);
+    try {
+      await signedIn(context, cookie);
+      const page = await context.newPage();
+      const problems = watch(page);
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await until(async () => (await rowTitles(page)).includes("Parent") && (await rowTitles(page)).includes("Child"));
+      const bin = (title) =>
+        inList(page, (root, t) => {
+          const b = [...root.querySelectorAll(".row")].find((r) => r.querySelector(".name").textContent.trim() === t).querySelector(".bin");
+          return { disabled: b.getAttribute("aria-disabled"), title: b.getAttribute("title"), color: getComputedStyle(b).color };
+        }, title);
+      const locked = await bin("Parent");
+      const open = await bin("Child");
+      assert.equal(locked.disabled, "true");
+      assert.equal(locked.title, "Move or delete the notes under it first");
+      assert.notEqual(locked.color, open.color, "drawn muted");
+      assert.equal(open.disabled, "false");
+      assert.equal(open.title, null);
+      await inList(page, (root) => [...root.querySelectorAll(".row")].find((r) => r.querySelector(".name").textContent.trim() === "Parent").querySelector(".bin").click());
+      await page.waitForTimeout(200);
+      assert.ok((await rowTitles(page)).includes("Parent"), "a click deletes nothing");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+}

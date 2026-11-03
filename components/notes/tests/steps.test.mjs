@@ -325,3 +325,29 @@ test("moving a highlight to its passage after a re-import records no step", asyn
   actor.send(undo(made));
   assert.deepEqual(settled.at(-1), { id: made.id, owner: "notes", outcome: "refused", reason: "changed" }, "an older step no longer describes the highlight");
 });
+
+test("a deleted note moved into a list about another thing comes back under it, its other links kept, as one step", async () => {
+  const { actor, steps, settled } = await start();
+  const journal = { kind: "book", id: "journal", chapter: "2026-11-03", chapterTitle: "3 November" };
+  const parent = { kind: "note", id: B };
+  actor.send(save(B, "Parent", null, { left: true }));
+  actor.send(save(A, "Child", null, { about: [journal], left: true }));
+  actor.send({ type: "note.discarded", id: A });
+  const removal = steps.at(-1);
+  actor.send({ type: "note.moved", id: A, after: null, before: null, about: parent });
+  const restore = steps.at(-1);
+  assert.equal(restore.label, "restore note Child");
+  assert.deepEqual((await read(actor, A)).note.about, [journal, parent], "a parent added beside the book");
+  actor.send({ type: "note.discarded", id: A });
+  const other = { kind: "note", id: C };
+  actor.send({ type: "note.moved", id: A, after: null, before: null, about: other });
+  assert.deepEqual((await read(actor, A)).note.about, [journal, other], "the parent replaced, the book kept");
+  const second = steps.at(-1);
+  actor.send(undo(second));
+  actor.send(undo(steps.at(-2)));
+  assert.deepEqual((await read(actor, A)).note.about, [journal, parent], "the delete's Undo brings back the links it had");
+  actor.send(undo(restore));
+  actor.send(undo(removal));
+  assert.deepEqual((await read(actor, A)).note.about, [journal]);
+  assert.ok(settled.every((s) => s.outcome === "applied"), JSON.stringify(settled));
+});

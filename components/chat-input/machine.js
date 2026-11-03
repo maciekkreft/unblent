@@ -23,10 +23,18 @@ Keep answers to a few sentences. When something in the reader's own library is r
 
 Answer in plain language, and say when you are unsure.`;
 
+// How the model uses the open item's id, by its kind: the lookups narrow to a book by its
+// id, and a note on the stage (a book without chapters, to the subject) is read by its id.
+// A kind with no row is only named.
+const USE = {
+  book: " To look only in it, pass this id as the book of a lookup.",
+  note: " To read it, pass this id to the lookup that reads a note.",
+};
+
 export const startText = (subject) => {
   if (!subject) return START;
   const named = subject.title ? `${subject.kind} "${subject.title}"` : subject.kind;
-  return `${START}\n\nThe reader currently has open: ${named} (id ${subject.id})${chapterText(subject)}. To look only in it, pass this id as the book of a lookup.`;
+  return `${START}\n\nThe reader currently has open: ${named} (id ${subject.id})${chapterText(subject)}.${USE[subject.kind] ?? ""}`;
 };
 
 // The Journal's chapter is a day (subject: read), named by its date rather than a title.

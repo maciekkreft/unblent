@@ -99,13 +99,17 @@ export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId !=
 // to a visitor who is not yet a guest.
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
+// What a tab stands for, so a follower of tabs.shown (the subject) can tell a note's tab
+// from a book's without knowing the stage's lists.
+const kindOf = (context, id) => (context.notes.includes(id) ? "note" : context.chats.includes(id) ? "chat" : "book");
+
 // What tabs.shown announces. A tab with no label yet (a book books has not listed) is
 // left out until its label is known, so no tab is ever blank.
 export const tabsOf = (context) => {
   const tabs = context.tabs.filter((id) => labelFor(context, id) !== undefined);
   return {
     view: context.address,
-    tabs: tabs.map((id) => ({ id, label: labelFor(context, id), closable: tabs.length > 1 })),
+    tabs: tabs.map((id) => ({ id, label: labelFor(context, id), closable: tabs.length > 1, kind: kindOf(context, id) })),
     active: tabs.includes(context.front) ? context.front : null,
   };
 };
@@ -261,7 +265,7 @@ export const machine = setup({
       "a deleted chat loses its tab. Note and chat tabs are kept in the browser beside the book " +
       "tabs, and after a reload the open " +
       "book is in front. It announces its tabs so the desk can draw them in place of the " +
-      "stage's own tab. Signed out it shows only \"Sign in to read.\": no tabs, no book, no " +
+      "stage's own tab, each saying whether it is a book's, a note's or a chat's. Signed out it shows only \"Sign in to read.\": no tabs, no book, no " +
       "journal page and no note. The tabs stay kept in the browser, and signing in, with or " +
       "without a reload, brings back the same tabs with the same one in front. On a try page " +
       "a visitor not yet signed in still sees the stage.",

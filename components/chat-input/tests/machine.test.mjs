@@ -145,6 +145,11 @@ test("the start names the open chapter, or the Journal's day by its date, with t
   assert.ok(day.endsWith('\n\nThe reader currently has open: book "Journal" (id J), at the day 2026-11-02. To look only in it, pass this id as the book of a lookup.'));
 });
 
+test("a note on the stage is named with its id and how to read it, with no chapter", () => {
+  const note = startText({ kind: "note", id: "n1", title: "Plans", view: "book-stage" });
+  assert.ok(note.endsWith('\n\nThe reader currently has open: note "Plans" (id n1). To read it, pass this id to the lookup that reads a note.'));
+});
+
 test("a new chat with no subject links to nothing", async () => {
   const h = start({ subject: null });
   await ready(h);

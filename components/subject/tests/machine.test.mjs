@@ -15,6 +15,7 @@ function fakeAsk(state) {
   return (target, name, payload = {}) => {
     if (target === "dock" && name === "read") return Promise.resolve({ stage: state.stage, docks: {} });
     if (target === "books" && name === "open") return Promise.resolve({ id: state.openId });
+    if (target === "flags" && name === "read") return Promise.resolve(state.hidden ? { hidden: state.hidden } : { error: "no-answerer" });
     if (target === "books" && name === "read") {
       const book = state.books[payload.id];
       return Promise.resolve(book ? { book } : { error: "not-found" });
@@ -224,4 +225,71 @@ test("with no journal page the Journal's open chapter is the day of its reading 
   const { changed } = start({ stage: "book-stage", openId: JRN, books: { [JRN]: journalBook } });
   await flush();
   assert.equal(changed.at(-1).subject.chapter, "2026-10-29");
+});
+
+// The stage's tabs with this one in front, as book-stage announces them.
+const tabs = (active, ...list) => ({
+  type: "tabs.shown",
+  view: "book-stage",
+  tabs: list.map(([id, kind, label]) => ({ id, label, closable: true, kind })),
+  active,
+});
+const NOTE = "01J0000000000000000000NOTE";
+const dune = { stage: "book-stage", openId: "b1", books: { b1: { id: "b1", title: "Dune" } } };
+
+test("with Slip-Box shown a note's tab in front makes the note the subject, with no chapter", async () => {
+  const { actor, changed } = start({ ...dune, hidden: [] });
+  await flush();
+  actor.send(tabs(NOTE, ["b1", "book", "Dune"], [NOTE, "note", "Plans"]));
+  await flush();
+  const note = { kind: "note", id: NOTE, title: "Plans", view: "book-stage" };
+  assert.deepEqual(changed.at(-1).subject, note);
+  assert.deepEqual(await readSubject(actor), { subject: note });
+  // The book's tab in front again gives the open book back.
+  actor.send(tabs("b1", ["b1", "book", "Dune"], [NOTE, "note", "Plans"]));
+  await flush();
+  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune", view: "book-stage" });
+});
+
+test("a chat's tab in front keeps the open book as the subject", async () => {
+  const { actor, changed } = start({ ...dune, hidden: [] });
+  await flush();
+  const before = changed.length;
+  actor.send(tabs("c1", ["b1", "book", "Dune"], ["c1", "chat", "About Dune"]));
+  await flush();
+  assert.equal(changed.length, before);
+  assert.equal((await readSubject(actor)).subject.kind, "book");
+});
+
+test("with Slip-Box hidden, or no flags on the page, a note's tab changes nothing", async () => {
+  for (const hidden of [["slip-box"], null]) {
+    const { actor, changed } = start({ ...dune, hidden });
+    await flush();
+    const before = changed.length;
+    actor.send(tabs(NOTE, ["b1", "book", "Dune"], [NOTE, "note", "Plans"]));
+    await flush();
+    assert.equal(changed.length, before);
+    assert.equal((await readSubject(actor)).subject.kind, "book");
+  }
+});
+
+test("Slip-Box shown later makes the note in front the subject; hidden again gives the book back", async () => {
+  const { actor, changed } = start({ ...dune, hidden: ["slip-box"] });
+  await flush();
+  actor.send(tabs(NOTE, ["b1", "book", "Dune"], [NOTE, "note", "Plans"]));
+  actor.send({ type: "flags.changed", off: [], hidden: [], released: ["slip-box"], shown: ["slip-box"] });
+  await flush();
+  assert.equal(changed.at(-1).subject.kind, "note");
+  actor.send({ type: "flags.changed", off: [], hidden: ["slip-box"], released: ["slip-box"], shown: [] });
+  await flush();
+  assert.equal(changed.at(-1).subject.kind, "book");
+});
+
+test("a note's tab in front of another view than the one showing changes nothing", async () => {
+  const { actor, changed } = start({ ...dune, stage: "book-reader", hidden: [] });
+  await flush();
+  const before = changed.length;
+  actor.send(tabs(NOTE, ["b1", "book", "Dune"], [NOTE, "note", "Plans"]));
+  await flush();
+  assert.equal(changed.length, before);
 });
