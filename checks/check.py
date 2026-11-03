@@ -2336,6 +2336,7 @@ def _only_value(argv: list) -> str:
 
 
 USAGE = """The one check command (architecture.md 11).
+Every rule it enforces, and which tests a change reaches: checks/rules.md.
 
   after every edit      python3 checks/check.py --static
                         every static rule, <1s
