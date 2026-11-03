@@ -100,7 +100,8 @@ export const machine = setup({
       "Owns which features each person sees: Values and Choice Points, and Usage. Each has " +
       "two switches in the Features tab. Release, set by the admin on the website, gives the " +
       "feature to everyone; one not released is hidden from everyone but the admin on the " +
-      "website. Show, set by each account for itself, hides a released feature from that " +
+      "website. A feature starts held back when it is added, until the admin releases it. " +
+      "Show, set by each account for itself, hides a released feature from that " +
       "account alone. A Mac that is not connected reads Release " +
       "from the list frozen into the app when its version was built, and without that list " +
       "every feature counts as released. The last answer of the server is kept on this device, so a reload or " +

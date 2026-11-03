@@ -37,6 +37,11 @@ FROZEN = _HERE / "released.json"
 # browser half of this component holds the same list (machine.js).
 FEATURES = ("choice-points", "usage")
 
+# A feature starts held back when it is added, until the admin releases it (3.1). These
+# features had a flag before that rule, so a file that has not seen them yet keeps the
+# Release it already holds for them.
+BEFORE_HELD = ("choice-points",)
+
 COLUMNS = ("release", "show")
 
 
@@ -52,6 +57,20 @@ def _connect(path: Path, schema: str) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+@contextmanager
+def _release_db() -> Iterator[sqlite3.Connection]:
+    with _connect(DATA / "flags.db", _RELEASE) as connection:
+        known = {row[0] for row in connection.execute("SELECT feature FROM known")}
+        now = int(time.time() * 1000)
+        for feature in FEATURES:
+            if feature in known:
+                continue
+            connection.execute("INSERT INTO known (feature) VALUES (?)", (feature,))
+            if feature not in BEFORE_HELD:
+                connection.execute("INSERT OR IGNORE INTO off (feature, at) VALUES (?, ?)", (feature, now))
+        yield connection
+
+
 def released() -> list[str]:
     if local_user():
         try:
@@ -60,13 +79,13 @@ def released() -> list[str]:
             frozen = None
         # Without the frozen list every feature counts as released (3.1).
         return [f for f in FEATURES if not isinstance(frozen, list) or f in frozen]
-    with _connect(DATA / "flags.db", _RELEASE) as connection:
+    with _release_db() as connection:
         held = {row[0] for row in connection.execute("SELECT feature FROM off")}
     return [f for f in FEATURES if f not in held]
 
 
 def release(feature: str, on: bool) -> None:
-    with _connect(DATA / "flags.db", _RELEASE) as connection:
+    with _release_db() as connection:
         now = int(time.time() * 1000)
         if on:
             connection.execute("DELETE FROM off WHERE feature = ?", (feature,))
