@@ -21,7 +21,8 @@
       "@marijn/find-cluster-break": "/static/vendor/@marijn/find-cluster-break/src/index.js",
       "style-mod": "/static/vendor/style-mod/src/style-mod.js",
       "w3c-keyname": "/static/vendor/w3c-keyname/index.js",
-      "crelt": "/static/vendor/crelt/index.js"
+      "crelt": "/static/vendor/crelt/index.js",
+      "echarts": "/static/vendor/echarts/echarts.esm.min.js"
     }
   },
   "packages": [
@@ -219,6 +220,18 @@
       "files": {
         "crelt/index.js": "924800defa2bf95a0bfd16dde589ecebbcd9e36b03635274da84968c77a3721e",
         "crelt/LICENSE": "23852ebf6aef7fadffc92514b3c5df163a8651f2c3ed0dbb494cb49d93bd5de5"
+      }
+    },
+    {
+      "name": "echarts",
+      "version": "5.5.0",
+      "licence": "Apache-2.0",
+      "source": "https://registry.npmjs.org/echarts/-/echarts-5.5.0.tgz",
+      "files": {
+        "echarts/LICENSE": "634293835b43a6dd2094fa39182a3d9a6b9ca43b7fdb9ac354e8037af2a3093a",
+        "echarts/NOTICE": "fa99ac3af859d0e13166906dc53a73ad34a08898da7e8ae83407275496e9e30c",
+        "echarts/licenses/LICENSE-d3": "e1211892da0b0e0585b7aebe8f98c1274fba15bafe47fa1f4ee8a7a502c06304",
+        "echarts/echarts.esm.min.js": "971816189bf83502ba4142e5bec61367272427a9c990814ee69734395faf357e"
       }
     }
   ]
