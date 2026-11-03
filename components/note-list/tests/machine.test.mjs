@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown, plain, showing, chaptered, deletable } from "../machine.js";
+import { machine, shown, plain, showing, chaptered, deletable, typeLabelOf } from "../machine.js";
 
 // A long stretch of simulated time, to show nothing waits on a clock.
 const LATER = 10000;
@@ -634,4 +634,21 @@ test("with Slip-Box hidden p brings the note back with its links, as before", as
   actor.send({ type: "subject.changed", subject: { kind: "book", id: "emma", title: "Emma", view: "book-stage" } });
   actor.send({ type: "_paste", after: null, before: null });
   assert.deepEqual(moved.at(-1), { id: B, after: null, before: null });
+});
+
+test("while Slip-Box shows a row names the note's type, fleeting without one; hidden, none, the type kept", async () => {
+  const notes = [
+    { id: A, title: "A", updatedAt: 10, about: [], noteType: "permanent" },
+    { id: B, title: "B", updatedAt: 20, about: [] },
+  ];
+  const label = (actor, id) => typeLabelOf(actor.getSnapshot().context.hidden, shown(actor.getSnapshot().context).find((n) => n.id === id));
+  const { actor } = tree({ subject: null, notes });
+  await tick();
+  assert.equal(label(actor, A), "Permanent");
+  assert.equal(label(actor, B), "Fleeting");
+  actor.send({ type: "note.changed", id: B, title: "B", body: "B", version: 2, pending: false, updatedAt: 30, noteType: "literature" });
+  assert.equal(label(actor, B), "Literature");
+  actor.send({ type: "flags.changed", off: [], hidden: ["slip-box"], released: [], shown: [] });
+  assert.equal(label(actor, B), null);
+  assert.equal(shown(actor.getSnapshot().context).find((n) => n.id === B).noteType, "literature");
 });

@@ -35,6 +35,8 @@ const api = {
     // links unchanged (12, D2).
     if (row.about !== undefined) payload.about = row.about;
     if (row.position !== undefined) payload.position = row.position;
+    // noteType rides the same way: absent leaves the stored type, null makes it fleeting.
+    if (row.noteType !== undefined) payload.noteType = row.noteType;
     const body = JSON.stringify(payload);
     const res = await fetch(`/api/notes/${row.id}`, {
       method: "PUT",

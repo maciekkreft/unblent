@@ -241,8 +241,16 @@ const entryOf = (n) => ({
   updatedAt: n.updatedAt ?? 0,
   parents: links(n.about).filter((l) => l.kind === "note").map((l) => l.id),
   passage: passageOfLink(passageLink(n.about)),
+  noteType: NOTE_TYPES.some((t) => t.value === n.noteType) ? n.noteType : "fleeting",
 });
 const entriesOf = (notes) => Object.fromEntries(notes.map((n) => [n.id, entryOf(n)]));
+
+// A note's type (13), in the order the type menu lists them, each with its one line.
+export const NOTE_TYPES = [
+  { value: "fleeting", label: "Fleeting", says: "A quick thought, to work out or let go later" },
+  { value: "literature", label: "Literature", says: "What a source says, in your own words" },
+  { value: "permanent", label: "Permanent", says: "One finished idea of your own, kept in the Slip-Box" },
+];
 
 // The name a source link's tag shows (10): a note's title now, by the link's id, so a
 // rename shows in every tag that links to it and no linking text is rewritten; null for
@@ -315,6 +323,36 @@ const below = (entries, id, under, seen = new Set()) => {
   return (entries[id]?.parents ?? []).some((p) => below(entries, p, under, seen));
 };
 
+// Whether taking the open note out of `place` would leave a permanent note outside the
+// Slip-Box, the open note or one under it: a permanent note stays in the Slip-Box (13).
+export function strands(context, place) {
+  const own = links(context.about).filter((l) => l.kind === "note" && l.id !== place).map((l) => l.id);
+  const after = { ...context.entries, [context.id]: { ...(context.entries[context.id] ?? {}), parents: own } };
+  const before = { ...context.entries, [context.id]: { ...(context.entries[context.id] ?? {}), parents: links(context.about).filter((l) => l.kind === "note").map((l) => l.id) } };
+  return Object.entries(after).some(
+    ([id, e]) => e.noteType === "permanent" && !e.highlight && exists(context, id) && inSlipBox(before, id) && !inSlipBox(after, id),
+  );
+}
+
+// Whether the open note is in the Slip-Box by the links it shows now.
+const placedInBox = (context) => links(context.about).some((l) => l.kind === "note" && inSlipBox(context.entries, l.id));
+
+// The type a new note is made with (13): permanent under a note in the Slip-Box, fleeting
+// beside a book or the Journal and anywhere else.
+export const defaultType = (context) =>
+  context.subject?.kind === "note" && inSlipBox(context.entries, context.subject.id) ? "permanent" : "fleeting";
+
+// The type label and its menu, or null when the note has no type to show (Slip-Box hidden,
+// a note not yet written, the Slip-Box itself, a highlight): `value`, the note's type, and
+// `options`, each type with its line, `enabled` false for permanent while the note is not
+// in the Slip-Box.
+export function noteTypeOf(context) {
+  if (!rehomable(context) || context.entries[context.id]?.highlight) return null;
+  const value = context.entries[context.id]?.noteType ?? "fleeting";
+  const inBox = placedInBox(context);
+  return { value, options: NOTE_TYPES.map((t) => ({ ...t, enabled: t.value !== "permanent" || inBox || value === "permanent" })) };
+}
+
 // A place in the Slip-Box as the home line names it.
 const placeLabel = (context, id) => {
   if (id === SLIPBOX) return "Slip-Box";
@@ -354,12 +392,16 @@ export function homeOf(snapshot) {
     })
     .filter((b) => b.text);
   // A new note's place is the one it will be given at its first save, so it has no ×.
-  const places = list.filter((l) => l.kind === "note").map((l) => ({ id: l.id, label: placeLabel(context, l.id), removable: rehomable(context) }));
+  // A place whose loss would leave a permanent note outside the Slip-Box keeps its ×,
+  // disabled, so the reason can be read (13).
+  const places = list
+    .filter((l) => l.kind === "note")
+    .map((l) => ({ id: l.id, label: placeLabel(context, l.id), removable: rehomable(context), ...(rehomable(context) && strands(context, l.id) ? { stays: true } : {}) }));
   const add = rehomable(context) && !context.entries[context.id]?.highlight ? { enabled: slipBoxTargets(context).length > 0 } : null;
   // Nothing to name or offer (the Slip-Box itself, a highlight, a fresh note about
   // nothing): no line, so the editor keeps the header it has without Slip-Box.
   if (!books.length && !places.length && !add) return null;
-  return { books, places, add };
+  return { type: noteTypeOf(context), books, places, add };
 }
 
 // The places "Add to Slip-Box…" offers, { id, title, about } each: the Slip-Box, then
@@ -529,6 +571,8 @@ const savedEvent = (context) => {
   if (context.subjecting && context.baseVersion === null) {
     event.about = context.subject ? [{ kind: context.subject.kind, id: context.subject.id, ...chapterPart(context.subject) }] : [];
   }
+  // A new note gets its type at its first save, only while types show (13).
+  if (context.baseVersion === null && slipBoxShown(context.hidden) && context.id !== SLIPBOX) event.noteType = defaultType(context);
   return event;
 };
 
@@ -826,7 +870,14 @@ export const machine = setup({
       "Slip-Box and every note whose chain of parents reaches it, never the note itself, a place it has or a " +
       "note under it, so no loop is made; the arrow keys or Ctrl+N and Ctrl+P (and j and k with Vim keys) " +
       "choose, Enter, Tab or a click adds the note there, Escape or moving away closes it. Each of these " +
-      "changes is a save of the note's links, one step for Undo. Fixed at the bottom of a written note and of the Slip-Box, above the level bar, " +
+      "changes is a save of the note's links, one step for Undo. At the left of that line is the note's type, " +
+      "Fleeting, Literature or Permanent, which opens a small menu of the three, each with one line saying what it is for; " +
+      "the arrow keys (and j and k with Vim keys) choose, Enter or a click sets it, one step for Undo, Escape closes it " +
+      "and gives the keyboard back to the label. Permanent is greyed while the note is not in the Slip-Box, with a button, " +
+      "Add it to the Slip-Box first, that opens the Add to Slip-Box list. A permanent note stays in the Slip-Box: the × of a " +
+      "place whose loss would take it, or a permanent note under it, out of the Slip-Box is greyed and says so. A new note is " +
+      "permanent when it is made under a note in the Slip-Box, and fleeting beside a book, the Journal or anywhere else; a " +
+      "note without a type is fleeting. With Slip-Box hidden the type is kept but not shown. Fixed at the bottom of a written note and of the Slip-Box, above the level bar, " +
       "three sections fold each with its caret, the folds kept in this browser for every note: Passages, the " +
       "highlights the note holds, each by its first seven words quoted and its chapter, a click opening the " +
       "book at the passage and an × taking it out of the note (one step), a removed one grey; Notes under " +
@@ -1056,8 +1107,22 @@ export const machine = setup({
       actions: rehome(({ context, event }) => [...links(context.about), { kind: "note", id: event.id }]),
     },
     _unplace: {
-      guard: ({ context, event }) => rehomable(context) && links(context.about).some((l) => l.kind === "note" && l.id === event.id),
+      guard: ({ context, event }) =>
+        rehomable(context) && links(context.about).some((l) => l.kind === "note" && l.id === event.id) && !strands(context, event.id),
       actions: rehome(({ context, event }) => links(context.about).filter((l) => !(l.kind === "note" && l.id === event.id))),
+    },
+    // The type menu (13): a save of the note's type with the draft as it stands, one step.
+    // The label turns at once; the echo brings back what notes now holds.
+    _retype: {
+      guard: ({ context, event }) => {
+        const type = noteTypeOf(context);
+        return type != null && type.value !== event.noteType && type.options.some((t) => t.value === event.noteType && t.enabled);
+      },
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        const entry = context.entries[context.id] ?? entryOf({ about: context.about });
+        enqueue.assign({ entries: { ...context.entries, [context.id]: { ...entry, noteType: event.noteType } }, sent: { body: context.body }, finished: [], checkedText: context.body });
+        enqueue.emit({ ...savedEvent(context), noteType: event.noteType });
+      }),
     },
     // The footer: a passage taken out of the note with its ×, or opened with a click.
     _unpassage: {

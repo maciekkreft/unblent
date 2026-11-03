@@ -76,10 +76,63 @@ for (const engine of ENGINES) {
       await until(() => inPanel(page, `return root.querySelector(".home")?.textContent.includes("Slip-Box")`));
       await inPanel(page, `root.querySelector(".cm-content").focus()`);
       await page.keyboard.type("Alpha");
-      await until(() => inPanel(page, `const x = root.querySelector(".home .x"); x?.click(); return Boolean(x)`));
+      // Made under the Slip-Box, the note is permanent, which keeps it there; as fleeting it may leave.
+      await until(() => inPanel(page, `const t = root.querySelector(".home-type"); t?.click(); return t?.textContent.trim() === "Permanent"`));
+      await until(() => inPanel(page, `const row = root.querySelector(".type-row"); row?.click(); return Boolean(row)`));
+      await until(() => inPanel(page, `return root.querySelector(".home-type")?.textContent.trim() === "Fleeting"`));
+      await until(() => inPanel(page, `const x = root.querySelector(".home .x:not(:disabled)"); x?.click(); return Boolean(x)`));
       await until(() => inPanel(page, `const add = root.querySelector(".home-add:not(:disabled)"); add?.click(); return Boolean(add)`));
       await until(() => inPanel(page, `return root.querySelectorAll(".slip-row").length > 0`));
       const box = await inPanel(page, `const l = root.querySelector(".slip-list").getBoundingClientRect(); const e = root.querySelector(".editor").getBoundingClientRect(); return { list: [l.left, l.right], editor: [e.left, e.right] }`);
       assert.ok(box.list[0] >= box.editor[0] - 1 && box.list[1] <= box.editor[1] + 1, `the list within the editor, saw ${JSON.stringify(box)}`);
+    }));
+
+  // Browser: focus and keys (the type menu is opened, moved through and left from the
+  // keyboard, and Permanent outside the Slip-Box leads to the Add to Slip-Box list).
+  test(`the type menu works from the keyboard and Permanent asks for a place first in ${engine.name}`, () =>
+    onSlipBox(engine, async (page) => {
+      await until(() =>
+        page.evaluate(() => {
+          const row = document.querySelector("note-list")?.shadowRoot?.querySelector("li .name.draft")?.closest("li");
+          row?.click();
+          return Boolean(row);
+        }),
+      );
+      await until(() => inPanel(page, `return root.querySelector(".home")?.textContent.includes("Slip-Box")`));
+      await inPanel(page, `root.querySelector(".cm-content").focus()`);
+      await page.keyboard.type("Beta");
+      const label = () => inPanel(page, `return root.querySelector(".home-type")?.textContent.trim() ?? null`);
+      const focused = () => inPanel(page, `return root.activeElement?.className ?? null`);
+      await until(async () => (await label()) === "Permanent");
+      await inPanel(page, `root.querySelector(".home-type").focus()`);
+      await page.keyboard.press("Enter");
+      await until(async () => String(await focused()).includes("type-menu"));
+      // The menu opens on the note's own type, Permanent; up goes to Literature, and
+      // down then up again returns there.
+      await page.keyboard.press("ArrowUp");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowUp");
+      await page.keyboard.press("Enter");
+      await until(async () => (await label()) === "Literature");
+      await until(async () => (await focused()) === "home-type");
+      // Escape closes the menu and gives the keyboard back to the label, changing nothing.
+      await page.keyboard.press("Enter");
+      await until(async () => String(await focused()).includes("type-menu"));
+      await page.keyboard.press("Escape");
+      await until(async () => (await focused()) === "home-type");
+      assert.equal(await label(), "Literature");
+      // Out of the Slip-Box, Permanent is greyed; Enter on it opens the Add to Slip-Box list.
+      await until(() => inPanel(page, `const x = root.querySelector(".home .x:not(:disabled)"); x?.click(); return Boolean(x)`));
+      await until(() => inPanel(page, `return !root.querySelector(".home .x")`));
+      await inPanel(page, `root.querySelector(".home-type").focus()`);
+      await page.keyboard.press("Enter");
+      await until(async () => String(await focused()).includes("type-menu"));
+      await page.keyboard.press("ArrowDown");
+      assert.equal(await inPanel(page, `return root.querySelector('.type-row[aria-selected="true"]').getAttribute("aria-disabled")`), "true");
+      await page.keyboard.press("Enter");
+      await until(async () => String(await focused()).includes("slip-list"));
+      await page.keyboard.press("Escape");
+      await until(async () => (await focused()) === "home-add");
+      assert.equal(await label(), "Literature");
     }));
 }

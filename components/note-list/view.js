@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, showing, chaptered, placement, deletable } from "./machine.js";
+import { machine, shown, showing, chaptered, placement, deletable, typeLabelOf } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import moved from "./events/note.moved.json" with { type: "json" };
@@ -244,6 +244,12 @@ class NoteList extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    /* The note's type leads the second line, in the body colour, so it reads apart from
+       the text after it. */
+    .subtitle .type {
+      color: var(--color-body-mid);
+      margin-right: var(--space-xs);
     }
     /* The time stays on the first line, also on a row the keyboard selected, and the trash
        waits on the second line under it, so showing it on hover or focus shifts nothing. */
@@ -566,7 +572,7 @@ class NoteList extends LitElement {
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, snapshot.context);
     const groups = chaptered(snapshot.context);
-    const row = (r) => this.#row(r, open, focusId, subject);
+    const row = (r) => this.#row(r, open, focusId, subject, snapshot.context.hidden);
     // The failed state is the one time no rows show: notes could not answer, so the
     // next-note row would write into a picture we do not have. Otherwise the list is
     // always at least the next-note row, so there is no empty state.
@@ -637,7 +643,7 @@ class NoteList extends LitElement {
     `;
   }
 
-  #row(r, open, focusId, subject) {
+  #row(r, open, focusId, subject, hidden) {
     const d = this.#drag && this.#drag.id === r.id ? this.#drag : null;
     const dx = d ? d.dx : 0;
     const classes = [
@@ -672,6 +678,7 @@ class NoteList extends LitElement {
     }
 
     const untitled = !r.title;
+    const typeLabel = typeLabelOf(hidden, r);
     // A note with notes under it keeps its trash, greyed out, so its tooltip says what to do first.
     const locked = !deletable(this.#actor.snapshot.context, r.id);
     const trailing = html`<span class="time">${when(r.updatedAt)}</span
@@ -706,7 +713,7 @@ class NoteList extends LitElement {
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
             <span class="name ${untitled ? "untitled" : ""}">${untitled ? "Untitled" : r.title}</span>
-            <span class="subtitle">${r.subtitle || " "}</span>
+            <span class="subtitle">${typeLabel ? html`<span class="type">${typeLabel}</span>` : nothing}${r.subtitle || " "}</span>
           </span>
           <span class="trailing">${trailing}</span>
         </span>

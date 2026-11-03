@@ -43,13 +43,14 @@ export const plain = (text) =>
   typeof text === "string" ? text.replace(SOURCE_LINK, (_, label) => label.replace(/\\(.)/g, "$1")) : text;
 
 // One row keeps only the fields the list shows, plus the links it filters by.
-const row = ({ id, title, subtitle, updatedAt, about, position }) => ({
+const row = ({ id, title, subtitle, updatedAt, about, position, noteType }) => ({
   id,
   title: plain(title),
   subtitle: plain(subtitle),
   updatedAt,
   about: links({ about }),
   position,
+  ...(noteType ? { noteType } : {}),
 });
 
 // The Slip-Box (13): one fixed note, the top of the tree, opened from the shelf. It is the
@@ -60,6 +61,11 @@ const listed = (note) => note.id !== SLIPBOX;
 // Whether the Slip-Box feature shows (3.1): not until `flags` answers, and not on a page
 // without `flags`, since the feature is not released until the admin releases it.
 const slipBoxShown = (hidden) => Array.isArray(hidden) && !hidden.includes("slip-box");
+
+// The type a row names at the start of its second line (13), while Slip-Box shows; a note
+// without one is fleeting. Null while Slip-Box is hidden, so the row is as before.
+const TYPE_NAMES = { fleeting: "Fleeting", literature: "Literature", permanent: "Permanent" };
+export const typeLabelOf = (hidden, r) => (slipBoxShown(hidden) ? TYPE_NAMES[r.noteType] ?? TYPE_NAMES.fleeting : null);
 
 // Fold one changed note into the rows: replace the row with its id if present, else
 // add it, then re-sort. Only the fields a row shows (and its links) are kept (a
@@ -196,7 +202,8 @@ export const machine = setup({
       "is back by another way (an Undo, another device) or after signing out. u is the " +
       "global Undo. A note with notes under it cannot be deleted: its trash is greyed out " +
       "with the tooltip \"Move or delete the notes under it first\", and dd and a swipe do nothing " +
-      "on it. The Slip-Box note is never listed. While a note is the subject (a note in front on " +
+      "on it. While the Slip-Box feature shows, each row's second line starts with the note's type, " +
+      "Fleeting, Literature or Permanent (Fleeting for a note without one). The Slip-Box note is never listed. While a note is the subject (a note in front on " +
       "the stage), the list shows the notes under it, with no chapter switch, and New note writes " +
       "one under it. o makes a new note " +
       "below the cursor row and O above it, opened in the editor. The New note row stays " +
