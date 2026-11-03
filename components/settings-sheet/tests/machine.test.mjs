@@ -650,7 +650,7 @@ test("the Choice points and Values lookups are listed only while Values and Choi
   assert.deepEqual(toolsShown(list, ["choice-points"]).map((t) => t.key), ["notes: read"]);
 });
 
-test("Test versions: hidden where updates does not answer; on a Mac it flips and follows updates.changed", async () => {
+test("Beta releases: hidden where updates does not answer; on a Mac it flips and follows updates.changed", async () => {
   const run = async (updates) => {
     const ask = (target) =>
       Promise.resolve(

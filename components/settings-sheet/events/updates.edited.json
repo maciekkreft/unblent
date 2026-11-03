@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user flipped the Test versions switch in Settings › This device, in the Mac app. The whole new state, which `updates` saves and announces as updates.changed.",
+  "description": "The user flipped the Beta releases switch in Settings › This device, in the Mac app. The whole new state, which `updates` saves and announces as updates.changed.",
   "type": "object",
   "properties": {
     "test": { "type": "boolean", "description": "True to be offered test builds of the next version as updates, false for finished versions only." }

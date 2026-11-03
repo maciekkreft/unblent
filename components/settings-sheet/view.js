@@ -709,13 +709,12 @@ class SettingsSheet extends LitElement {
         )}
         ${snapshot.context.updates === null
           ? nothing
-          : html`${this.#check("Test versions", snapshot.context.updates, (e) => {
-                // The box shows only what `updates` saved: updates.changed sets it, and
-                // a switch that could not be saved leaves it as it was.
-                e.target.checked = snapshot.context.updates;
-                this.#actor.send({ type: "_toggleTest" });
-              })}
-              <p class="hint">Offer test builds of the next version as updates. Turn off to get only finished versions.</p>`}
+          : this.#check("Beta releases", snapshot.context.updates, (e) => {
+              // The box shows only what `updates` saved: updates.changed sets it, and
+              // a switch that could not be saved leaves it as it was.
+              e.target.checked = snapshot.context.updates;
+              this.#actor.send({ type: "_toggleTest" });
+            })}
         ${Object.entries(roles).map(([role, members]) => this.#roleSelect(role, members, settings))}
       </div>
       <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>

@@ -9,7 +9,7 @@ import { ulid } from "ulid";
 
 const pictureOf = (value) => (typeof value?.test === "boolean" ? { test: value.test } : null);
 
-const labelOf = (on) => `turn ${on ? "on" : "off"} Test versions`;
+const labelOf = (on) => `turn ${on ? "on" : "off"} Beta releases`;
 
 // `step` rides the answer, so the gesture's step is recorded, or an Undo or Redo settled,
 // only once the server holds it.
@@ -43,7 +43,7 @@ export const machine = setup({
   id: "updates",
   meta: {
     description:
-      "Owns whether this Mac is offered test versions of the app, the Test versions switch in " +
+      "Owns whether this Mac is offered test versions of the app, the Beta releases switch in " +
       "Settings › This device. Off at first. When it is on, the Mac app, the next time it " +
       "checks for updates, also offers test builds of the next version; when it is off, only " +
       "finished versions. Turning it off does not go back to an older version: the Mac stays " +

@@ -61,12 +61,12 @@ than the last one, or installed copies will not see it as an update.
 1. Push a test tag, such as `v0.1.0-rc1`. Download `Unblent.dmg` from that
    pre-release in Safari and install it, to see what a new user sees on first open.
 2. When it works, push `v0.1.0`, the first real release.
-3. Updating with test tags works only on a Mac with Test versions turned on (below).
+3. Updating with test tags works only on a Mac with Beta releases turned on (below).
    Every other copy is first offered the next finished version.
 
-## Test versions
+## Beta releases
 
-Settings › This device › Test versions, shown only in the Mac app, lets the owner and
+Settings › This device › Beta releases, shown only in the Mac app, lets the owner and
 testers be offered test builds as updates. The switch is kept in `updates.json` in the
 data folder, and the app reads it each time it opens, before it checks for updates.
 

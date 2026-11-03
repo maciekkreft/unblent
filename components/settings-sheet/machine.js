@@ -293,8 +293,8 @@ export const machine = setup({
       "page order and visibility, the switches, Vim keys, and \"Keep the open note and chat\", " +
       "off at first, so the Notes and Chats panels follow what is on " +
       "the stage until the user turns it on. In the Mac app only, where `updates` answers, This device " +
-      "also holds Test versions, off at first, with one line under it: \"Offer test builds of the next " +
-      "version as updates. Turn off to get only finished versions.\" `updates` keeps it. Your account holds the chat " +
+      "also holds Beta releases, off at first, which offers test builds of the next version as " +
+      "updates; `updates` keeps it. Your account holds the chat " +
       "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
       "which lookups the chat may use, which `conversations` keeps, in the fold What the chat " +
       "may read right after the cache lifetime and before the Jev part. There the lookups stand " +

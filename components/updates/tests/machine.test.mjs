@@ -77,7 +77,7 @@ test("the switch is one step, and Undo then Redo bring it back exactly", async (
   assert.equal(srv.state.test, true);
   assert.deepEqual(seen["updates.changed"], [{ test: true }]);
   const [step] = seen["step.recorded"];
-  assert.equal(step.label, "turn on Test versions");
+  assert.equal(step.label, "turn on Beta releases");
   actor.send({ type: "step.undone", id: step.id, owner: "updates", payload: step.undo });
   await flush();
   assert.equal(srv.state.test, false);

@@ -4,7 +4,7 @@ All notable changes to Unblent for Mac are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] — 2026-11-03
 
 ### Added
 
@@ -35,8 +35,8 @@ All notable changes to Unblent for Mac are listed here. The format follows
   one by name.
 - Enter at the end of a hashtag line starts a list below it, so each line you write there
   is checked.
-- Settings › This device › Test versions, in the Mac app, offers test builds of the next
-  version as updates. Turn it off to get only finished versions.
+- Settings › This device › Beta releases, in the Mac app, offers test builds of the next
+  version as updates.
 
 ## [0.4.1] — 2026-10-31
 

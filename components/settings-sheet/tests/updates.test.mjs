@@ -1,7 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// The Test versions row of This device. Only a Mac's server answers /api/updates, so the
+// The Beta releases row of This device. Only a Mac's server answers /api/updates, so the
 // test answers it here: as a Mac first, and then as the website, which answers { here: false }.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
@@ -12,17 +12,16 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const row = (page) =>
   page.evaluate(() => {
     const root = document.querySelector("settings-sheet")?.shadowRoot;
-    const label = [...(root?.querySelectorAll("label.field.check") ?? [])].find((l) => l.textContent.trim() === "Test versions");
+    const label = [...(root?.querySelectorAll("label.field.check") ?? [])].find((l) => l.textContent.trim() === "Beta releases");
     if (!label) return root?.querySelector(".switches") ? { shown: false } : null;
     return {
       shown: true,
       checked: label.querySelector("input").checked,
-      line: label.nextElementSibling?.textContent.trim(),
     };
   });
 
 for (const engine of ENGINES) {
-  describe(`Test versions in ${engine.name}`, { timeout: 30000 }, () => {
+  describe(`Beta releases in ${engine.name}`, { timeout: 30000 }, () => {
     let browser;
     before(async () => {
       browser = await engine.launch();
@@ -55,9 +54,8 @@ for (const engine of ENGINES) {
         assert.deepEqual(await row(page), {
           shown: true,
           checked: false,
-          line: "Offer test builds of the next version as updates. Turn off to get only finished versions.",
         });
-        await page.locator("settings-sheet label.field.check", { hasText: "Test versions" }).locator("input").click();
+        await page.locator("settings-sheet label.field.check", { hasText: "Beta releases" }).locator("input").click();
         await until(async () => (await row(page))?.checked === true);
         assert.deepEqual(puts, [{ test: true }]);
 
