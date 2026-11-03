@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user pressed Add to note on a highlight's bubble (4.3, fifth rule): notes adds the passage to the note open in the Notes panel, as a link of kind highlight, one step Undo takes back (12).",
+  "type": "object",
+  "properties": {
+    "note": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The note open in the Notes panel, which gets the passage." },
+    "highlight": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The highlight's note id." }
+  },
+  "required": ["note", "highlight"],
+  "additionalProperties": false
+}
