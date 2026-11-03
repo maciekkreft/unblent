@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote, slipBoxShown } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -707,9 +707,12 @@ class BookReader extends LitElement {
   // closes it. Null when no bubble shows.
   #active = null;
   // Which button is flashing "Copied" ("text" for Copy, "link" for Copy link, "passage"
-  // for text copied with Vim keys outside a bubble, shown over the footer, false for
+  // for text copied with Vim keys outside a bubble, shown over the footer, "note" for Add
+  // to note, "why" for a greyed Add to note's reason, shown over the footer, false for
   // none), so only the one pressed reads Copied, and the timer that clears it.
   #copied = false;
+  // The reason a greyed Add to note was pressed with, while #copied is "why".
+  #why = "";
   #copiedTimer = 0;
   // The reveal nonce last acted on (machine one-shot): a drag inside an existing
   // highlight opens that highlight's bubble, told through context.reveal (Decision 6).
@@ -1327,7 +1330,8 @@ class BookReader extends LitElement {
       else if (key === "y") {
         this.#yAt = Date.now();
         this.#yankLink();
-      } else if (key === "d" && !this.#visual) {
+      } else if (key === "a" && !this.#visual && slipBoxShown(this.#actor.snapshot.context.hidden)) this.#addAtCursor();
+      else if (key === "d" && !this.#visual) {
         if (dHeld) this.#removeAtCursor();
         else this.#dAt = Date.now();
       } else if (key === "Enter" && this.#visual) this.#endVisual(true);
@@ -1389,6 +1393,17 @@ class BookReader extends LitElement {
     if (!h?.quote?.exact) return;
     this.#openBubble(h.id);
     this.#copyText(h.quote.exact, "text");
+  }
+
+  // a: Add to note on the highlight holding the cursor, its bubble opened so Added, or
+  // the reason it cannot be added, is seen. With Slip-Box hidden a is not the reader's.
+  #addAtCursor() {
+    const h = this.#highlightAtCursor();
+    if (!h) return;
+    const add = addToNote(this.#actor.snapshot.context, h.id);
+    if (!add) return;
+    this.#openBubble(h.id);
+    this.#addActive(h, add);
   }
 
   // d d: Remove on the highlight holding the cursor. With no highlight there, d d does
@@ -2067,8 +2082,14 @@ class BookReader extends LitElement {
     `;
   }
 
+  // A greyed Add to note still takes the press and says why over the footer, so a finger,
+  // which never sees the tooltip, learns it too (Norman: feedback).
   #addActive(h, add) {
-    if (!add.enabled) return;
+    if (!add.enabled) {
+      this.#why = add.why ?? "";
+      this.#flashCopied("why");
+      return;
+    }
     this.#actor.send({ type: "_addToNote", id: h.id });
     this.#flashCopied("note");
   }
@@ -2091,6 +2112,7 @@ class BookReader extends LitElement {
     if (notACommand != null) return html`<div class="command refused" role="status">Not a command: ${notACommand}</div>`;
     // Text copied with Vim keys, said where Vim says it: over the footer.
     if (this.#copied === "passage") return html`<div class="command copied" role="status">Copied</div>`;
+    if (this.#copied === "why") return html`<div class="command why" role="status">${this.#why}</div>`;
     return nothing;
   }
 

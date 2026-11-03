@@ -602,7 +602,9 @@ export const machine = setup({
       "Remove, and while Slip-Box is shown also Add to note, which adds the passage to the note " +
       "open in the Notes panel, one step, and reads \"Added\" for a moment; it is greyed, with a " +
       "tooltip saying why, while no note is open there (\"Open a note first\") or that note already " +
-      "holds the passage (\"Already in this note\"). Copy link puts a link to the highlight, its quote's first words as the label, " +
+      "holds the passage (\"Already in this note\"), and a press on it then shows that reason over " +
+      "the reader's foot for a moment, so a finger, which sees no tooltip, learns it too; with Vim " +
+      "keys on, a with the cursor inside a highlight opens its bubble and does Add to note. Copy link puts a link to the highlight, its quote's first words as the label, " +
       "on the clipboard and in the Vim register of any editor, and with Vim keys on, y with " +
       "the cursor inside a highlight opens its bubble and does the same, and y y does Copy, " +
       "its quote's text; d d there does Remove. Remove deletes the highlight at once and shows " +
