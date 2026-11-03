@@ -28,6 +28,7 @@ import {
   sourceLinksIn,
   sourceLinks,
   missingLinks,
+  refreshLinks,
   toRegister,
   tickAt,
   renumber,
@@ -40,6 +41,9 @@ import {
   tagsMatching,
   shortName,
   hashtagPicker,
+  notePicker,
+  notesMatching,
+  noteLink,
   finishedLines,
 } from "../editor.js";
 
@@ -630,6 +634,50 @@ test("a tag is grey while its highlight is missing, and missingLinks redraws it"
   assert.equal(t.state.doc.toString(), TEXT, "drawing never changes the text");
 });
 
+// The labels the tags show, in order.
+const labels = (state) => {
+  const found = [];
+  for (const source of state.facet(EditorView.decorations)) {
+    if (typeof source === "function") continue;
+    source.between(0, state.doc.length, (_from, _to, deco) => {
+      if (deco.spec.widget?.id) found.push(deco.spec.widget.label);
+    });
+  }
+  return found;
+};
+
+test("a tag shows its target's title by id; a rename redraws it and never touches the text", () => {
+  const names = { [HL]: "First name" };
+  const t = target(TEXT, 0, [sourceLinks({ follow: () => {}, title: (id) => names[id] ?? null })]);
+  assert.deepEqual(labels(t.state), ["First name"], "the current title, not the stored label");
+  names[HL] = "Renamed";
+  refreshLinks(t);
+  assert.deepEqual(labels(t.state), ["Renamed"]);
+  assert.equal(t.state.doc.toString(), TEXT, "the linking text is unchanged");
+  // Without a title, and while the target is gone, the stored label shows.
+  const plain = target(TEXT, 0, [sourceLinks({ follow: () => {} })]);
+  assert.deepEqual(labels(plain.state), ["A [b] c…"]);
+  const gone = target(TEXT, 0, [sourceLinks({ follow: () => {}, title: () => "Renamed", missing: () => true })]);
+  assert.deepEqual(labels(gone.state), ["A [b] c…"]);
+});
+
+test("a note link escapes its title, so it reads back whole and by id", () => {
+  const link = noteLink("A [b] \\ c", HL);
+  assert.deepEqual(sourceLinksIn(link).map((l) => [l.id, l.label]), [[HL, "A [b] \\ c"]]);
+});
+
+test("notes matching what is typed: by title, ignoring case, those it starts first", () => {
+  const notes = [
+    { id: "1", title: "On habits" },
+    { id: "2", title: "Habits of mind" },
+    { id: "3", title: "Other" },
+    { id: "2", title: "Habits of mind" },
+  ];
+  assert.deepEqual(notesMatching(notes, "hab").map((n) => n.id), ["2", "1"]);
+  assert.deepEqual(notesMatching(notes, "").map((n) => n.id), ["1", "2", "3"]);
+  assert.deepEqual(notesMatching(notes, "zz"), []);
+});
+
 test("toRegister puts a text in Vim's unnamed register, which p pastes", () => {
   toRegister(LINK);
   assert.equal(Vim.getRegisterController().getRegister('"').toString(), LINK);
@@ -961,4 +1009,26 @@ test("the picker opens on typing # at a word's start and stays open while someth
   assert.ok(pickerOpen(away));
   move(away, 1);
   assert.equal(pickerOpen(away), false);
+});
+
+test("the note picker opens on typing [[ and follows what is typed after it", () => {
+  const NOTES = [{ id: HL, title: "Habits", about: "first line" }];
+  const exts = () => [...baseExtensions(), paragraphs(), notePicker({ targets: () => NOTES }), hashtagPicker({ tags: () => TAGS })];
+  const t = target("See ", 4, exts());
+  type(t, "[");
+  assert.equal(pickerOpen(t), false, "one bracket is not a link");
+  type(t, "[");
+  assert.ok(pickerOpen(t));
+  type(t, "hab");
+  assert.ok(pickerOpen(t));
+  type(t, "x");
+  assert.equal(pickerOpen(t), false, "nothing matches");
+  // A cursor moved after a [[ opens nothing.
+  const moved = target("[[hab more", 10, exts());
+  move(moved, 5);
+  assert.equal(pickerOpen(moved), false);
+  // With no notes to offer, it never opens.
+  const none = target("", 0, [...baseExtensions(), notePicker({ targets: () => [] })]);
+  type(none, "[[");
+  assert.equal(pickerOpen(none), false);
 });
