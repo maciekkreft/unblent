@@ -1,9 +1,10 @@
 """The server side of ``updates`` (architecture.md 3.4, 10): whether this Mac is offered
 test versions of the app, kept as ``{"test": bool}`` in ``updates.json`` in the data
 folder, where the Mac app reads it before it checks for updates. Only the local edition
-answers. The website has no Mac app to offer them: a read there answers 204, nothing to
-show, rather than 404, because the product page reads it on every load and a 4xx is a
-failure of the page (11.2); a write there answers 404.
+answers. The website has no Mac app to offer them: a read there answers 200 with
+``{"here": false}`` rather than 404, because the product page reads it on every load
+and a 4xx is a failure of the page (11.2); not 204 either, which Chromium reports as an
+aborted request. A write there answers 404.
 
 A missing or broken file means off, the same as the Mac app reads it.
 """
@@ -14,7 +15,7 @@ import tempfile
 
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 
 from server.user import DATA, local_user
 
@@ -51,7 +52,7 @@ def _not_here():
 @router.get("")
 async def read():
     if not local_user():
-        return Response(status_code=204)
+        return {"here": False}
     return {"test": await run_in_threadpool(read_test)}
 
 

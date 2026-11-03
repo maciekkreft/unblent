@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // The Test versions row of This device. Only a Mac's server answers /api/updates, so the
-// test answers it here: as a Mac first, and then as the website, which answers 204.
+// test answers it here: as a Mac first, and then as the website, which answers { here: false }.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
 
@@ -62,7 +62,7 @@ for (const engine of ENGINES) {
         assert.deepEqual(puts, [{ test: true }]);
 
         await context.unroute("**/api/updates");
-        await context.route("**/api/updates", (route) => route.fulfill({ status: 204, body: "" }));
+        await context.route("**/api/updates", (route) => route.fulfill({ json: { here: false } }));
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await row(page)) !== null);
         assert.deepEqual(await row(page), { shown: false });

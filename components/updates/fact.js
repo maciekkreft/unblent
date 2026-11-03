@@ -9,8 +9,9 @@ import read from "./queries/read.json" with { type: "json" };
 // to reach its own server module (section 3). The switch belongs to this Mac, not to
 // the account, so a connected Mac's relay must keep the request on the Mac (3.4).
 const headers = { Accept: "application/json", "X-Unblent-Local": "1" };
-// 204 is the website's answer: there is no Mac app to offer test versions to.
-const answer = (res) => (res.ok && res.status !== 204 ? res.json() : Promise.reject(new Error(String(res.status))));
+// The website answers { here: false }: there is no Mac app to offer test versions to.
+const answer = (res) =>
+  res.ok ? res.json().then((body) => (typeof body?.test === "boolean" ? body : Promise.reject(new Error("not-here")))) : Promise.reject(new Error(String(res.status)));
 
 const load = () => fetch("/api/updates", { credentials: "same-origin", headers }).then(answer);
 

@@ -48,7 +48,7 @@ test("only a Mac reads and writes the switch, a missing or broken file is off, a
         env: { ...process.env, UNBLENT_DATA: data, UNBLENT_LOCAL_USER: "" },
       }),
     );
-    assert.deepEqual(out.web, [204, null], "the website has nothing to show, and no 4xx on every page load");
+    assert.deepEqual(out.web, [200, { here: false }], "the website has nothing to show, and no 4xx or 204 on every page load");
     assert.deepEqual(out.webWrite, [404, { error: "not-found" }]);
     assert.deepEqual(out.fresh, [200, { test: false }], "off while there is no file");
     assert.deepEqual(out.on, [200, { test: true }]);
