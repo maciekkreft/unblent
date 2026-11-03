@@ -70,8 +70,25 @@ class BookShelf extends LitElement {
     }
     .shelf.dragover {
       background: var(--color-accent-subtle);
-      outline: var(--border-width) dashed var(--color-accent);
-      outline-offset: calc(-1 * var(--space-xs));
+    }
+    /* The dashed frame of a drag is a layer over the shelf, not the shelf's own outline:
+       a tile's cover is positioned, so a cover scrolled under the edge painted over the
+       outline. The layer sits in its own positioned box after the shelf, so it paints
+       above the tiles, stays put while they scroll, and lets the drop through. */
+    .frame {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .frame:has(> .shelf.dragover)::after {
+      content: "";
+      position: absolute;
+      inset: calc(var(--space-xs) - var(--border-width));
+      z-index: 1;
+      pointer-events: none;
+      border: var(--border-width) dashed var(--color-accent);
     }
     /* The one standing action: add a book. A labelled button, not a bare icon, so it
        reads as what it does. */
@@ -642,30 +659,32 @@ class BookShelf extends LitElement {
 
     return html`
       <input type="file" accept=".epub,application/epub+zip" multiple hidden @change=${(e) => this.#onInput(e)} />
-      <div
-        class="shelf ${this.#dragover ? "dragover" : ""}"
-        @dragover=${(e) => this.#onDragover(e)}
-        @dragleave=${() => this.#onDragleave()}
-        @drop=${(e) => this.#onDrop(e)}
-      >
-        <div class="head">
-          <button class="add" type="button" @click=${() => this.#openPicker()}>
-            ${icon("upload-simple")}<span>Add a book</span>
-          </button>
+      <div class="frame">
+        <div
+          class="shelf ${this.#dragover ? "dragover" : ""}"
+          @dragover=${(e) => this.#onDragover(e)}
+          @dragleave=${() => this.#onDragleave()}
+          @drop=${(e) => this.#onDrop(e)}
+        >
+          <div class="head">
+            <button class="add" type="button" @click=${() => this.#openPicker()}>
+              ${icon("upload-simple")}<span>Add a book</span>
+            </button>
+          </div>
+          ${grid
+            ? html`
+                <ul class="grid" role="listbox" aria-label="Books" @keydown=${(e) => this.#keydown(e, tiles)}>
+                  ${importing.map((p) => this.#adding(p))}
+                  ${tiles.map((t) => this.#tile(t, selected, focusId, cut))}
+                </ul>
+              `
+            : nothing}
+          ${empty
+            ? html`<div class="empty">
+                <p>Drop an epub here or Add a book</p>
+              </div>`
+            : nothing}
         </div>
-        ${grid
-          ? html`
-              <ul class="grid" role="listbox" aria-label="Books" @keydown=${(e) => this.#keydown(e, tiles)}>
-                ${importing.map((p) => this.#adding(p))}
-                ${tiles.map((t) => this.#tile(t, selected, focusId, cut))}
-              </ul>
-            `
-          : nothing}
-        ${empty
-          ? html`<div class="empty">
-              <p>Drop an epub here or Add a book</p>
-            </div>`
-          : nothing}
       </div>
     `;
   }

@@ -236,10 +236,29 @@ class ChatThread extends LitElement {
       gap: var(--space-md);
       padding: var(--space-md);
     }
-    /* Drawn inside the box: the panel around it clips anything outside, on the phone. */
+    /* The frame that says the keyboard is on the conversation, drawn inside its edge: the
+       panel around it clips anything outside, on the phone. It is a layer over the box,
+       not the box's own outline: an answer is positioned and its comment box sits above
+       it, so either, scrolled under the edge, painted over the outline. The layer sits
+       in its own positioned box after the transcript, so it paints above what the
+       transcript holds, stays put while it scrolls, and lets every press through. */
+    .frame {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
     .transcript:focus-visible {
-      outline: calc(2 * var(--border-width)) solid var(--color-accent);
-      outline-offset: calc(-2 * var(--border-width));
+      outline: none;
+    }
+    .frame:has(> .transcript:focus-visible)::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      border: calc(2 * var(--border-width)) solid var(--color-accent);
     }
     .composer {
       flex: none;
@@ -820,17 +839,19 @@ class ChatThread extends LitElement {
     const snapshot = this.#actor.snapshot;
     return html`
       ${this.#header(snapshot)}
-      <div
-        class="transcript"
-        tabindex="0"
-        role="region"
-        aria-label="Conversation"
-        @keydown=${(e) => this.#transcriptKey(e)}
-        @scroll=${(e) => this.#onScroll(e)}
-        @pointerdown=${(e) => this.#pointerdown(e)}
-        @pointerup=${(e) => this.#pointerup(e)}
-      >
-        ${this.#body(snapshot)}
+      <div class="frame">
+        <div
+          class="transcript"
+          tabindex="0"
+          role="region"
+          aria-label="Conversation"
+          @keydown=${(e) => this.#transcriptKey(e)}
+          @scroll=${(e) => this.#onScroll(e)}
+          @pointerdown=${(e) => this.#pointerdown(e)}
+          @pointerup=${(e) => this.#pointerup(e)}
+        >
+          ${this.#body(snapshot)}
+        </div>
       </div>
       <div class="composer"><slot></slot></div>
     `;

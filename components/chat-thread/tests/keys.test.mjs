@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { inflateSync } from "node:zlib";
 
 // The conversation with Vim keys (12): it takes the keyboard, scrolls with j, k, gg, G,
 // Ctrl+d and Ctrl+u, hands the keyboard to the chat box in insert mode with i, and gets it
@@ -38,6 +39,19 @@ const box = (page) =>
       done: Boolean(thread.shadowRoot.querySelector(".answer.markable")),
     };
   });
+
+// The colour drawn at one point of the page, as [r, g, b]: a 1x1 screenshot is one PNG
+// row of one pixel, which every PNG filter stores as the pixel itself.
+const pixel = async (page, x, y) => {
+  const png = await page.screenshot({ clip: { x, y, width: 1, height: 1 } });
+  const chunks = [];
+  for (let at = 8; at < png.length; ) {
+    const length = png.readUInt32BE(at);
+    if (png.toString("ascii", at + 4, at + 8) === "IDAT") chunks.push(png.subarray(at + 8, at + 8 + length));
+    at += 12 + length;
+  }
+  return [...inflateSync(Buffer.concat(chunks)).subarray(1, 4)];
+};
 
 // A fresh account holding the long chat, opened on the stem page with Vim keys on, and
 // the keyboard moved from the box (in Vim's normal mode, as after typing and a first
@@ -128,6 +142,44 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
       await until(async () => (await box(page)).onConversation);
+      assert.deepEqual(problems, []);
+    } finally {
+      await context?.close();
+      await browser.close();
+    }
+  });
+
+  // An answer is positioned and its comment box sits above it (z-index 1), so either,
+  // scrolled under the conversation's edge, painted over a frame drawn as the box's own
+  // outline; the frame that says the keyboard is here must stay on top.
+  // Browser: rendering and layout.
+  test(`the conversation's frame is drawn above an answer scrolled under its edge in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    let context;
+    try {
+      const opened = await onConversation(browser, `chat-frame-${engine.name}`);
+      context = opened.context;
+      const { page, problems } = opened;
+      // An opaque box over the whole answer, where its comment box sits, and the answer
+      // scrolled so it runs under the conversation's top edge.
+      const at = await page.evaluate(() => {
+        const root = document.querySelector("chat-thread").shadowRoot;
+        const el = root.querySelector(".transcript");
+        const box = document.createElement("div");
+        box.style.cssText = "position: absolute; inset: 0; background: rgb(0, 0, 255); z-index: 1";
+        root.querySelector(".turn.assistant").append(box);
+        el.scrollTop = el.scrollHeight / 2;
+        const probe = document.createElement("span");
+        probe.style.color = "var(--color-accent)";
+        root.append(probe);
+        const color = getComputedStyle(probe).color.match(/\d+/g).slice(0, 3).map(Number);
+        probe.remove();
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.ceil(r.top), color };
+      });
+      const [r, g, b] = await pixel(page, at.x, at.y);
+      const near = (c, w) => Math.abs(c - w) <= 8;
+      assert.ok(near(r, at.color[0]) && near(g, at.color[1]) && near(b, at.color[2]), `the frame's top edge shows rgb(${r}, ${g}, ${b}), not the accent rgb(${at.color.join(", ")})`);
       assert.deepEqual(problems, []);
     } finally {
       await context?.close();
