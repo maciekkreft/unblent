@@ -150,7 +150,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: rendering and layout.
-    test("in the phone preview a long checked line keeps its marks inside the page", async () => {
+    test("in the phone preview a long checked line keeps its marks inside the page, as icons only", async () => {
       const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
       context.setDefaultTimeout(4000);
       try {
@@ -171,6 +171,10 @@ for (const engine of ENGINES) {
         const [box, row] = await Promise.all([marks.boundingBox(), line(page, "Whether I get the job").boundingBox()]);
         assert.ok(box.x >= row.x && box.x + box.width <= row.x + row.width + 1, "the marks stay inside their line");
         assert.ok(await page.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth), "the page does not scroll sideways");
+        const mark = marks.locator(".mark").first();
+        assert.equal(await mark.getAttribute("aria-label"), "Not in my control");
+        assert.ok(await mark.locator("svg").isVisible(), "the phone shows the icon");
+        assert.equal(await mark.locator(".name").isVisible(), false, "but not the name");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

@@ -201,7 +201,7 @@ const drawMarks = (into, marks) => {
   else
     render(
       html`<span class="marks">${marks.map(
-        (m, i) => html`${i ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}<span class="mark">${(MARK_ICONS[m.icon] ?? MARK_ICONS.check)()}${m.name}</span>`,
+        (m, i) => html`${i ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}<span class="mark" role="img" aria-label=${m.name}>${(MARK_ICONS[m.icon] ?? MARK_ICONS.check)()}<span class="name" aria-hidden="true">${m.name}</span></span>`,
       )}</span>`,
       into,
     );
@@ -498,6 +498,29 @@ class JournalEntry extends LitElement {
       align-items: center;
       gap: var(--space-2xs);
     }
+    /* On the phone ([narrow]) a mark shows only its icon, and its name above it on hover,
+       out of the line's flow so the text never moves, as in note-editor's dock. */
+    :host([narrow]) .marks .mark {
+      position: relative;
+    }
+    :host([narrow]) .marks .mark .name {
+      display: none;
+    }
+    :host([narrow]) .marks .mark:hover .name {
+      display: block;
+      position: absolute;
+      bottom: calc(100% + var(--space-2xs));
+      right: 0;
+      z-index: 1;
+      padding: 0 var(--space-xs);
+      border-radius: var(--radius-sm);
+      background: var(--color-canvas-soft);
+      box-shadow: var(--shadow-card);
+      color: var(--color-body-mid);
+      font-size: var(--text-caption);
+      white-space: nowrap;
+      pointer-events: none;
+    }
     .marks svg {
       display: block;
       flex: none;
@@ -563,13 +586,24 @@ class JournalEntry extends LitElement {
     this.#actor.send(event);
   }
 
+  // The page is in its phone layout in the phone preview (7.5, views only read it) or
+  // below dock-desk's narrow-desk breakpoint (6.4), the same 45rem; the preview narrows
+  // this view, so a resize is when to look again.
+  #resized = new ResizeObserver(() => {
+    const root = document.documentElement;
+    const rem = parseFloat(getComputedStyle(root).fontSize) || 16;
+    this.toggleAttribute("narrow", root.getAttribute("data-viewport") === "phone" || globalThis.innerWidth < 45 * rem);
+  });
+
   connectedCallback() {
     super.connectedCallback();
     this.addEventListener("keydown", this.#onNestedKey);
+    this.#resized.observe(this);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this.#resized.disconnect();
     this.removeEventListener("keydown", this.#onNestedKey);
     this.#view?.destroy();
     this.#view = null;
