@@ -206,14 +206,30 @@ class DockDesk extends LitElement {
     .strip .own.admin {
       background: var(--color-admin-subtle);
     }
-    /* The group the keyboard is in wears a frame in the accent of the focus ring, drawn
-       inside its edge so nothing beside it moves (Norman: visible signifiers). For every
-       user: a mouse click into a panel moves the keyboard too. --focus-ring itself is a
-       box-shadow value, which a scrolling body's children would paint over, so the frame
-       is an outline in the same accent. */
-    .body.keyboard {
-      outline: calc(2 * var(--border-width)) solid var(--color-accent);
-      outline-offset: calc(-2 * var(--border-width));
+    /* With "Vim keys" on, the group the keyboard is in wears a frame in the accent of the
+       focus ring, drawn inside its edge so nothing beside it moves (Norman: visible
+       signifiers): Ctrl+h/j/k/l move the keyboard between groups, and the frame says
+       where it went. Without Vim keys nothing moves it but a click, so no frame is drawn
+       (#frame). The frame is a layer over the body, not the body's own outline or shadow:
+       a view's positioned content (the Reader's page, an image at its top) paints above
+       anything its non-positioned ancestor draws, and a body's scrolled content clips
+       under it, so it hid the frame's edge. The layer sits after the body in its own
+       positioned box, so it paints above whatever the view draws, and lets every press
+       through to the view. */
+    .frame {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    .frame:has(> .body.keyboard)::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      border: calc(2 * var(--border-width)) solid var(--color-accent);
     }
     /* One strip, four groups (Norman: one conceptual model). Tabs, then the
        actions for the shown tab, then on an edge the fold; every control is
@@ -597,8 +613,8 @@ class DockDesk extends LitElement {
     @container (width < 45rem) {
       /* On the phone one group fills the screen at a time, so where the keyboard is goes
          without saying, and a frame round a drawer would read as a border. */
-      .body.keyboard {
-        outline: none;
+      .frame:has(> .body.keyboard)::after {
+        content: none;
       }
       /* A folded side dock is a square button in the stage header's corner, not a
          full-height rail: it costs the header one token but leaves the whole stage
@@ -779,12 +795,13 @@ class DockDesk extends LitElement {
   }
 
   // Frame the body of the group whose view holds the focus, and no other: a header
-  // control or a strip button is not inside a body, so it frames nothing.
+  // control or a strip button is not inside a body, so it frames nothing. Only with
+  // "Vim keys" on (styles); updated() runs this again when the preference changes.
   #frame() {
     const docks = this.#actor.snapshot?.context.docks;
     const active = document.activeElement;
     const child = [...this.children].find((c) => c.contains(active) && !c.hasAttribute("control"));
-    const group = !child || !docks ? null : (SIDES.find((s) => docks[s]?.views.includes(addressOf(child))) ?? "stage");
+    const group = !child || !docks || !this.#vimOn() ? null : (SIDES.find((s) => docks[s]?.views.includes(addressOf(child))) ?? "stage");
     for (const body of this.renderRoot?.querySelectorAll(".body") ?? []) body.classList.toggle("keyboard", body.dataset.side === group);
   }
 
@@ -1050,16 +1067,18 @@ class DockDesk extends LitElement {
               ${ready && !pressed && stage && arranging ? this.#actions("stage", stage, labelOf) : nothing}
               <span class="controls">${this.#extras(extras, pressed)}</span>
             </div>
-            <div class="body" data-side="stage" ?data-admin=${!pressed && isAdmin(stage)}>
-              ${tabs.map((name) => html`<slot name=${name} ?hidden=${pressed || name !== stage}></slot>`)}
-              ${buttons.map((c) => html`<slot name=${addressOf(c)} ?hidden=${pressed !== addressOf(c)}></slot>`)}
-              ${!pressed && !stage
-                ? arranging
-                  ? html`<p class="empty">
-                      Everything is docked. Use ${RETURN} in a dock to bring a view back.
-                    </p>`
-                  : html`<p class="empty">Everything is docked. Turn on arranging to bring a view back.</p>`
-                : nothing}
+            <div class="frame">
+              <div class="body" data-side="stage" ?data-admin=${!pressed && isAdmin(stage)}>
+                ${tabs.map((name) => html`<slot name=${name} ?hidden=${pressed || name !== stage}></slot>`)}
+                ${buttons.map((c) => html`<slot name=${addressOf(c)} ?hidden=${pressed !== addressOf(c)}></slot>`)}
+                ${!pressed && !stage
+                  ? arranging
+                    ? html`<p class="empty">
+                        Everything is docked. Use ${RETURN} in a dock to bring a view back.
+                      </p>`
+                    : html`<p class="empty">Everything is docked. Turn on arranging to bring a view back.</p>`
+                  : nothing}
+              </div>
             </div>
           </section>
           ${dock("right")}
@@ -1301,8 +1320,10 @@ class DockDesk extends LitElement {
             ${arranging ? this.#actions(side, active, labelOf, dock.views) : nothing}
             ${this.#fold("Fold", "true", () => this.#send("_fold", undefined, side))}
           </div>
-          <div class="body" data-side=${side} ?data-admin=${isAdmin(active)}>
-            ${dock.views.map((name) => html`<slot name=${name} ?hidden=${name !== active}></slot>`)}
+          <div class="frame">
+            <div class="body" data-side=${side} ?data-admin=${isAdmin(active)}>
+              ${dock.views.map((name) => html`<slot name=${name} ?hidden=${name !== active}></slot>`)}
+            </div>
           </div>
         </div>
         <div class="rail" @click=${unfold}>

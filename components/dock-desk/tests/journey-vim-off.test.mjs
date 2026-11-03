@@ -108,7 +108,7 @@ const look = ({ page }) =>
       chatBox: cm("chat-input"),
       rows: [...(document.querySelector("note-list")?.shadowRoot?.querySelectorAll("li.row") ?? [])].map((r) => (r.querySelector(".name") ?? r).textContent.trim()),
       // The groups drawn with the frame that says the keyboard is in them.
-      framed: [...desk.querySelectorAll(".body")].filter((b) => getComputedStyle(b).outlineStyle !== "none").map((b) => b.dataset.side),
+      framed: [...desk.querySelectorAll(".body")].filter((b) => getComputedStyle(b.parentElement, "::after").content !== "none").map((b) => b.dataset.side),
       chapter: reader.querySelector(".footer .chap")?.textContent.trim() ?? null,
       pageNo: reader.querySelector(".footer .pageno")?.textContent.trim() ?? null,
       cursor: Boolean(cursor && !cursor.hidden),

@@ -104,7 +104,7 @@ const look = ({ page }) =>
       deep: deep ? deep.localName + (deep.getAttribute?.("role") ? `[${deep.getAttribute("role")}]` : "") + (typeof deep.className === "string" && deep.className.trim() ? `.${deep.className.trim().split(/\s+/)[0]}` : "") : null,
       deepText: (deep?.querySelector?.(".name") ?? deep)?.textContent?.trim().slice(0, 30) ?? null,
       // The groups drawn with the frame that says the keyboard is in them.
-      framed: [...desk.querySelectorAll(".body")].filter((b) => getComputedStyle(b).outlineStyle !== "none").map((b) => b.dataset.side),
+      framed: [...desk.querySelectorAll(".body")].filter((b) => getComputedStyle(b.parentElement, "::after").content !== "none").map((b) => b.dataset.side),
       rightTab: desk.querySelector('.dock.right .panel [role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
       notes: shows("notes"),
       chats: shows("chats"),

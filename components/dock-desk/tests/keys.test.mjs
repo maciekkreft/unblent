@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { inflateSync } from "node:zlib";
 
 // The kit (10): the helpers every browser suite shares, reached by the path the check sets.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
@@ -37,6 +38,45 @@ const rightTab = (page) =>
         .shadowRoot.querySelector('.dock.right .panel [role="tab"][aria-selected="true"]')
         ?.textContent.trim() ?? null,
   );
+
+// The groups drawn with the frame that says the keyboard is in them.
+const framed = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("dock-desk").shadowRoot.querySelectorAll(".body")]
+      .filter((b) => getComputedStyle(b.parentElement, "::after").content !== "none")
+      .map((b) => b.dataset.side),
+  );
+
+// Turn "Vim keys" on or off as the settings sheet does, from a throwaway emitter: the bus
+// checks only that the emit is declared, so settings receives it exactly as in the app.
+const editSettings = (page, vimKeys) =>
+  page.evaluate(async (vimKeys) => {
+    const name = "settings.edited";
+    const [{ mount, unmount }, { setup, emit }] = await Promise.all([import("/static/bus/bus.js"), import("xstate")]);
+    const schema = await (await fetch(`/static/components/settings-sheet/events/${name}.json`)).json();
+    const emitter = setup({}).createMachine({
+      id: "test-emitter",
+      meta: { kind: "view", emits: [name], attributes: [] },
+      on: { go: { actions: emit(({ event }) => event.body) } },
+    });
+    const actor = mount(emitter, { events: { [name]: schema } });
+    actor.send({ type: "go", body: { type: name, nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys } });
+    await new Promise((r) => setTimeout(r, 40));
+    unmount(actor);
+  }, vimKeys);
+
+// The colour drawn at one point of the page, as [r, g, b]: a 1x1 screenshot is one PNG
+// row of one pixel, which every PNG filter stores as the pixel itself.
+const pixel = async (page, x, y) => {
+  const png = await page.screenshot({ clip: { x, y, width: 1, height: 1 } });
+  const chunks = [];
+  for (let at = 8; at < png.length; ) {
+    const length = png.readUInt32BE(at);
+    if (png.toString("ascii", at + 4, at + 8) === "IDAT") chunks.push(png.subarray(at + 8, at + 8 + length));
+    at += 12 + length;
+  }
+  return [...inflateSync(Buffer.concat(chunks)).subarray(1, 4)];
+};
 
 async function open(engine, vimKeys, viewport = { width: 1400, height: 900 }) {
   const browser = await engine.launch();
@@ -165,6 +205,55 @@ for (const engine of ENGINES) {
       await until(async () => (await box.isChecked()) !== was);
       await until(() => box.evaluate((el) => el.getRootNode().activeElement === el));
       assert.equal(await scrolled(), before, "the sheet stays where it was");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
+  // Browser: rendering and layout.
+  test(`with Vim keys off no group is framed, and turning them on frames the keyboard's group at once on / in ${engine.name}`, async () => {
+    const { browser, context, page, problems } = await open(engine, false);
+    try {
+      await page.evaluate(() => document.querySelector("book-reader").focus());
+      await new Promise((r) => setTimeout(r, 150));
+      assert.equal((await focused(page)).panel, "book-stage");
+      assert.deepEqual(await framed(page), [], "nothing is framed with Vim keys off");
+      await editSettings(page, true);
+      await until(async () => JSON.stringify(await framed(page)) === JSON.stringify(["stage"]));
+      await editSettings(page, false);
+      await until(async () => JSON.stringify(await framed(page)) === "[]");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
+  // A view's positioned content, such as a picture at the top of the Reader's page, paints
+  // above anything the desk draws as the body's own outline; the frame must stay on top.
+  // Browser: rendering and layout.
+  test(`the frame is drawn above what the view paints at its edge on / in ${engine.name}`, async () => {
+    const { browser, context, page, problems } = await open(engine, true);
+    try {
+      await until(async () => JSON.stringify(await framed(page)) === JSON.stringify(["stage"]));
+      // An opaque positioned box across the top of the Reader, where a picture at the top
+      // of a page sits.
+      await page.evaluate(() => {
+        const box = document.createElement("div");
+        box.style.cssText = "position: absolute; inset: 0 0 auto 0; height: 3rem; background: rgb(0, 0, 255); z-index: 1";
+        document.querySelector("book-reader").shadowRoot.querySelector(".reader").append(box);
+      });
+      const at = await page.evaluate(() => {
+        const frame = document.querySelector("dock-desk").shadowRoot.querySelector('.body[data-side="stage"]').parentElement;
+        const r = frame.getBoundingClientRect();
+        const color = getComputedStyle(frame, "::after").borderTopColor;
+        return { x: Math.round(r.left + r.width / 2), y: Math.floor(r.top), color: color.match(/\d+/g).slice(0, 3).map(Number) };
+      });
+      const [r, g, b] = await pixel(page, at.x, at.y);
+      const near = (c, w) => Math.abs(c - w) <= 8;
+      assert.ok(near(r, at.color[0]) && near(g, at.color[1]) && near(b, at.color[2]), `the frame's top edge shows rgb(${r}, ${g}, ${b}), not the accent rgb(${at.color.join(", ")})`);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await context.close();
