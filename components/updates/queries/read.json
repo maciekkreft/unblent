@@ -1,0 +1,28 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes nothing.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Whether this Mac is offered test versions, as updates.changed carries it, or an error where there is no Mac app to offer them: the website, or a Mac's server that cannot be reached.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": { "test": { "type": "boolean" } },
+        "required": ["test"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "type": "string" } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": ["updates.changed"]
+}

@@ -23,6 +23,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release list --limit 200 --json tagName --jq '.[].tagName' | while read -r tag; do
+            # `beta` holds only the testers' update file (release.yml) and has no version.
+            [ "$tag" = beta ] && continue
             python3 mac/release-notes.py "${tag#v}" > notes.md
             gh release edit "$tag" --notes-file notes.md
           done

@@ -26,6 +26,10 @@ const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const STOP_TIMEOUT: Duration = Duration::from_secs(3);
 // The window keeps this name whatever title the page sets.
 const TITLE: &str = "Unblent";
+// The standing pre-release that holds the newest build's update file, test builds
+// included (mac/RELEASING.md).
+const TEST_ENDPOINT: &str =
+    "https://github.com/maciekkreft/unblent/releases/download/beta/latest.json";
 
 struct Server(Mutex<Option<Child>>);
 
@@ -197,10 +201,45 @@ fn fail(app: &AppHandle, message: &str) {
     app.exit(1);
 }
 
+/// The same folder as mac/serve.py's data_folder, where the server keeps updates.json.
+fn data_folder() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(data) = std::env::var_os("UNBLENT_DATA").filter(|d| !d.is_empty()) {
+        let data = PathBuf::from(data);
+        // serve.py expands a leading ~ with Path.expanduser.
+        return match (data.strip_prefix("~"), home) {
+            (Ok(rest), Some(home)) => Some(home.join(rest)),
+            _ => Some(data),
+        };
+    }
+    Some(home?.join("Library").join("Application Support").join("Unblent"))
+}
+
+/// Whether the user asked in Settings to be offered test builds; a missing or unreadable
+/// file means no.
+fn wants_test_versions() -> bool {
+    data_folder()
+        .and_then(|dir| fs::read_to_string(dir.join("updates.json")).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.get("test").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
 /// Nothing is installed without the user's yes; any failure is only logged.
 async fn offer_update(app: AppHandle) {
     let result: Result<(), String> = async {
-        let updater = app.updater().map_err(|e| e.to_string())?;
+        let updater = if wants_test_versions() {
+            log(&app, "update: checking the test channel");
+            let endpoint: Url = TEST_ENDPOINT.parse().map_err(|e| format!("{e}"))?;
+            app.updater_builder()
+                .endpoints(vec![endpoint])
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())?
+        } else {
+            log(&app, "update: checking the finished channel");
+            app.updater().map_err(|e| e.to_string())?
+        };
         let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
             return Ok(());
         };

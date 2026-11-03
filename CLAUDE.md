@@ -4,6 +4,9 @@
 
 The architecture is the spec. If a request conflicts with it, name the section and propose the document change; never work around it.
 
+- `roadmap.md` holds what is not a rule: directions, to-dos, launch tasks,
+  community posts and visibility ideas. It is not loaded by default; read it when
+  the owner asks about plans, the launch or what is to be done.
 - architecture.md holds the decisions and the rules. What exists, and what each
   component does for the user, is read from the running system:
   `python3 checks/show.py components` (with a component's description),

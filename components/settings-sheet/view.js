@@ -7,6 +7,7 @@ import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
 import checksEdited from "./events/checks.edited.json" with { type: "json" };
 import valueChecksEdited from "./events/value-checks.edited.json" with { type: "json" };
+import updatesEdited from "./events/updates.edited.json" with { type: "json" };
 
 // The account's thinking effort and cache lifetime shown in plain words (7.7). The
 // effort choices come from `llm: read`; an unknown one falls back to its own name. The
@@ -54,7 +55,7 @@ class ActorController {
         // machine learns it through input and stays importable in Node.
         account: this.host.hasAttribute("account"),
       },
-      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited, "checks.edited": checksEdited, "value-checks.edited": valueChecksEdited },
+      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited, "checks.edited": checksEdited, "value-checks.edited": valueChecksEdited, "updates.edited": updatesEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -706,6 +707,15 @@ class SettingsSheet extends LitElement {
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
           this.#actor.send({ type: "_toggleLayout" }),
         )}
+        ${snapshot.context.updates === null
+          ? nothing
+          : html`${this.#check("Test versions", snapshot.context.updates, (e) => {
+                // The box shows only what `updates` saved: updates.changed sets it, and
+                // a switch that could not be saved leaves it as it was.
+                e.target.checked = snapshot.context.updates;
+                this.#actor.send({ type: "_toggleTest" });
+              })}
+              <p class="hint">Offer test builds of the next version as updates. Turn off to get only finished versions.</p>`}
         ${Object.entries(roles).map(([role, members]) => this.#roleSelect(role, members, settings))}
       </div>
       <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>

@@ -61,8 +61,30 @@ than the last one, or installed copies will not see it as an update.
 1. Push a test tag, such as `v0.1.0-rc1`. Download `Unblent.dmg` from that
    pre-release in Safari and install it, to see what a new user sees on first open.
 2. When it works, push `v0.1.0`, the first real release.
-3. Updating cannot be tried with a test tag, because a pre-release is never offered as
-   an update. It is first tried with `v0.1.1`: a copy of `v0.1.0` should offer it.
+3. Updating with test tags works only on a Mac with Test versions turned on (below).
+   Every other copy is first offered the next finished version.
+
+## Test versions
+
+Settings › This device › Test versions, shown only in the Mac app, lets the owner and
+testers be offered test builds as updates. The switch is kept in `updates.json` in the
+data folder, and the app reads it each time it opens, before it checks for updates.
+
+- With the switch off, the app reads `releases/latest/download/latest.json`, the
+  newest finished version, as every other copy does.
+- With it on, the app reads `releases/download/beta/latest.json`. `beta` is a
+  pre-release that holds only that one file. Every tag, test or finished, replaces it
+  with its own, which points at the files of its own tag. The release workflow creates
+  `beta` the first time it is needed; it is never marked latest, so GitHub's latest
+  release and Homebrew ignore it.
+- The first test build that has the switch must be installed by hand once, from its
+  pre-release's `Unblent.dmg`. Copies older than it never read the switch.
+- Turning the switch off does not go back to an older version. The app keeps the test
+  build until the next finished version, which is always newer: `0.5.0` is newer than
+  `0.5.0-rc10`.
+- Test tags are compared as text after the hyphen, so `rc10` counts as older than
+  `rc9`. Within one version, keep the number of digits the same (`rc10` to `rc19`), or
+  a tester is not offered the next one.
 
 ## What users see
 

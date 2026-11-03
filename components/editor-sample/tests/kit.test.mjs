@@ -397,6 +397,9 @@ for (const engine of ENGINES) {
       const rows = await picker(page);
       assert.deepEqual(rows.map((r) => r.selected), [true, false, false], "the first row is marked");
       assert.equal(rows[2].about, null, "a tag without a description shows none");
+      // CodeMirror places a tooltip in its next measure, after the rows are drawn; until
+      // then it waits off screen, so the place is read once it has one.
+      await until(() => page.evaluate(() => document.querySelector("editor-sample").shadowRoot.querySelector(".cm-hashtag-picker").getBoundingClientRect().top > -1000));
       const shape = await page.evaluate(() => {
         const root = document.querySelector("editor-sample").shadowRoot;
         const card = root.querySelector(".cm-hashtag-picker").getBoundingClientRect();

@@ -97,3 +97,18 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --title "Unblent $VERSION" "${channel[@]}" \
             --notes-file release-notes.md \
             release/Unblent.dmg release/Unblent.app.tar.gz release/Unblent.app.tar.gz.sig release/latest.json
+
+      # The app of a tester who turned on Settings › This device › Test versions reads
+      # releases/download/beta/latest.json instead, so every build, test or finished, is
+      # offered there. Its download address stays this tag's own file. The beta release
+      # is a pre-release that is never latest, so GitHub's latest and Homebrew ignore it.
+      - name: Offer the build to testers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view beta > /dev/null 2>&1; then
+            gh release create beta --title "Test versions" --prerelease --latest=false \
+              --target "$GITHUB_SHA" \
+              --notes "Holds only the update file for testers who turned on Test versions in the Mac app. To download Unblent, use the newest release."
+          fi
+          gh release upload beta release/latest.json --clobber

@@ -31,6 +31,12 @@ All notable changes to Unblent for Mac are listed here. The format follows
   evaluators by its name, with hyphens for spaces; several hashtags give several answers,
   and a hashtag that names no evaluator stays grey. In my control, Thinking traps and
   Fact or story come with the app.
+- Typing `#` on a line in a note or a journal day lists your evaluators, so you can pick
+  one by name.
+- Enter at the end of a hashtag line starts a list below it, so each line you write there
+  is checked.
+- Settings › This device › Test versions, in the Mac app, offers test builds of the next
+  version as updates. Turn it off to get only finished versions.
 
 ## [0.4.1] — 2026-10-31
 

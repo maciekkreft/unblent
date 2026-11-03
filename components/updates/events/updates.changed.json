@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whether this Mac is offered test versions of the app, as its server keeps it in updates.json (3.4). Announced after every switch saved, and again unchanged when a switch could not be saved, so the switch shows what is saved.",
+  "type": "object",
+  "properties": {
+    "test": { "type": "boolean", "description": "True when the Mac app also offers test builds of the next version as updates." }
+  },
+  "required": ["test"],
+  "additionalProperties": false
+}

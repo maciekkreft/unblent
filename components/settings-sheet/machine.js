@@ -283,6 +283,7 @@ export const machine = setup({
     checks: fromPromise(({ input }) => input.ask("choice-point-checks", "read", {})),
     valueChecks: fromPromise(({ input }) => input.ask("value-checks", "read", {})),
     evaluators: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
+    updates: fromPromise(({ input }) => input.ask("updates", "read", {})),
   },
 }).createMachine({
   id: "settings-sheet",
@@ -291,7 +292,9 @@ export const machine = setup({
       "The Settings sheet, in two sections. This device holds the preferences `settings` keeps: " +
       "page order and visibility, the switches, Vim keys, and \"Keep the open note and chat\", " +
       "off at first, so the Notes and Chats panels follow what is on " +
-      "the stage until the user turns it on. Your account holds the chat " +
+      "the stage until the user turns it on. In the Mac app only, where `updates` answers, This device " +
+      "also holds Test versions, off at first, with one line under it: \"Offer test builds of the next " +
+      "version as updates. Turn off to get only finished versions.\" `updates` keeps it. Your account holds the chat " +
       "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
       "which lookups the chat may use, which `conversations` keeps, in the fold What the chat " +
       "may read right after the cache lifetime and before the Jev part. There the lookups stand " +
@@ -343,7 +346,7 @@ export const machine = setup({
       "idea? Send feedback\": the link opens the project's form chooser for a new issue in a new " +
       "tab, or in the Mac app in the user's browser, and fills nothing in.",
     kind: "view",
-    emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited", "value-checks.edited"],
+    emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited", "value-checks.edited", "updates.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
     // "This device"; without it, the page-links sheet exactly as before.
     attributes: ["account"],
@@ -358,6 +361,7 @@ export const machine = setup({
       "value-checks: read",
       "evaluators: list",
       "flags: read",
+      "updates: read",
     ],
   },
   // The active profile (§12), adopted from settings; a page without settings
@@ -397,13 +401,24 @@ export const machine = setup({
     // The features `flags` reports hidden, for the choice point checks part (8); null
     // until it answers.
     hidden: null,
+    // Whether this Mac is offered test versions (3.4); null where `updates` does not
+    // answer, which is everywhere but the Mac app, and the switch is then not shown.
+    updates: null,
   }),
-  invoke: {
-    src: "flags",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
-    onError: { actions: assign({ hidden: [] }) },
-  },
+  invoke: [
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
+      onError: { actions: assign({ hidden: [] }) },
+    },
+    {
+      src: "updates",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ updates: ({ event }) => (typeof event.output?.test === "boolean" ? event.output.test : null) }) },
+      onError: { actions: assign({ updates: null }) },
+    },
+  ],
   initial: "loadingPages",
   states: {
     loadingPages: {
@@ -585,6 +600,12 @@ export const machine = setup({
         _toggleVim: {
           actions: emit(({ context }) => edited({ ...context.settings, vimKeys: !context.settings.vimKeys })),
         },
+        // The Mac's own switch (3.4): `updates` saves it, records the step and announces
+        // updates.changed, adopted below (4.3).
+        _toggleTest: {
+          guard: ({ context }) => context.updates !== null,
+          actions: emit(({ context }) => ({ type: "updates.edited", test: !context.updates })),
+        },
         _toggleKeep: {
           actions: emit(({ context }) => edited({ ...context.settings, keepOpen: !context.settings.keepOpen })),
         },
@@ -684,6 +705,7 @@ export const machine = setup({
   },
   on: {
     "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
+    "updates.changed": { actions: assign({ updates: ({ event }) => event.test }) },
     "settings.changed": {
       actions: assign({
         settings: ({ event }) => adopt(event),

@@ -649,3 +649,32 @@ test("the Choice points and Values lookups are listed only while Values and Choi
   assert.deepEqual(toolsShown(list, null).map((t) => t.key), ["notes: read"], "flags has not answered");
   assert.deepEqual(toolsShown(list, ["choice-points"]).map((t) => t.key), ["notes: read"]);
 });
+
+test("Test versions: hidden where updates does not answer; on a Mac it flips and follows updates.changed", async () => {
+  const run = async (updates) => {
+    const ask = (target) =>
+      Promise.resolve(
+        target === "updates" ? updates : target === "pages" ? { pages: PAGES } : target === "settings" ? { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {} } : { error: "no-answerer" },
+      );
+    const actor = createActor(machine, { input: { ask, current: "/a" } });
+    const edited = [];
+    actor.on("updates.edited", (e) => edited.push(e));
+    actor.start();
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    return { actor, edited };
+  };
+  const web = await run({ error: "unavailable" });
+  assert.equal(web.actor.getSnapshot().context.updates, null);
+  web.actor.send({ type: "_toggleTest" });
+  assert.deepEqual(web.edited, [], "no switch to flip on the website");
+
+  const mac = await run({ test: false });
+  assert.equal(mac.actor.getSnapshot().context.updates, false);
+  mac.actor.send({ type: "_toggleTest" });
+  assert.deepEqual(mac.edited, [{ type: "updates.edited", test: true }]);
+  assert.equal(mac.actor.getSnapshot().context.updates, false, "only updates.changed sets the switch (4.3)");
+  mac.actor.send({ type: "updates.changed", test: true });
+  assert.equal(mac.actor.getSnapshot().context.updates, true);
+  mac.actor.send({ type: "_toggleTest" });
+  assert.deepEqual(mac.edited.at(-1), { type: "updates.edited", test: false });
+});
