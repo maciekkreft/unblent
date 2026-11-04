@@ -627,6 +627,38 @@ test("a chapter picked in a book not open opens that book, and a journal day ope
   assert.equal(opened.length, 1, "with no journal, a day opens nothing");
 });
 
+test("a list asked before the journal has answered waits, so it never leaves the journal out", async () => {
+  let answerJournal;
+  const ask = (target, name) =>
+    target === "journal" && name === "read"
+      ? new Promise((resolve) => { answerJournal = resolve; })
+      : askUser("u1")();
+  const { actor } = start(fakeStore([book(ID)]), { api: fakeApi(), ask });
+  await ready(actor);
+  const lists = [];
+  actor.send({ type: "list?", cid: "c", payload: {}, reply: (value) => lists.push(value) });
+  await flush();
+  assert.deepEqual(lists, [], "no answer yet");
+  answerJournal({ days: [], open: null, today: "2026-11-04" });
+  await flush();
+  assert.deepEqual(lists[0].books.map((b) => b.title), ["Journal", book(ID).title]);
+});
+
+test("a list that waited is answered without a journal when the page has none", async () => {
+  let answerJournal;
+  const ask = (target, name) =>
+    target === "journal" && name === "read"
+      ? new Promise((resolve) => { answerJournal = resolve; })
+      : askUser("u1")();
+  const { actor } = start(fakeStore([book(ID)]), { api: fakeApi(), ask });
+  await ready(actor);
+  const lists = [];
+  actor.send({ type: "list?", cid: "c", payload: {}, reply: (value) => lists.push(value) });
+  answerJournal({ error: "no-answerer" });
+  await flush();
+  assert.deepEqual(lists[0].books.map((b) => b.id), [ID]);
+});
+
 test("open? is answered before the store has loaded, then from the loaded value", async () => {
   const store = fakeStore([book(ID)]);
   store.meta.set("open", { id: ID, at: 42 });

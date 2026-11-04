@@ -162,6 +162,13 @@ function applyJournal(context, picture, enqueue) {
   if (!held && context.open.id === JOURNAL) enqueue.emit({ type: "book.opened", id: JOURNAL });
 }
 
+// journal: read has answered, whatever it said: every list that waited for it is answered.
+function answerWaitingLists(context, enqueue) {
+  context.journalAnswered = true;
+  enqueue.assign({ journalAnswered: true });
+  for (const reply of context.listsWaiting.splice(0)) replyList(context, reply);
+}
+
 // The book a reader can open under `id`: the journal, or a visible imported book.
 const bookFor = (context, id) => (id === JOURNAL ? context.journal : visible(context.books.get(id)) ? context.books.get(id) : null);
 
@@ -257,6 +264,12 @@ const byPlace = (a, b) =>
 
 // The journal first, then the imported books in the order the user set.
 function replyList(context, reply) {
+  // An answer without the journal would tell the stage its tab is gone (book-stage), so a
+  // list asked before journal: read has answered waits for that answer.
+  if (!context.journalAnswered) {
+    context.listsWaiting.push(reply);
+    return;
+  }
   const books = [...context.books.values()]
     .filter(visible)
     .map((r) => tile(context, r))
@@ -1061,6 +1074,8 @@ export const machine = setup({
     open: { id: null, at: 0 },
     // The journal as a book (journalBook), or null while there is none to show.
     journal: null,
+    journalAnswered: false,
+    listsWaiting: [],
     queued: [],
     // The browser is changing account (12), from session.changed until it is over.
     leaving: false,
@@ -1074,7 +1089,13 @@ export const machine = setup({
   invoke: {
     src: "journal",
     input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: enqueueActions(({ context, event, enqueue }) => applyJournal(context, event.output, enqueue)) },
+    onDone: {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        applyJournal(context, event.output, enqueue);
+        answerWaitingLists(context, enqueue);
+      }),
+    },
+    onError: { actions: enqueueActions(({ context, enqueue }) => answerWaitingLists(context, enqueue)) },
   },
   on: {
     // While loading, only whether the browser is leaving is kept (12); the rest of the

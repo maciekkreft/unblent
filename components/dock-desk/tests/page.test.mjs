@@ -362,10 +362,42 @@ for (const engine of ENGINES) {
     }
   });
 
+  const gearProblems = (page) => {
+    const problems = [];
+    page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
+    page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
+    page.on("requestfailed", (req) =>
+      problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`),
+    );
+    page.on("response", (res) => res.status() >= 400 && problems.push(`HTTP ${res.status()}: ${res.url()}`));
+    return problems;
+  };
+
+  const gear = (page) => ({
+    pillAttr: (attr) =>
+      page
+        .locator("dock-desk")
+        .evaluate((el, a) => el.shadowRoot.querySelector(".controls .pill").getAttribute(a), attr),
+    clickPill: () =>
+      page.locator("dock-desk").evaluate((el) => el.shadowRoot.querySelector(".controls .pill").click()),
+    pressed: () =>
+      page.waitForFunction(
+        () =>
+          document.querySelector("dock-desk").shadowRoot.querySelector(".controls .pill").getAttribute("aria-pressed") === "true",
+      ),
+    staged: () =>
+      page.waitForFunction(() => {
+        const root = document.querySelector("dock-desk").shadowRoot;
+        return (
+          root.querySelector(".controls .pill").getAttribute("aria-pressed") === "false" &&
+          root.querySelector('.stage [role="tab"][aria-selected="true"]')
+        );
+      }),
+  });
+
   // The gear (6.4) shows the Settings sheet on the stage in place of a stage tab, lit
-  // while pressed, and leaves it by every route: the gear again, a stage tab, Escape,
-  // and (a reload) not at all, since pressed rides no fact. Every header button is one
-  // size, 36px (--text-subtitle in --space-sm padding).
+  // while pressed, and leaves it by every route: the gear again, a stage tab, Escape.
+  // Every header button is one size, 36px (--text-subtitle in --space-sm padding).
   // Browser: a gesture.
   test(`the gear shows Settings on the stage and every route leaves it in ${engine.name}`, async () => {
     const browser = await engine.launch();
@@ -373,39 +405,14 @@ for (const engine of ENGINES) {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       context.setDefaultTimeout(4000);
       const page = await context.newPage();
-      const problems = [];
-      page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
-      page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
-      page.on("requestfailed", (req) =>
-        problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`),
-      );
-      page.on("response", (res) => res.status() >= 400 && problems.push(`HTTP ${res.status()}: ${res.url()}`));
+      const problems = gearProblems(page);
 
       await page.goto(`${BASE_URL}/workshop/design/dock`);
       await page.locator("dock-desk").waitFor();
       await page.waitForFunction(() =>
         document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
       );
-
-      const pillAttr = (attr) =>
-        page
-          .locator("dock-desk")
-          .evaluate((el, a) => el.shadowRoot.querySelector(".controls .pill").getAttribute(a), attr);
-      const clickPill = () =>
-        page.locator("dock-desk").evaluate((el) => el.shadowRoot.querySelector(".controls .pill").click());
-      const pressed = () =>
-        page.waitForFunction(
-          () =>
-            document.querySelector("dock-desk").shadowRoot.querySelector(".controls .pill").getAttribute("aria-pressed") === "true",
-        );
-      const staged = () =>
-        page.waitForFunction(() => {
-          const root = document.querySelector("dock-desk").shadowRoot;
-          return (
-            root.querySelector(".controls .pill").getAttribute("aria-pressed") === "false" &&
-            root.querySelector('.stage [role="tab"][aria-selected="true"]')
-          );
-        });
+      const { pillAttr, clickPill, pressed, staged } = gear(page);
 
       // The gear renders unpressed, named Settings, after the page's one control.
       assert.equal(await pillAttr("aria-pressed"), "false");
@@ -488,8 +495,29 @@ for (const engine of ENGINES) {
         "Escape returns focus to the gear",
       );
 
-      // A reload keeps Settings on the stage, kept in this browser (3.1); once the gear
-      // is pressed again, a reload shows the stage.
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  // A reload keeps Settings on the stage, kept in this browser (3.1); once the gear is
+  // pressed again, a reload shows the stage.
+  // Browser: a reload against real storage.
+  test(`a reload keeps the gear's Settings until the gear closes it in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    try {
+      const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+      context.setDefaultTimeout(4000);
+      const page = await context.newPage();
+      const problems = gearProblems(page);
+      await page.goto(`${BASE_URL}/workshop/design/dock`);
+      await page.locator("dock-desk").waitFor();
+      await page.waitForFunction(() =>
+        document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
+      );
+      const { pillAttr, clickPill, pressed, staged } = gear(page);
+
       const reloaded = async () => {
         await page.reload();
         await page.waitForFunction(() =>
