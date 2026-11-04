@@ -1,0 +1,14 @@
+Files in this folder that come from other projects:
+
+us_gold.json, us_silver.json
+  The American English pronunciation dictionaries of misaki, Copyright hexgrad,
+  Apache License 2.0 (LICENSE-misaki), copied unchanged from
+  https://github.com/hexgrad/misaki at commit fba1236595f2d2bf21d414ba6e57d25256afada3,
+  misaki/data/. lexicon.py follows misaki's misaki/en.py at that commit for how an
+  entry becomes Kokoro's phonemes.
+
+kokoro_vocab.json
+  The vocabulary of the Kokoro-82M model, the "vocab" of config.json in kokoro-onnx,
+  Copyright github.com/thewh1teagle, MIT License (LICENSE-kokoro-onnx),
+  https://github.com/thewh1teagle/kokoro-onnx at commit
+  3596b26764286a7de9d90c363e988d50578918e5 (src/kokoro_onnx/config.json).

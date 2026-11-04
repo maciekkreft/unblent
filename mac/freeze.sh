@@ -83,6 +83,9 @@ PY
 hidden=()
 while IFS= read -r line; do hidden+=("$line"); done < "$build/imports.txt"
 
+# The voice's pronunciation dictionaries (components/voice/server/data/) travel as data
+# with the rest of components/; ONNX Runtime's own libraries are loaded by path, which
+# PyInstaller cannot see, so they are collected by name below.
 data_args=()
 for dir in server components vendor tokens bus store editor composer pages mac; do
   data_args+=("--add-data=$stage/$dir:$dir")
@@ -92,6 +95,7 @@ done
   --name unblent-server \
   --distpath "$build/dist" --workpath "$build/work" --specpath "$build" \
   --collect-submodules uvicorn \
+  --collect-binaries onnxruntime \
   --exclude-module server --exclude-module components \
   "${hidden[@]}" "${data_args[@]}" \
   "$repo/mac/serve.py"
