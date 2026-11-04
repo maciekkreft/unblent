@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user changed reading aloud in Settings: picked a voice, saved, replaced or removed the Inworld key on the website, or started or cancelled the download of the Kokoro voice on a Mac. Only the part changed, which `voice` saves and announces as voice.changed.",
+  "type": "object",
+  "properties": {
+    "voice": { "type": "string", "minLength": 1, "description": "The id of the voice picked, one of the voices `voice: read` lists." },
+    "key": { "type": "string", "x-secret": true, "description": "The account's Inworld key; an empty string removes it. Never shown in the trace (7.2)." },
+    "download": { "enum": ["start", "cancel"], "description": "Start or cancel the download of the Kokoro voice on this Mac." }
+  },
+  "additionalProperties": false
+}

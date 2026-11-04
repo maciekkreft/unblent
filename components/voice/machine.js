@@ -73,6 +73,7 @@ export const machine = setup({
     shape: "remote-only",
     owns: "reading aloud",
     emits: ["voice.changed", "step.recorded", "step.settled"],
+    steps: { "voice.edited": "step" },
   },
   context: ({ input }) => ({
     load: input.load,

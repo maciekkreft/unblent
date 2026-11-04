@@ -309,6 +309,7 @@ export const machine = setup({
       "checks.edited": "other",
       "value-checks.edited": "other",
       "updates.edited": "other",
+      "voice.edited": "other",
       "generator.edited": "other",
       "generation.requested": "other",
       "flag.switched": "other",

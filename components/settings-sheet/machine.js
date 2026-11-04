@@ -270,6 +270,42 @@ export const addressOf = (text) => {
   return t && !/^https?:\/\//i.test(t) ? `http://${t}` : t;
 };
 
+// --- Reading aloud ------------------------------------------------------------------
+
+// The sentence Play a sample reads, short so the sample is quick and costs next to nothing.
+export const SAMPLE = "This is how your books will sound when they are read aloud.";
+
+// What the Reading aloud rows show (3.4): null while the feature is hidden or `flags` has
+// not answered, or while `voice` gives no picture (a page without it, the website signed
+// out, the server out of reach); else where the voice is made, the download on a Mac,
+// whether the website's account holds an Inworld key, and the voices to choose from. The
+// test voice is offered only in the workshop profile, like Echo (12), except that a voice
+// left on it keeps it, so it can be switched away from.
+export const voiceView = ({ voice, hidden, profile }) => {
+  if (!voice || hidden === null || hidden.includes("reading-aloud")) return null;
+  const voices = voice.voices.filter((v) => v.id !== "test" || profile !== "product" || voice.voice === "test");
+  return {
+    here: voice.here,
+    kokoro: voice.kokoro ?? null,
+    keySet: voice.inworld?.keySet === true,
+    voice: voice.voice,
+    voices,
+  };
+};
+
+// The picture as voice.changed and `voice: read` carry it, taken field by field so the
+// event's type is dropped; an error reply is no picture.
+const pictureOf = (value) =>
+  value && typeof value.here === "string" && Array.isArray(value.voices)
+    ? {
+        here: value.here,
+        voice: value.voice,
+        voices: value.voices,
+        ...(value.kokoro ? { kokoro: value.kokoro } : {}),
+        ...(value.inworld ? { inworld: value.inworld } : {}),
+      }
+    : null;
+
 export const valueCheckers = (evaluators) => evaluators.filter((e) => !e.removing && !e.derivedFrom);
 
 export const machine = setup({
@@ -285,6 +321,7 @@ export const machine = setup({
     valueChecks: fromPromise(({ input }) => input.ask("value-checks", "read", {})),
     evaluators: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
     updates: fromPromise(({ input }) => input.ask("updates", "read", {})),
+    voice: fromPromise(({ input }) => input.ask("voice", "read", {})),
   },
 }).createMachine({
   id: "settings-sheet",
@@ -343,11 +380,20 @@ export const machine = setup({
       "their state until they show again. The Vim keys list names the chat box " +
       "only on a page where `conversations` answers. Saving, replacing or removing the API key or the Jev key " +
       "happens at once, and `llm` makes it a step with the short notice whose Undo brings the key " +
-      "before back. The last line of the sheet, on every page, reads \"Something not working, or an " +
+      "before back. While Reading aloud is shown and `voice` answers, the sheet holds Reading " +
+      "aloud: in the Mac app under This device, the Voice model row, Kokoro · not downloaded " +
+      "with Download voice and its size, then while it downloads a bar with how much of it " +
+      "has come and Cancel, then Kokoro · ready on this Mac, with the Voice list and Play a " +
+      "sample once it is ready; on the website under Your account, after Generating, the " +
+      "Inworld key (kept by `voice`, saved, replaced and removed like the API key, each a " +
+      "step with Undo), with the Voice list and Play a sample once a key is saved, and a line " +
+      "on what Inworld charges. Choosing a voice is a step `voice` records. Play a sample " +
+      "reads one short sentence in the voice picked, and a second press stops it. The test " +
+      "voice is listed only in the workshop profile. The last line of the sheet, on every page, reads \"Something not working, or an " +
       "idea? Send feedback\": the link opens the project's form chooser for a new issue in a new " +
       "tab, or in the Mac app in the user's browser, and fills nothing in.",
     kind: "view",
-    emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited", "value-checks.edited", "updates.edited"],
+    emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited", "value-checks.edited", "updates.edited", "voice.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
     // "This device"; without it, the page-links sheet exactly as before.
     attributes: ["account"],
@@ -363,6 +409,8 @@ export const machine = setup({
       "evaluators: list",
       "flags: read",
       "updates: read",
+      "voice: read",
+      "voice: speak",
     ],
   },
   // The active profile (§12), adopted from settings; a page without settings
@@ -405,6 +453,10 @@ export const machine = setup({
     // Whether this Mac is offered test versions (3.4); null where `updates` does not
     // answer, which is everywhere but the Mac app, and the switch is then not shown.
     updates: null,
+    // Reading aloud (3.4): the picture `voice` gives, or null where it gives none; and the
+    // last sample Play a sample asked for, numbered so the view plays each one once.
+    voice: null,
+    sample: null,
   }),
   invoke: [
     {
@@ -418,6 +470,12 @@ export const machine = setup({
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ updates: ({ event }) => (typeof event.output?.test === "boolean" ? event.output.test : null) }) },
       onError: { actions: assign({ updates: null }) },
+    },
+    {
+      src: "voice",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ voice: ({ event }) => pictureOf(event.output) }) },
+      onError: { actions: assign({ voice: null }) },
     },
   ],
   initial: "loadingPages",
@@ -696,6 +754,48 @@ export const machine = setup({
             [event.line]: event.evaluator || null,
           })),
         },
+        // Reading aloud (3.4): each gesture emits only the part it changed; `voice` saves
+        // it, records the step for a voice or a key, and announces voice.changed, adopted
+        // below (4.3). The download is not a step: Cancel is its way back.
+        _setVoice: {
+          guard: ({ context, event }) => Boolean(context.voice) && context.voice.voice !== event.voice && context.voice.voices.some((v) => v.id === event.voice),
+          actions: emit(({ event }) => ({ type: "voice.edited", voice: event.voice })),
+        },
+        _saveInworldKey: { actions: emit(({ event }) => ({ type: "voice.edited", key: event.key })) },
+        _removeInworldKey: {
+          actions: [
+            assign({ removed: ({ context }) => [...context.removed, "inworldKey"] }),
+            emit(() => ({ type: "voice.edited", key: "" })),
+          ],
+        },
+        _download: {
+          guard: ({ context }) => context.voice?.kokoro?.state === "missing",
+          actions: emit(() => ({ type: "voice.edited", download: "start" })),
+        },
+        _cancelDownload: {
+          guard: ({ context }) => context.voice?.kokoro?.state === "downloading",
+          actions: emit(() => ({ type: "voice.edited", download: "cancel" })),
+        },
+        // The sample is read in the voice picked; the view plays the answer (`sample`).
+        _sample: {
+          guard: ({ context }) => Boolean(context.voice),
+          actions: ({ context, self }) =>
+            Promise.resolve()
+              .then(() => context.ask("voice", "speak", { text: SAMPLE }))
+              .then(
+                (reply) => self.send({ type: "_sampled", reply }),
+                () => self.send({ type: "_sampled", reply: { error: "unavailable" } }),
+              ),
+        },
+        _sampled: {
+          actions: assign({
+            sample: ({ context, event }) => {
+              const r = event.reply;
+              const n = (context.sample?.n ?? 0) + 1;
+              return typeof r?.audio === "string" && typeof r.mime === "string" ? { n, mime: r.mime, audio: r.audio } : { n, error: r?.error ?? "unavailable" };
+            },
+          }),
+        },
         _setQuestion: {
           guard: ({ context, event }) => context.checks !== null && !same(patched(context, event), shownBox(context, event.field)),
           actions: emit(({ context, event }) => checksEdited(event.field, patched(context, event))),
@@ -707,6 +807,12 @@ export const machine = setup({
   on: {
     "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     "updates.changed": { actions: assign({ updates: ({ event }) => event.test }) },
+    "voice.changed": {
+      actions: assign({
+        voice: ({ event }) => pictureOf(event),
+        removed: ({ context }) => context.removed.filter((f) => f !== "inworldKey"),
+      }),
+    },
     "settings.changed": {
       actions: assign({
         settings: ({ event }) => adopt(event),
@@ -718,7 +824,7 @@ export const machine = setup({
     // dropped by taking them by name.
     "llm.changed": {
       actions: assign({
-        removed: [],
+        removed: ({ context }) => context.removed.filter((f) => f === "inworldKey"),
         llm: ({ event }) => ({
           signedIn: event.signedIn,
           provider: event.provider,

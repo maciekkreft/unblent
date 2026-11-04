@@ -1,13 +1,14 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask, answers } from "bus";
 import { icon } from "icons";
-import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, toolsShown, toolGroups, valueCheckers, ollamaView, deciderView } from "./machine.js";
+import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, toolsShown, toolGroups, valueCheckers, ollamaView, deciderView, voiceView } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
 import checksEdited from "./events/checks.edited.json" with { type: "json" };
 import valueChecksEdited from "./events/value-checks.edited.json" with { type: "json" };
 import updatesEdited from "./events/updates.edited.json" with { type: "json" };
+import voiceEdited from "./events/voice.edited.json" with { type: "json" };
 
 // The account's thinking effort and cache lifetime shown in plain words (7.7). The
 // effort choices come from `llm: read`; an unknown one falls back to its own name. The
@@ -35,6 +36,8 @@ const COPIED_MS = 2000;
 const FEEDBACK_URL = "https://github.com/maciekkreft/unblent/issues/new/choose";
 const TTLS = ["5m", "1h"];
 const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
+// The download's size in whole megabytes, as the design names it ("354 MB").
+const mb = (bytes) => Math.round(bytes / 1e6);
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -55,7 +58,7 @@ class ActorController {
         // machine learns it through input and stays importable in Node.
         account: this.host.hasAttribute("account"),
       },
-      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited, "checks.edited": checksEdited, "value-checks.edited": valueChecksEdited, "updates.edited": updatesEdited },
+      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited, "checks.edited": checksEdited, "value-checks.edited": valueChecksEdited, "updates.edited": updatesEdited, "voice.edited": voiceEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -90,6 +93,11 @@ class SettingsSheet extends LitElement {
     // copied, so only that line reads Copied.
     editingAddress: { state: true },
     copied: { state: true },
+    // The Inworld key's draft and whether its box is open over a saved key, as for the
+    // other keys; and whether Play a sample is playing, from the press until it ends.
+    inworldDraft: { state: true },
+    replacingInworld: { state: true },
+    playing: { state: true },
   };
 
   constructor() {
@@ -100,6 +108,9 @@ class SettingsSheet extends LitElement {
     this.replacingJev = false;
     this.editingAddress = false;
     this.copied = null;
+    this.inworldDraft = "";
+    this.replacingInworld = false;
+    this.playing = false;
   }
 
   static styles = css`
@@ -174,6 +185,11 @@ class SettingsSheet extends LitElement {
       color: var(--color-body-mid);
       font-size: var(--text-sm);
     }
+    /* Reading aloud starts a group of its own, set off from the rows above it. */
+    .switches > .group,
+    .group.reading {
+      margin-top: var(--space-md);
+    }
     .judging {
       display: flex;
       flex-direction: column;
@@ -244,6 +260,35 @@ class SettingsSheet extends LitElement {
       vertical-align: middle;
       border-radius: var(--radius-full);
       background: var(--color-success);
+    }
+    /* Reading aloud: the download's bar, sized like a key box, filled in the accent. */
+    .bar {
+      display: inline-block;
+      width: calc(var(--space-2xl) * 3.375);
+      max-width: 100%;
+      height: var(--space-xs);
+      border-radius: var(--space-2xs);
+      background: var(--color-surface-active);
+      overflow: hidden;
+    }
+    .bar > i {
+      display: block;
+      height: 100%;
+      background: var(--color-accent);
+    }
+    .ollama .of {
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    .ollama button.act {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    /* Download voice is the one thing to do on the row, so it stands out from Cancel. */
+    button.act.out {
+      background: var(--color-canvas);
+      border-color: var(--color-border-strong);
     }
     .ollama code {
       font-family: var(--font-mono);
@@ -632,6 +677,7 @@ class SettingsSheet extends LitElement {
     if (!snapshot || !(snapshot.matches("ready") || snapshot.matches("failed"))) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">settings unavailable</p>`;
     const { pages, settings, current, roles, profile, account, llm, toolList, tools, checks, evaluators } = snapshot.context;
+    const reading = voiceView(snapshot.context);
     const rows = merge(pages, settings.nav);
     // The product profile (§12) shows only the production options: the editor
     // selects and the layout-switch row. The page order and the viewport switch
@@ -716,6 +762,7 @@ class SettingsSheet extends LitElement {
               this.#actor.send({ type: "_toggleTest" });
             })}
         ${Object.entries(roles).map(([role, members]) => this.#roleSelect(role, members, settings))}
+        ${reading?.here === "mac" ? this.#readingMac(reading) : nothing}
       </div>
       <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>
         ${account ? "Reset this device" : "Reset to defaults"}
@@ -881,6 +928,7 @@ class SettingsSheet extends LitElement {
               </label>
             `}
         ${this.#tools(toolsShown(toolList, this.#actor.snapshot.context.hidden), tools, profile, this.#actor.snapshot.context.settings.vimKeys)}
+        ${this.#readingWeb(voiceView(this.#actor.snapshot.context))}
         ${llm.jev ? this.#judging(llm, evaluators, checks) : this.#checks(checks, evaluators)}
       </div>
     `;
@@ -986,6 +1034,129 @@ class SettingsSheet extends LitElement {
           ${this.#checks(checks, evaluators)}
         </div>
     `;
+  }
+
+  // Reading aloud in the Mac app (3.4), under This device, since the voice is downloaded to
+  // this Mac: the Voice model row, which shows the size before the download starts, a bar
+  // with Cancel while it runs, and ready once it is checked; then the Voice list and Play a
+  // sample, only once it is ready.
+  #readingMac(reading) {
+    const { state, done, size } = reading.kokoro ?? { state: "missing", done: 0, size: 0 };
+    const total = size ? ` · ${mb(size)} MB` : "";
+    const share = size ? Math.min(100, (done / size) * 100) : 0;
+    const model =
+      state === "ready"
+        ? html`<span class="status"><span class="dot" aria-hidden="true"></span>Kokoro · ready on this Mac</span>`
+        : state === "downloading"
+        ? html`
+            <span class="bar" role="progressbar" aria-label="Downloading the voice" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${Math.round(share)}
+              ><i style="width: ${share}%"></i
+            ></span>
+            <span class="of">${mb(done)} of ${mb(size)} MB</span>
+            <button class="act" @click=${() => this.#actor.send({ type: "_cancelDownload" })}>Cancel</button>
+          `
+        : html`
+            <span class="status">Kokoro · not downloaded</span>
+            <button class="act out" @click=${() => this.#actor.send({ type: "_download" })}>Download voice${total}</button>
+          `;
+    return html`
+      <span class="group">Reading aloud</span>
+      <div class="field">
+        <span>Voice model</span>
+        <div class="ollama" data-row="voice-model">${model}</div>
+      </div>
+      ${state === "ready" ? this.#voiceRow(reading) : nothing}
+      <div class="field"><span></span><span class="help">Kokoro reads on this Mac, offline and free. It is downloaded once.</span></div>
+    `;
+  }
+
+  // Reading aloud on the website (3.4), under Your account, since Inworld reads on the
+  // account's own key: the key field the other keys use, then the Voice list and Play a
+  // sample once a key is saved, and what Inworld charges.
+  #readingWeb(reading) {
+    if (reading?.here !== "web") return nothing;
+    const keySet = reading.keySet && !this.#actor.snapshot.context.removed.includes("inworldKey");
+    return html`
+      <span class="group reading">Reading aloud</span>
+      ${this.#keyField({
+        field: "inworldKey",
+        keySet: reading.keySet,
+        label: "Inworld key",
+        draftName: "inworldDraft",
+        replacingName: "replacingInworld",
+        save: (key) => this.#actor.send({ type: "_saveInworldKey", key }),
+        remove: () => this.#actor.send({ type: "_removeInworldKey" }),
+      })}
+      ${keySet ? this.#voiceRow(reading) : nothing}
+      <div class="field">
+        <span></span>
+        <span class="help"
+          >Inworld charges your key about $5 to $25 for each million characters, roughly half a cent to two and a half
+          cents for a long paragraph of 1,000 characters.</span
+        >
+      </div>
+    `;
+  }
+
+  // The Voice list and Play a sample. Choosing a voice is a step `voice` records; choosing
+  // the previous one again, or Undo, brings it back. A press on Play a sample while it
+  // plays stops it (Don Norman: forgiveness).
+  #voiceRow(reading) {
+    const name = reading.voices.find((v) => v.id === reading.voice)?.label ?? reading.voice;
+    const error = this.#actor.snapshot.context.sample?.error;
+    return html`
+      <div class="field">
+        <span>Voice</span>
+        <div class="ollama" data-row="voice">
+          <select aria-label="Voice" @change=${(e) => this.#actor.send({ type: "_setVoice", voice: e.target.value })}>
+            ${reading.voices.map((v) => html`<option value=${v.id} .selected=${v.id === reading.voice}>${v.label}</option>`)}
+          </select>
+          <button class="act" @click=${() => this.#sample()}>
+            ${this.playing ? html`${icon("stop")}Playing ${name}…` : html`${icon("speaker-high")}Play a sample`}
+          </button>
+        </div>
+        ${error && !this.playing ? html`<span class="help">The sample could not be played. Try again in a moment.</span>` : nothing}
+      </div>
+    `;
+  }
+
+  #audio = null;
+  #played = 0;
+
+  #sample() {
+    if (this.playing) return this.#stopSample();
+    this.playing = true;
+    this.#actor.send({ type: "_sample" });
+  }
+
+  #stopSample() {
+    this.#audio?.pause();
+    this.#audio = null;
+    this.playing = false;
+  }
+
+  // Plays each sample the machine was answered once; an error answer ends the playing.
+  updated() {
+    const sample = this.#actor.snapshot?.context.sample;
+    if (!sample || sample.n === this.#played) return;
+    this.#played = sample.n;
+    if (!this.playing) return;
+    if (sample.error) {
+      this.playing = false;
+      return;
+    }
+    const audio = new Audio(`data:${sample.mime};base64,${sample.audio}`);
+    this.#audio = audio;
+    const end = () => this.#audio === audio && this.#stopSample();
+    audio.addEventListener("ended", end);
+    audio.addEventListener("error", end);
+    // A browser may refuse to play without a recent press; the button then reads as before.
+    audio.play().catch(end);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.#stopSample();
   }
 
   // The checks' rows (3.4), the same as the chat's: Provider, with Ollama its Ollama row,
