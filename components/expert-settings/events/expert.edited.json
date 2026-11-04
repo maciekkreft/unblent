@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user changed a book's expert in the Book experts tab; only the fields changed are present. left says the prompt box was left, which ends one stretch of typing (12, Undo). experts keeps the change, and the last write wins (5).",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The id of the book."
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "on": {
+      "type": "boolean"
+    },
+    "left": {
+      "const": true,
+      "description": "The prompt box was left."
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": false
+}

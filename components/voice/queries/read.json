@@ -1,0 +1,116 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes nothing.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The picture voice.changed carries, or an error when the server cannot be reached.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "here": {
+            "enum": [
+              "mac",
+              "web"
+            ],
+            "description": "Where the voice is made: mac, the Kokoro voice on this Mac (the local edition, connected or not); web, Inworld on the account's own key."
+          },
+          "kokoro": {
+            "type": "object",
+            "description": "Only on a Mac: whether the Kokoro voice is downloaded.",
+            "properties": {
+              "state": {
+                "enum": [
+                  "missing",
+                  "downloading",
+                  "ready"
+                ]
+              },
+              "done": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Bytes downloaded so far."
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Bytes of the whole download."
+              }
+            },
+            "required": [
+              "state",
+              "done",
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "inworld": {
+            "type": "object",
+            "description": "Only on the website: whether the account has saved its own Inworld key. Never the key.",
+            "properties": {
+              "keySet": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "keySet"
+            ],
+            "additionalProperties": false
+          },
+          "voice": {
+            "type": "string",
+            "description": "The id of the voice picked, one of voices."
+          },
+          "voices": {
+            "type": "array",
+            "description": "The voices offered here, in the order Settings lists them.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "id",
+                "label"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "here",
+          "voice",
+          "voices"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": [
+    "voice.changed"
+  ]
+}

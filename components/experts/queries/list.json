@@ -1,0 +1,55 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "list takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every expert the account has written, one per book, in no particular order; a book without one has no entry. An expert whose book is gone may still be listed: the views join with books: list.",
+    "type": "object",
+    "properties": {
+      "experts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The id of the book the expert is on; one expert per book."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "What the user wrote for the expert: how it talks and what it knows. It joins the start of a new chat that picks it."
+            },
+            "on": {
+              "type": "boolean",
+              "description": "Whether it shows on the shelf above a new chat; only one with a prompt is on."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "id",
+            "prompt",
+            "on",
+            "version"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "experts"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "expert.changed"
+  ]
+}

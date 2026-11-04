@@ -22,6 +22,12 @@ export const FEATURES = [
     says: "Which features you use and for how long, if you choose to share it.",
   },
   { id: "slip-box", name: "Slip-Box", says: "A note box of your own notes, under the shelf's Slip-Box." },
+  { id: "reading-aloud", name: "Reading aloud", says: "A speaker beside each paragraph of a book reads it aloud." },
+  {
+    id: "book-experts",
+    name: "Book experts",
+    says: "A chat that starts as an expert on a book, from a prompt you write for it.",
+  },
 ];
 
 const key = (column, id) => `${column}:${id}`;
@@ -80,7 +86,7 @@ export const machine = setup({
   meta: {
     description:
       "The Features tab of the gear's sheet, shown to everyone. One row per feature that " +
-      "`flags` can hide, named as people know it (Values and Choice Points, Usage, and Slip-Box), with " +
+      "`flags` can hide, named as people know it (Values and Choice Points, Usage, Slip-Box, Reading aloud, and Book experts), with " +
       "what it holds under the name, and two switches. Release gives the feature to " +
       "everyone; it is shown only to the admin on the website, not while viewing as someone, " +
       "and only then is a feature that is not released shown as a row. Show hides or shows " +

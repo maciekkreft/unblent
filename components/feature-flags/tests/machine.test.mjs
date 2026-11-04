@@ -25,7 +25,7 @@ test("only the admin on the website sees Release and the rows of features not re
   assert.equal(mayReleaseOf({ userId: "g", guest: true }), false);
   assert.deepEqual(rowsOf({ mayRelease: false, released: ["choice-points"] }).map((f) => f.id), ["choice-points"]);
   assert.deepEqual(rowsOf({ mayRelease: false, released: [] }).map((f) => f.id), []);
-  assert.deepEqual(rowsOf({ mayRelease: true, released: [] }).map((f) => f.id), ["choice-points", "usage", "slip-box"]);
+  assert.deepEqual(rowsOf({ mayRelease: true, released: [] }).map((f) => f.id), ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts"]);
 });
 
 test("it asks flags and session at start, emits each switch with its column and follows flags.changed", async () => {

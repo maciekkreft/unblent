@@ -1,0 +1,93 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The text to read aloud, one paragraph.",
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The text spoken in the voice picked, with when each word is said; or an error: no-key (the website without an Inworld key), not-downloaded (a Mac without the Kokoro voice), unavailable (the voice or the server cannot be reached).",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "mime": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The audio's media type, such as audio/wav."
+          },
+          "audio": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "description": "The audio, base64."
+          },
+          "words": {
+            "type": "array",
+            "description": "Each word of the text in order.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Where the word starts in the text, in characters."
+                },
+                "to": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Where it ends, in characters."
+                },
+                "start": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "When it starts to be said, in seconds."
+                },
+                "end": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "When it has been said, in seconds."
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "start",
+                "end"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "mime",
+          "audio",
+          "words"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": []
+}

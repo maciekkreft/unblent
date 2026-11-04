@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 // process, because data/flags.db is shared by every account: releasing a feature on the
 // check's server would change what every other test sees.
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const ALL = ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts"];
 
 const PRELUDE = `
 import json, os
@@ -37,9 +38,9 @@ def call(method, cookies=None, body=None):
 `;
 
 const SCRIPT = `${PRELUDE}
-# Usage and Slip-Box start held back (3.1); this test is about the switches, so they start released.
-call("PUT", admin, {"feature": "usage", "on": True})
-call("PUT", admin, {"feature": "slip-box", "on": True})
+# Every feature but choice-points starts held back (3.1); this test is about the switches, so they start released.
+for feature in flags.FEATURES:
+    call("PUT", admin, {"feature": feature, "on": True})
 
 # Rows kept for a feature that no longer has a flag are left in place and ignored.
 with flags._connect(flags.DATA / "flags.db", flags._RELEASE + "CREATE TABLE IF NOT EXISTS turned_on (feature TEXT PRIMARY KEY, at INTEGER NOT NULL);") as c:
@@ -108,37 +109,37 @@ print(json.dumps(out))
 
 test("a feature starts held back when it is added, and the Release of an older one is kept", () => {
   const out = run(HELD);
-  const p = (off) => [200, { off, hidden: [], released: ["choice-points", "usage", "slip-box"].filter((f) => !off.includes(f)), shown: ["choice-points", "usage", "slip-box"] }];
-  assert.deepEqual(out.fresh, p(["usage", "slip-box"]), "a fresh file holds the new features back and keeps choice-points released");
-  assert.deepEqual(out.released, p(["slip-box"]));
-  assert.deepEqual(out.reopened, p(["slip-box"]), "the admin's release sticks when the file is opened again");
-  assert.deepEqual(out.older, p(["choice-points", "slip-box"]), "a file that held choice-points back before keeps it held back");
+  const p = (off) => [200, { off, hidden: [], released: ALL.filter((f) => !off.includes(f)), shown: ALL }];
+  const later = ["slip-box", "reading-aloud", "book-experts"];
+  assert.deepEqual(out.fresh, p(["usage", ...later]), "a fresh file holds the new features back and keeps choice-points released");
+  assert.deepEqual(out.released, p(later));
+  assert.deepEqual(out.reopened, p(later), "the admin's release sticks when the file is opened again");
+  assert.deepEqual(out.older, p(["choice-points", ...later]), "a file that held choice-points back before keeps it held back");
 });
 
 test("anyone reads Release and Show; only the admin on the website releases, every signed-in account shows for itself", () => {
   const out = run(SCRIPT);
-  const ALL = ["choice-points", "usage", "slip-box"];
   const p = (released, hidden, shown = ALL) => [200, { off: ALL.filter((f) => !released.includes(f)), hidden, released, shown }];
   assert.deepEqual(out.fresh, p(ALL, []), "a row kept for Undo is ignored");
   assert.deepEqual(out.someoneFresh, out.fresh, "a Show row kept for Undo is ignored");
   assert.deepEqual(out.notAdmin, [403, { error: "not-admin" }]);
   assert.deepEqual(out.viewing, [403, { error: "not-admin" }], "not while the admin views as someone");
   assert.deepEqual(out.bad, [400, 400, 400, 400, 400, 400, 400, 400], "an unknown feature, Undo included, is refused");
-  assert.deepEqual(out.held, p(["usage", "slip-box"], []), "the admin on the website still sees what is not released");
+  assert.deepEqual(out.held, p(ALL.filter((f) => f !== "choice-points"), []), "the admin on the website still sees what is not released");
   assert.deepEqual(out.twice, out.held, "holding back twice is once");
-  assert.deepEqual(out.signedOut, p(["usage", "slip-box"], ["choice-points"]));
+  assert.deepEqual(out.signedOut, p(ALL.filter((f) => f !== "choice-points"), ["choice-points"]));
   assert.deepEqual(out.someone, out.signedOut);
   assert.deepEqual(out.admin, out.held);
   assert.deepEqual(out.adminViewing, out.signedOut, "the admin viewing as someone sees what they see");
   assert.deepEqual(out.back, p(ALL, []));
   assert.deepEqual(out.showSignedOut, [401, { error: "signed-out" }]);
-  assert.deepEqual(out.guestHides, p(ALL, ["choice-points"], ["usage", "slip-box"]), "a guest hides a feature from itself");
+  assert.deepEqual(out.guestHides, p(ALL, ["choice-points"], ALL.slice(1)), "a guest hides a feature from itself");
   assert.deepEqual(out.someoneElse, p(ALL, []), "and from no one else");
   assert.deepEqual(out.guestAgain, out.guestHides, "kept for the account");
   assert.deepEqual(out.guestShows, p(ALL, []));
-  assert.deepEqual(out.adminHides, p(ALL, ["choice-points"], ["usage", "slip-box"]), "Show hides from the admin too");
+  assert.deepEqual(out.adminHides, p(ALL, ["choice-points"], ALL.slice(1)), "Show hides from the admin too");
   assert.deepEqual(out.localNone, p(ALL, []), "a Mac without the frozen list releases everything");
   assert.deepEqual(out.localFrozen, p([], ALL), "a Mac hides what the frozen list does not release, from its admin too");
   assert.deepEqual(out.localRelease, [403, { error: "not-admin" }], "Release is set only on the website");
-  assert.deepEqual(out.localShow, p([], ALL, ["usage", "slip-box"]), "Show works on a Mac");
+  assert.deepEqual(out.localShow, p([], ALL, ALL.slice(1)), "Show works on a Mac");
 });

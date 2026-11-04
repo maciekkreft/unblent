@@ -290,6 +290,7 @@ export const machine = setup({
       "conversation.relinked": "chats",
       "conversation.staged": "chats",
       "conversation.closed": "chats",
+      "expert.edited": "chats",
       "lookup.followed": "chats",
       "evaluator.saved": "evaluators",
       "evaluator.opened": "evaluators",

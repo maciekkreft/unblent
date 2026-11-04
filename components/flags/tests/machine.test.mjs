@@ -37,7 +37,7 @@ test("with no answer yet every feature is hidden; the server's answer replaces i
 test("a reload or an offline start hides what the device kept, a picture from before Release and Show included", async () => {
   const { emitted, read } = start({ cached: { off: ["choice-points"], hidden: ["choice-points"] }, load: async () => Promise.reject(new Error("offline")) });
   await flush();
-  assert.deepEqual(await read(), { off: ["choice-points"], hidden: ["choice-points"], released: ["usage", "slip-box"], shown: FEATURES });
+  assert.deepEqual(await read(), { off: ["choice-points"], hidden: ["choice-points"], released: FEATURES.filter((f) => f !== "choice-points"), shown: FEATURES });
   assert.deepEqual(emitted, [], "nothing changed, nothing is announced");
 });
 
@@ -45,7 +45,8 @@ test("a picture kept before Slip-Box existed hides it until the server answers",
   const cached = { off: [], hidden: [], released: ["choice-points", "usage"], shown: ["choice-points", "usage"] };
   const { read } = start({ cached, load: async () => Promise.reject(new Error("offline")) });
   await flush();
-  assert.deepEqual(await read(), { off: ["slip-box"], hidden: ["slip-box"], released: ["choice-points", "usage"], shown: ["choice-points", "usage"] });
+  const later = FEATURES.filter((f) => !["choice-points", "usage"].includes(f));
+  assert.deepEqual(await read(), { off: later, hidden: later, released: ["choice-points", "usage"], shown: ["choice-points", "usage"] });
 });
 
 test("a change of account reads again; leaving forgets what was kept", async () => {
@@ -76,11 +77,11 @@ test("a switch is saved with its column and announced; a refused one announces t
   actor.send({ type: "flag.switched", feature: "choice-points", on: false });
   await flush();
   assert.deepEqual(saved, [["choice-points", false, "release"]], "a switch without a column is a Release");
-  assert.deepEqual(emitted, [{ off: ["choice-points"], hidden: [], released: ["usage", "slip-box"], shown: FEATURES }]);
+  assert.deepEqual(emitted, [{ off: ["choice-points"], hidden: [], released: FEATURES.filter((f) => f !== "choice-points"), shown: FEATURES }]);
   actor.send({ type: "flag.switched", feature: "choice-points", on: false, column: "show" });
   await flush();
   assert.deepEqual(saved.at(-1), ["choice-points", false, "show"]);
-  assert.deepEqual(emitted.at(-1), { off: [], hidden: ["choice-points"], ...ALL, shown: ["usage", "slip-box"] });
+  assert.deepEqual(emitted.at(-1), { off: [], hidden: ["choice-points"], ...ALL, shown: FEATURES.filter((f) => f !== "choice-points") });
   refuse = true;
   actor.send({ type: "flag.switched", feature: "choice-points", on: true, column: "show" });
   await flush();

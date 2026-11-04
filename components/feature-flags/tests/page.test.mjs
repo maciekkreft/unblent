@@ -11,8 +11,8 @@ const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.en
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
-// Usage and Slip-Box are not released here, so the admin also sees rows held back and a guest does not.
-const FEATURES = ["choice-points", "usage", "slip-box"];
+// Only Values and Choice Points is released here, so the admin also sees rows held back and a guest does not.
+const FEATURES = ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts"];
 
 const text = (page) => page.evaluate(() => document.querySelector("feature-flags").shadowRoot.textContent.replace(/\s+/g, " ").trim());
 
@@ -62,9 +62,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test(`the admin holds back a feature and releases it again, and a refused switch goes back, in ${engine.name}`, async () => {
       const { context, page, problems, state, tab } = await open(browser, { admin: true, name: "Admin" });
       try {
-        await until(async () => (await tab.getByRole("switch").count()) === 6);
+        await until(async () => (await tab.getByRole("switch").count()) === FEATURES.length * 2);
         const said = await text(page);
-        for (const line of ["Features", "Release", "Show", "Values and Choice Points", "Slip-Box"]) {
+        for (const line of ["Features", "Release", "Show", "Values and Choice Points", "Slip-Box", "Reading aloud", "Book experts"]) {
           assert.ok(said.includes(line), `the tab says "${line}": ${said}`);
         }
         assert.ok(!said.includes("Undo"), `Undo has no row: ${said}`);
