@@ -6,7 +6,8 @@
 -- immutable URL prefix the files are served under, bumped on re-import. deleted marks
 -- a tombstone: a delete is a write like any other (5), the row stays and is pulled,
 -- and the directory is kept for a restore write; a position is last write wins and never
--- refused (4).
+-- refused (4). shelf_place is the book's place on the shelf (5), a key the browser computes,
+-- also last write wins; NULL for a book never placed, which the browser orders by added_at.
 CREATE TABLE IF NOT EXISTS books (
     id               TEXT PRIMARY KEY,
     title            TEXT NOT NULL,   -- the title read from the file; a re-import refreshes it
@@ -23,7 +24,8 @@ CREATE TABLE IF NOT EXISTS books (
     added_at         INTEGER NOT NULL,
     updated_at       INTEGER NOT NULL,
     seq              INTEGER NOT NULL,
-    deleted          INTEGER NOT NULL DEFAULT 0
+    deleted          INTEGER NOT NULL DEFAULT 0,
+    shelf_place      TEXT
 );
 CREATE INDEX IF NOT EXISTS books_seq ON books(seq);
 

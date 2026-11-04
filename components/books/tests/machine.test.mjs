@@ -84,6 +84,7 @@ function fakeApi(impl = {}) {
       }
       return { row: book(id) };
     },
+    shelf: async (id, shelfPlace) => book(id, { version: 2, shelfPlace }),
     position: async (id, ch, bl) => {
       positions.push([id, ch, bl]);
       return impl.position ? impl.position(id, ch, bl) : book(id, { version: 2, position: { chapter: ch, block: bl } });
@@ -171,7 +172,7 @@ test("signed out: a pick is refused and its object URL revoked", async () => {
   assert.equal(api.uploads.length, 0, "nothing is uploaded while signed out");
 });
 
-test("signed in: a pick uploads and is announced pending false", async () => {
+test("signed in: a pick uploads and is announced pending until its place is sent", async () => {
   const api = fakeApi();
   const { actor, changed } = start(fakeStore(), { api, ask: askUser("u1") });
   await ready(actor);
@@ -181,7 +182,7 @@ test("signed in: a pick uploads and is announced pending false", async () => {
   assert.deepEqual(api.uploads, [[ID, "blob:x"]]);
   assert.equal(changed.length, 1);
   assert.equal(changed[0].id, ID);
-  assert.equal(changed[0].pending, false);
+  assert.equal(changed[0].pending, true);
   assert.equal(changed[0].version, 1);
 });
 

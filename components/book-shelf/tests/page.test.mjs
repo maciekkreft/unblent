@@ -371,9 +371,9 @@ for (const engine of ENGINES) {
       await page.locator("notice-stack", { hasText: `Delete book ${first}` }).waitFor();
       const left = (await tiles(page))[0].title;
       await until(async () => (await focusedTile(page)) === left, 2000);
-      // p brings the book back at its place on the shelf, and the keyboard follows it.
+      // p brings the book back after the tile the keyboard is on, and the keyboard follows it.
       await page.keyboard.press("p");
-      await until(async () => (await titles()).join() === both.join());
+      await until(async () => (await titles()).join() === [...both].reverse().join());
       await until(async () => (await focusedTile(page)) === first, 2000);
       // u is the global Undo (12): the first takes back the p, the second the dd.
       await page.keyboard.press("u");
@@ -392,6 +392,43 @@ for (const engine of ENGINES) {
       const chooser = page.waitForEvent("filechooser", { timeout: 2000 });
       await page.keyboard.press("o");
       await chooser;
+      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // Browser: a reload against real storage (the order set with the keys comes back).
+    test("with Vim keys on, P and p place the deleted book at the keyboard's tile, and the order survives a reload", async () => {
+      const cookie = forgeCookie();
+      await importBook(cookie, SAMPLE_ID, SAMPLE);
+      await importBook(cookie, "01K00000000000000000000GPS", GAPS);
+      const { page, problems } = await open({ cookie, vimKeys: true });
+      await until(async () => (await tiles(page)).length === 2);
+      const titles = async () => (await tiles(page)).map((t) => t.title);
+      const [one, two] = await titles();
+      await focusShelf(page);
+      await until(async () => (await focusedTile(page)) === one, 2000);
+      // dd on the second tile leaves the keyboard on the first; P puts the book before it.
+      await page.keyboard.press("l");
+      await until(async () => (await focusedTile(page)) === two, 2000);
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      await until(async () => (await titles()).join() === one);
+      await page.keyboard.press("P");
+      await until(async () => (await titles()).join() === [two, one].join());
+      await until(() => page.evaluate(async () => !(await (await fetch("/api/books")).json()).books.every((b) => b.shelfPlace == null || b.deleted)));
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await until(async () => (await tiles(page)).length === 2);
+      assert.deepEqual(await titles(), [two, one]);
+
+      // After the reload dd then p puts it after the tile the keyboard moved to.
+      await focusShelf(page);
+      await until(async () => (await focusedTile(page)) === two, 2000);
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      await until(async () => (await titles()).join() === one);
+      await page.keyboard.press("p");
+      await until(async () => (await titles()).join() === [one, two].join());
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       await page.close();
     });

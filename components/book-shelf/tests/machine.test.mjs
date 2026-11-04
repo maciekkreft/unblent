@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, showing, tilesOf, framedOf } from "../machine.js";
+import { machine, showing, tilesOf, framedOf, placement } from "../machine.js";
 
 // The shelf's actor is where the rename decision lives (D11): the view turns Enter or
 // blur into a _rename gesture carrying the fields' texts, and the machine announces it
@@ -193,8 +193,8 @@ test("dd deletes a tile at once and remembers it; p brings it back once", async 
   assert.deepEqual(discarded, [{ type: "book.discarded", id: ID }]);
   assert.equal(ctx().deleted, ID);
   actor.send({ type: "book.deleted", id: ID });
-  actor.send({ type: "_paste" });
-  assert.deepEqual(restored, [{ type: "book.restored", id: ID }]);
+  actor.send({ type: "_paste", at: JRN, below: true });
+  assert.deepEqual(restored, [{ type: "book.restored", id: ID, after: null, before: null }]);
   assert.equal(ctx().deleted, null);
   actor.send({ type: "_paste" });
   assert.equal(restored.length, 1, "a second p does nothing");
@@ -288,4 +288,27 @@ test("the frame is on the Slip-Box while it is in front of the stage, otherwise 
   subject({ kind: "note", id: SLIPBOX, title: "Slip-Box", view: "book-stage" });
   subject(null);
   assert.equal(framed(), ID, "nothing in front keeps the open book");
+});
+
+test("p places a book after a tile and P before it, in reading order; from the journal or the Slip-Box first among the books", () => {
+  const [X, Y, Z] = ["01ARZ3NDEKTSV4RRFFQ69G5FX0", "01ARZ3NDEKTSV4RRFFQ69G5FY0", "01ARZ3NDEKTSV4RRFFQ69G5FZ0"];
+  const books = [{ id: JRN, written: true }, { id: X }, { id: Y }, { id: Z }];
+  assert.deepEqual(placement(books, Y, true), { after: Y, before: Z });
+  assert.deepEqual(placement(books, Y, false), { after: X, before: Y });
+  assert.deepEqual(placement(books, Z, true), { after: Z, before: null });
+  assert.deepEqual(placement(books, X, false), { after: null, before: X });
+  for (const fixed of [JRN, SLIPBOX])
+    for (const below of [true, false]) assert.deepEqual(placement(books, fixed, below), { after: null, before: X });
+  assert.deepEqual(placement([{ id: JRN, written: true }], JRN, true), { after: null, before: null });
+});
+
+test("tiles follow the place books gives them, the journal and the Slip-Box staying first", async () => {
+  const { actor, ctx } = await shelf(SIGNED_IN);
+  const OTHER = "01ARZ3NDEKTSV4RRFFQ69G5FX0";
+  actor.send({ ...changed(ID, "Dune"), shelfPlace: "V" });
+  actor.send({ ...changed(OTHER, "Emma"), shelfPlace: "U" });
+  actor.send({ type: "flags.changed", hidden: [] });
+  assert.deepEqual(tilesOf(ctx()).map((t) => t.id), [JRN, SLIPBOX, OTHER, ID]);
+  actor.send({ ...changed(ID, "Dune"), shelfPlace: "T" });
+  assert.deepEqual(tilesOf(ctx()).map((t) => t.id), [JRN, SLIPBOX, ID, OTHER]);
 });

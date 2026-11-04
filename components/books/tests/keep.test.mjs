@@ -124,7 +124,9 @@ test("after the reload each book is added with its place and title, from a curso
   await flush();
   assert.deepEqual(log, [], "the copy is kept, not emptied as another account's");
   assert.deepEqual(queued.map((r) => r.id), [`adopt:${A}`], "a tombstone is not sent");
-  assert.deepEqual(queued[0], {
+  const { shelfPlace, ...adopted } = queued[0];
+  assert.match(shelfPlace, /^[0-9A-Za-z]+$/, "the book takes its place on the shelf with it");
+  assert.deepEqual(adopted, {
     id: `adopt:${A}`,
     kind: "adopt",
     book: A,

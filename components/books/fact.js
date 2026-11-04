@@ -96,6 +96,11 @@ const api = {
       if (titled.error) return titled;
       book = titled;
     }
+    if (row.shelfPlace) {
+      const shelved = await api.shelf(row.book, row.shelfPlace);
+      if (shelved.error) return shelved;
+      book = shelved;
+    }
     return { row: book };
   },
   async position(id, chapterIndex, block) {
@@ -124,6 +129,21 @@ const api = {
     });
     if (res.status === 401) return { error: "unauthorized" };
     if (!res.ok) throw new Error(`books title ${res.status}`);
+    return await res.json();
+  },
+  // A place on the shelf, last write wins and never refused (like a position). A book the
+  // server does not have answers not-found, and the row is dropped.
+  async shelf(id, shelfPlace) {
+    const res = await fetch(`/api/books/${id}/shelf-place`, {
+      method: "PUT",
+      credentials: "same-origin",
+      keepalive: true,
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ shelfPlace }),
+    });
+    if (res.status === 401) return { error: "unauthorized" };
+    if (res.status === 404) return { error: "not-found" };
+    if (!res.ok) throw new Error(`books shelf ${res.status}`);
     return await res.json();
   },
   async remove(id) {

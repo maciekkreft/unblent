@@ -14,14 +14,20 @@ import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 // being imported shows as a placeholder tile until book.changed brings its real row
 // or book.refused says why it could not be added.
 
-// The journal first, then newest first: addedAt descending, id as the tiebreak, the
-// same order books uses in its list reply, so a tile keeps its place across a re-sort.
-const order = (a, b) => Number(Boolean(b.written)) - Number(Boolean(a.written)) || b.addedAt - a.addedAt || a.id.localeCompare(b.id);
+// The journal first, then the order the user set: by the place `books` gives each book, a
+// key compared as plain text, the same order books uses in its list reply, so a tile keeps
+// its place across a re-sort. A tile without a place falls back to newest first, after the
+// placed tiles.
+const byPlace = (a, b) => {
+  if (a.shelfPlace == null || b.shelfPlace == null) return Number(a.shelfPlace == null) - Number(b.shelfPlace == null);
+  return a.shelfPlace < b.shelfPlace ? -1 : a.shelfPlace > b.shelfPlace ? 1 : 0;
+};
+const order = (a, b) => Number(Boolean(b.written)) - Number(Boolean(a.written)) || byPlace(a, b) || b.addedAt - a.addedAt || a.id.localeCompare(b.id);
 const sorted = (books) => [...books].sort(order);
 
 // Only the fields a tile shows are kept from a book.changed (which carries the whole
 // book, 4.3, third rule); chapterCount is the chapter titles' length, as list gives.
-const tile = ({ id, title, author, cover, position, chapters, pending, addedAt, written }) => ({
+const tile = ({ id, title, author, cover, position, chapters, pending, addedAt, written, shelfPlace }) => ({
   id,
   title,
   author,
@@ -30,6 +36,7 @@ const tile = ({ id, title, author, cover, position, chapters, pending, addedAt, 
   chapterCount: chapters.length,
   pending,
   addedAt,
+  shelfPlace,
   // The journal: owned by `journal`, not the library, so it cannot be renamed or
   // removed here.
   written: written === true,
@@ -77,6 +84,17 @@ export const framedOf = ({ onStage, selected }) => (onStage ? SLIPBOX : selected
 // `subject` reports the Slip-Box only while the feature shows, so this needs no flag check.
 const isSlipBox = (subject) => subject?.kind === "note" && subject.id === SLIPBOX;
 
+// Where a book placed at a tile (p, P; 12) goes: the tiles wrap in a grid, so below means
+// after that tile and above before it, in reading order. From a tile that is not a book
+// on the shelf (the journal, the Slip-Box), the book goes first among the books, since those
+// tiles stay first.
+export const placement = (books, current, below) => {
+  const shelf = books.filter((b) => !b.written).map((b) => b.id);
+  const at = shelf.indexOf(current);
+  if (at < 0) return { after: null, before: shelf[0] ?? null };
+  return below ? { after: shelf[at], before: shelf[at + 1] ?? null } : { after: shelf[at - 1] ?? null, before: shelf[at] };
+};
+
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
 export const machine = setup({
@@ -104,7 +122,7 @@ export const machine = setup({
   id: "book-shelf",
   meta: {
     description:
-      "Shows the library as tiles, the journal first and then newest first, and lets the user " +
+      "Shows the library as tiles, the journal first and then in the order the user set, kept on the account and the same on every device, with a new book first among the books, and lets the user " +
       "add a book from an epub file, open one, or remove one. A book being added shows as a " +
       "placeholder tile until the book arrives or the import is refused with a reason. Removing " +
       "a book deletes it at once and shows the short notice with Undo; Undo and Redo take back " +
@@ -114,8 +132,9 @@ export const machine = setup({
       "and down to the tile above or below, and with Vim keys on h, j, k and l do the same, " +
       "gg and G go to the first and last tile, dd deletes the tile at once, with the same " +
       "notice, and the keyboard moves to the next tile (the journal ignores it); the shelf " +
-      "keeps the last book it deleted in memory, and p or P brings it back at its place on " +
-      "the shelf, which keeps its own order, one step that Undo deletes again. p and P do " +
+      "keeps the last book it deleted in memory, and p brings it back after the tile the " +
+      "keyboard is on and P before it, in reading order, or first among the books from the journal or the Slip-Box, which stay first; " +
+      "one step that Undo deletes again, and the delete's own Undo puts it back where it stood. p and P do " +
       "nothing once that book is back by another way (an Undo, another device) or after " +
       "signing out. u is the global Undo. o or O opens the file picker to add a book, and cc renames the tile where titles " +
       "can be changed. Renaming, " +
@@ -309,13 +328,13 @@ export const machine = setup({
       guard: ({ context, event }) => removable(context, event.id),
       actions: [assign({ deleted: ({ event }) => event.id }), emit(({ event }) => ({ type: "book.discarded", id: event.id }))],
     },
-    // p or P: the deleted book comes back; `books` restores it as one step, at its place
-    // on the shelf, which keeps its own order.
+    // p or P: the deleted book comes back between these neighbours; `books` restores it
+    // there as one step.
     _paste: {
       guard: ({ context }) => showing(context) === "show" && context.deleted != null,
-      actions: enqueueActions(({ context, enqueue }) => {
+      actions: enqueueActions(({ context, event, enqueue }) => {
         enqueue.assign({ deleted: null });
-        enqueue.emit({ type: "book.restored", id: context.deleted });
+        enqueue.emit({ type: "book.restored", id: context.deleted, ...placement(context.books, event.at, event.below) });
       }),
     },
   },

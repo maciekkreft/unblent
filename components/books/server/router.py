@@ -33,6 +33,9 @@ router = APIRouter()
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 _NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 _ID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+# A book's place on the shelf (5): a fractional-index key the browser computes
+# (books/machine.js between), digits and letters, never ending in "0".
+_SHELF_PLACE = re.compile(r"[0-9A-Za-z]{0,199}[1-9A-Za-z]")
 # The browser's HTTP cache is the only copy of a chapter or image (Decision 2); the
 # content-version URL prefix makes a re-import a different URL, so the old cache lapses.
 _IMMUTABLE = "private, max-age=31536000, immutable"
@@ -54,6 +57,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.executescript("ALTER TABLE books ADD COLUMN user_title TEXT")
     if "user_author" not in columns:
         connection.executescript("ALTER TABLE books ADD COLUMN user_author TEXT")
+    if "shelf_place" not in columns:
+        connection.executescript("ALTER TABLE books ADD COLUMN shelf_place TEXT")
     try:
         with connection:
             yield connection
@@ -91,6 +96,7 @@ def _record(row: sqlite3.Row) -> dict:
         "addedAt": row["added_at"],
         "updatedAt": row["updated_at"],
         "deleted": bool(row["deleted"]),
+        "shelfPlace": row["shelf_place"],
     }
 
 
@@ -237,6 +243,26 @@ async def set_title(book_id: str, request: Request, user_id: str = Depends(requi
         connection.execute(
             f"UPDATE books SET {sets}version = ?, updated_at = ?, seq = ? WHERE id = ?",
             (*given.values(), row["version"] + 1, now, _next_seq(connection), book_id),
+        )
+        return _reread(connection, book_id)
+
+
+@router.put("/{book_id}/shelf-place")
+async def set_shelf_place(book_id: str, request: Request, user_id: str = Depends(require_user)):
+    # A place on the shelf, last write wins (5): no base, never a 409, and a tombstone may
+    # take one, as it may a position, since a restore write is sent first. It bumps version
+    # because a pull in `books` takes only a row with a newer version.
+    place = (await request.json()).get("shelfPlace")
+    if not (isinstance(place, str) and _SHELF_PLACE.fullmatch(place)):
+        return JSONResponse({"error": "invalid-shelf-place"}, status_code=422)
+    now = int(time.time() * 1000)
+    with _connect(user_id) as connection:
+        row = connection.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404)
+        connection.execute(
+            "UPDATE books SET shelf_place = ?, version = ?, updated_at = ?, seq = ? WHERE id = ?",
+            (place, row["version"] + 1, now, _next_seq(connection), book_id),
         )
         return _reread(connection, book_id)
 

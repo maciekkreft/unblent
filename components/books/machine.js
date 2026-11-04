@@ -69,6 +69,54 @@ export function htmlOf(text) {
   return blocks.join("");
 }
 
+// A book's place on the shelf is a fractional index (5, an item's place is last write
+// wins): a string that sorts by plain code-unit comparison, so a book placed between two
+// others takes a key between theirs and no other book changes. The digits are in ASCII
+// order, and a key never ends in the smallest digit, so there is always room before it.
+const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const KEY = /^[0-9A-Za-z]*[1-9A-Za-z]$/;
+const isShelfPlace = (value) => typeof value === "string" && value.length <= 200 && KEY.test(value);
+
+// The key between a and b (a < b); "" stands for before everything, null for after.
+function midpoint(a, b) {
+  if (b !== null) {
+    let n = 0;
+    while ((a[n] ?? "0") === b[n]) n += 1;
+    if (n > 0) return b.slice(0, n) + midpoint(a.slice(n), b.slice(n));
+  }
+  const da = a ? DIGITS.indexOf(a[0]) : 0;
+  const db = b !== null ? DIGITS.indexOf(b[0]) : DIGITS.length;
+  if (db - da > 1) return DIGITS[Math.round((da + db) / 2)];
+  if (b !== null && b.length > 1) return b.slice(0, 1);
+  return DIGITS[da] + midpoint(a.slice(1), null);
+}
+
+// A key strictly between `after` and `before`, either null for the shelf's end. Out of
+// order neighbours (a place computed against a shelf that changed meanwhile) place the
+// book just after `after`.
+function between(after, before) {
+  const a = isShelfPlace(after) ? after : "";
+  const b = isShelfPlace(before) && before > a ? before : null;
+  return midpoint(a, b);
+}
+
+// A book never placed keeps the order it had, newest first: its key is read from when it
+// was added, "z" and eight digits counting down from the largest time, then its id, so it
+// sorts after every key `between` makes for a new book and among its kind by time. It is
+// the same on every device, because the time and id come from the server.
+const LATEST = 62 ** 8 - 1;
+function countdown(at) {
+  let n = Math.max(0, LATEST - Math.floor(at));
+  let text = "";
+  for (let i = 0; i < 8; i += 1) {
+    text = DIGITS[n % 62] + text;
+    n = Math.floor(n / 62);
+  }
+  return text;
+}
+const placeOf = (record) =>
+  isShelfPlace(record.shelfPlace) ? record.shelfPlace : `z${countdown(record.addedAt ?? 0)}${record.id}V`;
+
 // The journal book from journal: read's picture, or null when there is no journal to
 // show (no `journal` on the page answers no-answerer). texts holds each chapter's day
 // text for chapter?; it never rides book.changed or a reply. Versions are added by
@@ -137,17 +185,21 @@ const serverRecord = (b) => ({
   addedAt: b.addedAt,
   updatedAt: b.updatedAt,
   deleted: Boolean(b.deleted),
+  shelfPlace: b.shelfPlace ?? null,
 });
 
 // The steps that last wrote a book in this browser (12, Undo): `step` whether it is on
 // the shelf, `nameStep` its title and author; the server never has them. The server's
 // answer to this browser's own write keeps both, and so does a pulled write that leaves
 // either as it was, so a page turn never refuses an Undo; anything else that changed it does.
-function carry(held, record, own = false) {
+function carry(context, held, record, own = false) {
   if (!held) return record;
   const kept = { ...record };
   if (held.step && (own || Boolean(held.deleted) === Boolean(record.deleted))) kept.step = held.step;
   if (held.nameStep && (own || (held.title === record.title && held.author === record.author))) kept.nameStep = held.nameStep;
+  // A place of this browser still on its way stands over what the server answered (5);
+  // otherwise the server's stands, since a pull skips a row no newer than this one.
+  if (context.outbox.has(`shelf:${record.id}`)) kept.shelfPlace = held.shelfPlace;
   return kept;
 }
 
@@ -169,7 +221,13 @@ const bookOf = (record, pending) => ({
   ...(record.written ? { written: true } : {}),
 });
 
-const changed = (record, pending) => ({ type: "book.changed", ...bookOf(record, pending) });
+// The place rides only here and on a tile: the closed `read` reply does not name it, and
+// the journal has none, since it is always first.
+const changed = (record, pending) => ({
+  type: "book.changed",
+  ...bookOf(record, pending),
+  ...(record.written ? {} : { shelfPlace: placeOf(record) }),
+});
 
 // A book has a local change not yet acknowledged when it has an outbox row — a
 // position or delete keyed by the book id, or a title keyed under `title:<id>` (kept
@@ -178,7 +236,8 @@ const pendingFor = (context, id) =>
   context.outbox.has(id) ||
   context.outbox.has(`title:${id}`) ||
   context.outbox.has(`adopt:${id}`) ||
-  context.outbox.has(`restore:${id}`);
+  context.outbox.has(`restore:${id}`) ||
+  context.outbox.has(`shelf:${id}`);
 
 const tile = (context, r) => ({
   id: r.id,
@@ -189,15 +248,19 @@ const tile = (context, r) => ({
   chapterCount: r.chapters.length,
   pending: pendingFor(context, r.id),
   addedAt: r.addedAt,
-  ...(r.written ? { written: true } : {}),
+  ...(r.written ? { written: true } : { shelfPlace: placeOf(r) }),
 });
 
-// The journal first, then the imported books newest first.
+// List order: by key, then by id where two keys are equal.
+const byPlace = (a, b) =>
+  a.shelfPlace < b.shelfPlace ? -1 : a.shelfPlace > b.shelfPlace ? 1 : a.id.localeCompare(b.id);
+
+// The journal first, then the imported books in the order the user set.
 function replyList(context, reply) {
   const books = [...context.books.values()]
     .filter(visible)
     .map((r) => tile(context, r))
-    .sort((a, b) => b.addedAt - a.addedAt || a.id.localeCompare(b.id));
+    .sort(byPlace);
   reply({ books: context.journal ? [tile(context, context.journal), ...books] : books });
 }
 
@@ -358,6 +421,25 @@ function applyPick(context, event, enqueue, self) {
   });
 }
 
+// A key before every book on the shelf.
+function firstPlace(context) {
+  let min = null;
+  for (const record of context.books.values()) {
+    if (!visible(record)) continue;
+    const p = placeOf(record);
+    if (min === null || p < min) min = p;
+  }
+  return between(null, min);
+}
+
+// The row that sends a book's place, kept apart from a pending position or delete, so each
+// reaches the server; a newer place replaces one still waiting.
+function queuePlace(context, enqueue, record) {
+  const row = { id: `shelf:${record.id}`, kind: "shelf", book: record.id, shelfPlace: record.shelfPlace };
+  context.outbox.set(row.id, row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+}
+
 // An upload finished. 200 caches the row and announces it; 422 (not an epub) and a
 // network or server error are refusals a view shows; a 401 also drops the session.
 function applyUploaded(context, event, enqueue) {
@@ -373,10 +455,13 @@ function applyUploaded(context, event, enqueue) {
   // Adding a book is one step (12, Undo): its Undo deletes the book again and its Redo
   // brings it back with a restore write, so the file is never imported twice.
   const step = context.mint();
-  const record = { ...serverRecord(res.row), step };
+  // A new book goes first among the books (5), also ahead of one moved to the top.
+  const record = { ...serverRecord(res.row), step, shelfPlace: firstPlace(context) };
   context.books.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
-  enqueue.emit(changed(record, false));
+  queuePlace(context, enqueue, record);
+  enqueue.emit(changed(record, true));
+  enqueue.raise({ type: "_drain" });
   enqueue.emit({
     type: "step.recorded",
     id: step,
@@ -504,12 +589,14 @@ function applyDiscard(context, event, enqueue) {
   const step = context.mint();
   tombstone(context, enqueue, current, step);
   const prior = current.step ? { prior: current.step } : {};
+  // The place the book stood at is written down, so an Undo brings it back there even after
+  // a p put it elsewhere and that p was undone.
   enqueue.emit({
     type: "step.recorded",
     id: step,
     owner: "books",
     label: `delete ${nameOf(current)}`,
-    undo: { kind: "book", id, deleted: false, ...prior },
+    undo: { kind: "book", id, deleted: false, shelfPlace: placeOf(current), ...prior },
     redo: { kind: "book", id, deleted: true, ...prior },
     notice: true,
   });
@@ -517,15 +604,21 @@ function applyDiscard(context, event, enqueue) {
 
 // The user brought back the book they deleted (book-shelf emits book.restored on Vim's p
 // or P, 12): the restore write an Undo of its delete uses, as one step after the delete's,
-// so its Undo deletes the book again and the delete's own Undo then brings it back. A book
-// that is not a tombstone, or whose files went when its delete step left the undo list
+// so its Undo deletes the book again and the delete's own Undo then brings it back. It comes
+// back between the neighbours the shelf names; an event that names none leaves its place. A
+// book that is not a tombstone, or whose files went when its delete step left the undo list
 // (purge), is left as it is.
 function applyRestore(context, event, enqueue) {
   const { id } = event;
   const current = context.books.get(id);
   if (!current?.deleted || current.purged) return;
   const step = context.mint();
-  restore(context, enqueue, current, step);
+  const neighbour = (other) => {
+    const record = other ? context.books.get(other) : null;
+    return visible(record) && other !== id ? placeOf(record) : null;
+  };
+  const shelfPlace = "after" in event || "before" in event ? between(neighbour(event.after), neighbour(event.before)) : placeOf(current);
+  restore(context, enqueue, current, step, shelfPlace);
   const prior = current.step ? { prior: current.step } : {};
   enqueue.emit({
     type: "step.recorded",
@@ -533,7 +626,7 @@ function applyRestore(context, event, enqueue) {
     owner: "books",
     label: `restore ${nameOf(current)}`,
     undo: { kind: "book", id, deleted: true, ...prior },
-    redo: { kind: "book", id, deleted: false, ...prior },
+    redo: { kind: "book", id, deleted: false, shelfPlace, ...prior },
   });
 }
 
@@ -575,10 +668,12 @@ function forgetOpen(context, enqueue) {
 
 // A deleted book brought back. Signed in it rides a restore write (5), sent before any
 // other row, naming the tombstone's version once its delete is acknowledged; a delete not
-// yet sent is simply taken out of the outbox.
-function restore(context, enqueue, current, step) {
+// yet sent is simply taken out of the outbox. A place given that differs is sent as well,
+// after the restore write (RANK), so it never lands on the tombstone.
+function restore(context, enqueue, current, step, shelfPlace) {
   const { id } = current;
-  const record = { ...current, deleted: false, step, updatedAt: context.now() };
+  const placed = isShelfPlace(shelfPlace) && shelfPlace !== placeOf(current);
+  const record = { ...current, deleted: false, step, updatedAt: context.now(), ...(placed ? { shelfPlace } : {}) };
   context.books.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   if (context.outbox.get(id)?.kind === "delete") {
@@ -588,6 +683,7 @@ function restore(context, enqueue, current, step) {
   const row = { id: `restore:${id}`, kind: "restore", book: id };
   context.outbox.set(row.id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  if (placed) queuePlace(context, enqueue, record);
   enqueue.emit(changed(record, true));
   enqueue.raise({ type: "_drain" });
 }
@@ -622,7 +718,7 @@ function applyStep(context, event, enqueue) {
     if (current.step !== expected(p)) return settle("refused", "changed");
     if (p.deleted === Boolean(current.deleted)) stamp(context, enqueue, current, { step: leaves(p) });
     else if (p.deleted) tombstone(context, enqueue, current, leaves(p));
-    else restore(context, enqueue, current, leaves(p));
+    else restore(context, enqueue, current, leaves(p), p.shelfPlace);
     return settle("applied");
   }
   if (p.kind === "name" && visible(current) && typeof p.title === "string" && typeof p.author === "string") {
@@ -781,7 +877,7 @@ async function keepFor(store, from, userId, api, source) {
     } else {
       for (const book of await store.all()) {
         if (book.deleted || book.id === JOURNAL || untouched(book)) continue;
-        const row = { id: `adopt:${book.id}`, kind: "adopt", book: book.id, position: book.position, from: source };
+        const row = { id: `adopt:${book.id}`, kind: "adopt", book: book.id, position: book.position, shelfPlace: placeOf(book), from: source };
         if (book.fileTitle && book.title !== book.fileTitle) row.title = book.title;
         if (book.fileAuthor !== undefined && book.author !== book.fileAuthor) row.author = book.author;
         await store.outboxPut(row);
@@ -864,12 +960,14 @@ export const machine = setup({
                 ? await api.opened(row.book)
                 : row.kind === "title"
                   ? await api.title(row.book, row.title, row.author)
+                  : row.kind === "shelf"
+                    ? await api.shelf(row.book, row.shelfPlace)
                   : await api.position(row.id, row.chapter, row.block);
         } catch {
           return { acks, networkError: true };
         }
         if (result.error === "unauthorized") return { acks, authFailed: true };
-        acks.push({ id: row.id, kind: row.kind, book: row.book, sent: { title: row.title, author: row.author }, row: result });
+        acks.push({ id: row.id, kind: row.kind, book: row.book, sent: { title: row.title, author: row.author, shelfPlace: row.shelfPlace }, row: result });
         await store.outboxDelete(row.id).catch(() => {});
       }
       if (!pull) return { acks };
@@ -893,7 +991,9 @@ export const machine = setup({
       "fetched by URL, so this fact never holds the file. A book whose file holds several " +
       "chapters in one piece is cut where its contents say each chapter begins. The reading " +
       "position, a title and an author the user gives a book, and which book is open are last " +
-      "write wins: they are never refused, and a pull brings them to every device. An empty " +
+      "write wins: they are never refused, and a pull brings them to every device. So is a book's place " +
+      "on the shelf: a new book goes first among the books, and Vim's p on the shelf brings a deleted book " +
+      "back between the neighbours it names; a book never placed keeps the newest-first order. An empty " +
       "title or author restores the one read from the file, and a re-import refreshes the " +
       "file's title and author without touching the user's. It also " +
       "presents the journal as the first book, signed in or out: its chapters are the days, " +
@@ -1278,7 +1378,7 @@ function applySync(context, output, enqueue) {
         enqueue(() => context.store.put(record).catch(() => {}));
         continue;
       }
-      const record = carry(held, { ...serverRecord(ack.row), deleted: true }, true);
+      const record = carry(context, held, { ...serverRecord(ack.row), deleted: true }, true);
       record.position = held?.position ?? record.position;
       context.books.set(ack.id, record);
       enqueue(() => context.store.put(record).catch(() => {}));
@@ -1286,6 +1386,27 @@ function applySync(context, output, enqueue) {
     }
     if (ack.kind === "restore") {
       applyRestored(context, ack, enqueue);
+      continue;
+    }
+    if (ack.kind === "shelf") {
+      // A place was acknowledged, last write wins: only drain the row if a newer place has
+      // not queued since; the onDone re-raises a drain for one that has. A book the server
+      // does not have drops the row.
+      const queued = context.outbox.get(ack.id);
+      if (!queued || queued.shelfPlace === ack.sent.shelfPlace) {
+        context.outbox.delete(ack.id);
+        enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
+      } else {
+        enqueue(() => context.store.outboxPut(queued).catch(() => {}));
+      }
+      if (ack.row.error) continue;
+      const held = context.books.get(ack.book);
+      const record = carry(context, held, serverRecord(ack.row), true);
+      // Brought back or deleted again while the place was on the way: that write stands.
+      if (held) Object.assign(record, { position: held.position, deleted: Boolean(held.deleted) });
+      context.books.set(ack.book, record);
+      enqueue(() => context.store.put(record).catch(() => {}));
+      if (visible(record)) enqueue.emit(changed(record, pendingFor(context, ack.book)));
       continue;
     }
     if (ack.kind === "title") {
@@ -1302,7 +1423,7 @@ function applySync(context, output, enqueue) {
         enqueue(() => context.store.outboxPut(queued).catch(() => {}));
       }
       const held = context.books.get(server.id);
-      const record = carry(held, serverRecord(server), true);
+      const record = carry(context, held, serverRecord(server), true);
       if (held) record.position = held.position;
       context.books.set(server.id, record);
       enqueue(() => context.store.put(record).catch(() => {}));
@@ -1324,7 +1445,7 @@ function applySync(context, output, enqueue) {
       enqueue(() => context.store.outboxPut(queued).catch(() => {}));
     }
     const held = context.books.get(ack.id);
-    const record = carry(held, serverRecord(server), true);
+    const record = carry(context, held, serverRecord(server), true);
     if (held) record.position = held.position; // keep the latest local place
     context.books.set(ack.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
@@ -1338,7 +1459,7 @@ function applySync(context, output, enqueue) {
     // Otherwise a live copy of a local tombstone at a higher version is a restore write
     // made elsewhere (5).
     if (current && current.deleted && !book.deleted && context.outbox.get(book.id)?.kind === "delete") continue;
-    const record = carry(current, serverRecord(book));
+    const record = carry(context, current, serverRecord(book));
     if (book.deleted) {
       if (context.outbox.delete(`restore:${book.id}`)) enqueue(() => context.store.outboxDelete(`restore:${book.id}`).catch(() => {}));
       context.books.set(book.id, record);
@@ -1397,7 +1518,7 @@ function applyRestored(context, ack, enqueue) {
     enqueue(() => context.store.put(context.books.get(ack.book)).catch(() => {}));
     return;
   }
-  const record = carry(held, serverRecord(ack.row), true);
+  const record = carry(context, held, serverRecord(ack.row), true);
   record.position = held.position;
   context.books.set(ack.book, record);
   enqueue(() => context.store.put(record).catch(() => {}));
@@ -1418,6 +1539,7 @@ function applyAdopted(context, ack, enqueue) {
   if (server) {
     const record = serverRecord(server);
     if (ack.row && current) record.position = current.position;
+    if (ack.row && current?.shelfPlace) record.shelfPlace = current.shelfPlace;
     context.books.set(ack.book, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     if (!record.deleted) enqueue.emit(changed(record, pendingFor(context, ack.book)));

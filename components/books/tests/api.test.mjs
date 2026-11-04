@@ -267,6 +267,28 @@ test("a position write bumps the version and is never refused", async () => {
   assert.deepEqual(again.position, { chapter: 2, block: 0 });
 });
 
+test("a place on the shelf is last write wins, is checked, and rides the pull", async () => {
+  const cookie = cookieFor(freshUser());
+  const place = (id, shelfPlace) =>
+    fetch(`${BASE_URL}/api/books/${id}/shelf-place`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ shelfPlace }),
+    });
+  await importBook(ID, SAMPLE, cookie);
+  const { cursor } = await (await pull(0, cookie)).json();
+  assert.equal((await (await pull(0, cookie)).json()).books[0].shelfPlace, null, "not placed until a place is written");
+  const placed = await (await place(ID, "U")).json();
+  assert.equal(placed.shelfPlace, "U");
+  assert.equal(placed.version, 2, "a newer version, so a pull takes it");
+  const pulled = await (await pull(cursor, cookie)).json();
+  assert.deepEqual(pulled.books.map((b) => b.shelfPlace), ["U"]);
+  assert.equal((await place(ID, "ends-in-a-mark!")).status, 422);
+  assert.equal((await place(ID, "U0")).status, 422, "a key never ends in the smallest digit");
+  assert.equal((await place("01ARZ3NDEKTSV4RRFFQ69G5FZZ", "U")).status, 404);
+  assert.equal((await fetch(`${BASE_URL}/api/books/${ID}/shelf-place`, { method: "PUT", body: "{}", headers: { "content-type": "application/json" } })).status, 401);
+});
+
 test("GET since a cursor returns only what changed, tombstones included", async () => {
   const cookie = cookieFor(freshUser());
   await importBook(ID, SAMPLE, cookie);

@@ -12,6 +12,7 @@ import { machine, JOURNAL } from "../machine.js";
 
 const A = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const B = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+const C = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
 const SYNC_IDLE_MS = 2000;
 
 const schema = (path) => new Validator(JSON.parse(readFileSync(new URL(path, import.meta.url))), "2020-12");
@@ -101,6 +102,7 @@ function server(initial = []) {
         ...(a !== undefined ? { userAuthor: a.trim() || null } : {}),
       }),
     position: async (id, chapter, block) => bump(id, { position: { chapter, block } }),
+    shelf: async (id, shelfPlace) => (rows.has(id) ? bump(id, { shelfPlace }) : { error: "not-found" }),
     opened: async (id) => ({ id, at: 500 }),
     pull: async () => ({ books: [], cursor: 0 }),
     // Another device's write, which this browser learns of from a pull.
@@ -146,6 +148,10 @@ const read = (actor, id) => new Promise((reply) => actor.send({ type: "read?", c
 const undo = (step) => ({ type: "step.undone", id: step.id, owner: "books", payload: step.undo });
 const redo = (step) => ({ type: "step.redone", id: step.id, owner: "books", payload: step.redo });
 const shown = async (actor, id) => (await read(actor, id)).book ?? null;
+const order = async (actor) =>
+  (await new Promise((reply) => actor.send({ type: "list?", cid: "c", payload: {}, reply }))).books.map((b) => b.id);
+// Three books never placed, newest first: A, B, C.
+const three = () => [row(A, { addedAt: 30 }), row(B, { addedAt: 20 }), row(C, { addedAt: 10 })];
 
 test("adding a book is one step: Undo deletes it, Redo brings it back without importing it again", async () => {
   const h = await start();
@@ -168,7 +174,8 @@ test("adding a book is one step: Undo deletes it, Redo brings it back without im
   assert.equal(h.settled.at(-1).outcome, "applied");
   assert.equal((await shown(h.actor, A)).title, "Dune");
   await h.sync();
-  assert.deepEqual(h.api.restores, [[A, 2]], "a restore write naming the tombstone's version");
+  // Version 2 is the new book's place on the shelf, 3 its delete.
+  assert.deepEqual(h.api.restores, [[A, 3]], "a restore write naming the tombstone's version");
   assert.equal(h.api.rows.get(A).deleted, false);
   assert.equal(h.api.rows.get(A).contentVersion, 1, "nothing is imported again");
   assert.equal(h.store.outbox.size, 0);
@@ -231,7 +238,9 @@ test("a delete happens at once as one step with the notice; Undo restores it, Re
   const [step] = h.steps;
   assert.equal(step.label, "delete book Dune");
   assert.equal(step.notice, true);
-  assert.deepEqual(step.undo, { kind: "book", id: A, deleted: false });
+  const { shelfPlace, ...undoing } = step.undo;
+  assert.ok(shelfPlace, "the place it stood at");
+  assert.deepEqual(undoing, { kind: "book", id: A, deleted: false });
   assert.deepEqual(step.redo, { kind: "book", id: A, deleted: true });
   assert.deepEqual(h.deleted, [A]);
 
@@ -295,7 +304,9 @@ test("book.restored brings a deleted book back as one step after the delete's; U
   assert.equal(res.label, "restore book Dune");
   assert.equal(res.notice, undefined);
   assert.deepEqual(res.undo, { kind: "book", id: A, deleted: true, prior: del.id });
-  assert.deepEqual(res.redo, { kind: "book", id: A, deleted: false, prior: del.id });
+  assert.equal(res.redo.deleted, false);
+  assert.equal(res.redo.prior, del.id);
+  assert.equal(res.redo.shelfPlace, del.undo.shelfPlace, "named no neighbours: the book keeps its place");
   assert.equal((await shown(h.actor, A)).title, "Dune");
   await h.sync();
   assert.equal(h.api.rows.get(A).deleted, false, "brought back with a restore write");
@@ -403,4 +414,83 @@ test("the journal records nothing, and a step of another owner is not answered",
   h.actor.send({ type: "step.undone", id: "01ARZ3NDEKTSV4RRFFQ69G9999", owner: "notes", payload: { kind: "book", id: A, deleted: true } });
   assert.equal(h.settled.length, 0);
   assert.ok(await shown(h.actor, A));
+});
+
+test("a deleted book comes back between its neighbours, and Undo and Redo walk the order there and back", async () => {
+  const h = await start({ store: memory(three()), api: server(three()) });
+  assert.deepEqual(await order(h.actor), [A, B, C], "never placed: newest first");
+  h.actor.send({ type: "book.discarded", id: A });
+  h.actor.send({ type: "book.restored", id: A, after: C, before: null });
+  const [del, res] = h.steps;
+  assert.deepEqual(await order(h.actor), [B, C, A], "at the end");
+  assert.equal(h.changed.at(-1).shelfPlace, res.redo.shelfPlace, "the news carries the place");
+  await h.sync();
+  assert.equal(h.api.rows.get(A).shelfPlace, res.redo.shelfPlace, "the place reached the server");
+  assert.equal(h.api.rows.get(A).deleted, false);
+
+  h.actor.send({ type: "book.discarded", id: C });
+  h.actor.send({ type: "book.restored", id: C, after: null, before: B });
+  assert.deepEqual(await order(h.actor), [C, B, A], "at the start");
+  const [, , delC, resC] = h.steps;
+
+  h.actor.send(undo(resC));
+  h.actor.send(undo(delC));
+  assert.deepEqual(await order(h.actor), [B, C, A], "back where it stood");
+  h.actor.send(undo(res));
+  assert.deepEqual(await order(h.actor), [B, C]);
+  h.actor.send(undo(del));
+  assert.deepEqual(await order(h.actor), [A, B, C], "the delete's Undo puts it back where it stood");
+  await h.sync();
+  assert.deepEqual([...h.api.rows.values()].filter((r) => r.deleted), [], "nothing left deleted on the server");
+
+  h.actor.send(redo(del));
+  h.actor.send(redo(res));
+  assert.deepEqual(await order(h.actor), [B, C, A], "Redo walks forward again");
+  await h.sync();
+});
+
+test("a new book goes first, also ahead of a book moved to the top", async () => {
+  const h = await start({ store: memory(three()), api: server(three()) });
+  h.actor.send({ type: "book.discarded", id: C });
+  h.actor.send({ type: "book.restored", id: C, after: null, before: A });
+  assert.deepEqual(await order(h.actor), [C, A, B]);
+  const NEW = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
+  h.actor.send({ type: "book.picked", id: NEW, name: "new.epub", size: 9, url: "blob:n" });
+  await flush();
+  assert.deepEqual(await order(h.actor), [NEW, C, A, B]);
+  await h.sync();
+  assert.deepEqual(await order(h.actor), [NEW, C, A, B], "the server's answer keeps it there");
+  assert.ok(h.api.rows.get(NEW).shelfPlace);
+});
+
+test("a place set on another device arrives with a pull; one of this browser still on its way stands over it", async () => {
+  const api = server(three());
+  const h = await start({ store: memory(three()), api });
+  const rows = () => ({ books: [...api.rows.values()].map((r) => ({ ...r, title: r.fileTitle, author: r.fileAuthor })), cursor: 9 });
+  api.elsewhere(C, { shelfPlace: "1" });
+  api.pull = async () => rows();
+  h.actor.send({ type: "_sync", pull: true });
+  await h.sync();
+  assert.deepEqual(await order(h.actor), [C, A, B], "the other device's place");
+
+  // An answer to a page turn brings the place too, and a later pull would skip that row.
+  api.elsewhere(B, { shelfPlace: "0V" });
+  h.actor.send({ type: "book.progressed", id: B, chapter: 1, block: 0 });
+  await h.sync();
+  assert.deepEqual(await order(h.actor), [B, C, A], "not kept stale by this browser's copy");
+
+  // A place of this browser waits offline; the pull that follows does not move the book back.
+  const sent = api.shelf;
+  api.shelf = async () => {
+    throw new Error("offline");
+  };
+  h.actor.send({ type: "book.discarded", id: A });
+  h.actor.send({ type: "book.restored", id: A, after: null, before: B });
+  await h.sync();
+  assert.deepEqual(await order(h.actor), [A, B, C]);
+  api.shelf = sent;
+  await h.sync();
+  h.actor.send({ type: "_sync", pull: true });
+  await h.sync();
+  assert.deepEqual(await order(h.actor), [A, B, C]);
 });

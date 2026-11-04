@@ -418,8 +418,9 @@ class BookShelf extends LitElement {
     const move = { ArrowRight: "right", ArrowDown: "down", ArrowLeft: "left", ArrowUp: "up" }[event.key] ?? vim;
     // The list keys (12): dd deletes the tile (the journal ignores it, as the machine
     // refuses it) and the keyboard moves to the next tile, or the previous from the last;
-    // p and P bring the deleted book back and the keyboard follows it; o and O open the
-    // add-book picker, and cc renames where the page lets titles change.
+    // p and P bring the deleted book back after or before this tile and the keyboard
+    // follows it; o and O open the add-book picker, and cc renames where the page lets
+    // titles change.
     if (vim === "delete") {
       if (!tiles.some((t) => t.id === current && !t.written)) return;
       const at = tiles.findIndex((t) => t.id === current);
@@ -428,7 +429,7 @@ class BookShelf extends LitElement {
       if (next) this.#follow(next.id);
     } else if (vim === "paste") {
       if (!deleted) return;
-      this.#actor.send({ type: "_paste" });
+      this.#actor.send({ type: "_paste", at: current, below: event.key === "p" });
       this.#follow(deleted);
     } else if (vim === "add") {
       this.#openPicker();

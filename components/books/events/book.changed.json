@@ -23,7 +23,8 @@
     "pending": { "type": "boolean" },
     "addedAt": { "type": "integer" },
     "updatedAt": { "type": "integer" },
-    "written": { "type": "boolean", "description": "True only for the journal, the book the user writes, owned by journal; absent for an imported book." }
+    "written": { "type": "boolean", "description": "True only for the journal, the book the user writes, owned by journal; absent for an imported book." },
+    "shelfPlace": { "type": "string", "description": "The book's place on the shelf, a key compared as plain text; absent on the journal, which is always first." }
   },
   "required": ["id", "title", "author", "cover", "chapters", "toc", "position", "version", "contentVersion", "pending", "addedAt", "updatedAt"],
   "additionalProperties": false,
