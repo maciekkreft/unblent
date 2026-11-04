@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, showing, tilesOf } from "./machine.js";
+import { machine, showing, tilesOf, framedOf } from "./machine.js";
 import picked from "./events/book.picked.json" with { type: "json" };
 import selected from "./events/book.selected.json" with { type: "json" };
 import discarded from "./events/book.discarded.json" with { type: "json" };
@@ -406,7 +406,8 @@ class BookShelf extends LitElement {
   }
 
   #keydown(event, tiles) {
-    const { deleted, selected } = this.#actor.snapshot.context;
+    const { deleted } = this.#actor.snapshot.context;
+    const selected = framedOf(this.#actor.snapshot.context);
     const vim = this.#vim(event);
     const current = this.#focusTile(tiles, selected);
     // Every Vim letter the list owns is spent here, even with nowhere to move (j on the
@@ -598,7 +599,8 @@ class BookShelf extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<div class="empty"><p>Sign in to see your books.</p></div>`;
-    const { importing, selected } = snapshot.context;
+    const { importing } = snapshot.context;
+    const selected = framedOf(snapshot.context);
     const tiles = this.#tiles(snapshot);
     const focusId = this.#focusTile(tiles, selected);
     // The invite stands while the library holds no imported book, beside the journal

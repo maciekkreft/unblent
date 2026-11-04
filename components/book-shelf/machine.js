@@ -70,6 +70,13 @@ export const tilesOf = (context) => {
   return [...context.books.slice(0, at), SLIPBOX_TILE, ...context.books.slice(at)];
 };
 
+// The tile with the frame: the Slip-Box while its tab is in front of the stage, otherwise
+// the open book, so the shelf never points at a book while the Slip-Box is what is shown.
+export const framedOf = ({ onStage, selected }) => (onStage ? SLIPBOX : selected);
+
+// `subject` reports the Slip-Box only while the feature shows, so this needs no flag check.
+const isSlipBox = (subject) => subject?.kind === "note" && subject.id === SLIPBOX;
+
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
 export const machine = setup({
@@ -79,6 +86,8 @@ export const machine = setup({
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // Which features are hidden (3.1); flags.changed is held until the reply lands.
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    // What is in front of the stage; subject.changed is held until the reply lands.
+    subject: fromPromise(({ input }) => input.ask("subject", "read", {})),
     // The starting picture (4.3): the library from books, and who is signed in from
     // session, since session.changed only fires on a change and a fresh signed-out
     // load is no change — the empty invite would never appear from the event alone.
@@ -120,12 +129,13 @@ export const machine = setup({
       "right after the journal, is the Slip-Box: a card with a stack of cards above its name, " +
       "which reads \"Written by you\" like the journal's. Opening it, by a click or Enter, shows " +
       "the Slip-Box note on the stage as a tab of its own; it is not a book, so it has no rename " +
-      "or delete, dd ignores it, and it is never highlighted as the open book. While the feature " +
+      "or delete, and dd ignores it. The frame marks the Slip-Box while its tab is in front of " +
+      "the stage, and otherwise the open book, also while another note or a chat is in front. While the feature " +
       "is hidden, and on a page that cannot say, there is no Slip-Box tile.",
     kind: "view",
     emits: ["book.picked", "book.selected", "book.discarded", "book.renamed", "book.restored", "note.staged"],
     attributes: ["renames"],
-    asks: ["books: list", "session: read", "books: open", "settings: read", "flags: read"],
+    asks: ["books: list", "session: read", "books: open", "settings: read", "flags: read", "subject: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -149,6 +159,9 @@ export const machine = setup({
     tryPage: Boolean(input.tryPage),
     // The features `flags` reports hidden (3.1); null until it answers.
     hidden: null,
+    // Whether the Slip-Box's tab is in front of the stage, from `subject`; false on a page
+    // without it.
+    onStage: false,
   }),
   // Beside the states, so the preference and the features arrive whatever the view is doing.
   invoke: [
@@ -162,6 +175,12 @@ export const machine = setup({
       src: "flags",
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : null) }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "subject",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ onStage: ({ event }) => isSlipBox(event.output?.subject) }) },
       onError: { actions: [] },
     },
   ],
@@ -190,6 +209,7 @@ export const machine = setup({
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
+    "subject.changed": { actions: assign({ onStage: ({ event }) => isSlipBox(event.subject) }) },
     // Who is signed in now (4.3): signing in re-asks books: list, because the fact
     // pulls the library then. Signing out hides the tiles and keeps them, and forgets
     // the book dd deleted, which p could no longer bring back to this account.

@@ -28,13 +28,19 @@ const stageTabs = (page) =>
     ),
   );
 
+// The tiles marked as selected, which is what draws the frame.
+const framed = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("book-shelf").shadowRoot.querySelectorAll('.tile[aria-selected="true"]')].map((t) => t.querySelector(".title").textContent.trim()),
+  );
+
 const hint = (page) =>
   page.evaluate(() => document.querySelector("note-editor[stage]")?.shadowRoot?.querySelector(".cm-placeholder")?.textContent ?? null);
 
 for (const engine of ENGINES) {
   // Browser: a page's composition (the shelf's tile opens a tab on the stage, whose editor
-  // shows the hint) and a reload against real storage (the tab is kept before any text).
-  test(`the Slip-Box tile comes after the Journal and opens a Slip-Box tab that survives a reload in ${engine.name}`, async () => {
+  // shows the hint, and the frame follows the tab in front) and a reload against real storage (the tab is kept before any text).
+  test(`the Slip-Box tile comes after the Journal and opens a framed Slip-Box tab that survives a reload in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     context.setDefaultTimeout(4000);
@@ -53,14 +59,29 @@ for (const engine of ENGINES) {
       const [journal, slipBox] = await tiles(page);
       assert.deepEqual([journal.title, slipBox], ["Journal", { title: "Slip-Box", tools: false }]);
 
-      await page.evaluate(() =>
-        [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile")].find((t) => t.querySelector(".title")?.textContent.trim() === "Slip-Box").click(),
-      );
+      const open = (title) =>
+        page.evaluate(
+          (title) => [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile")].find((t) => t.querySelector(".title")?.textContent.trim() === title).click(),
+          title,
+        );
+      const isFramed = (title) => until(async () => (await framed(page)).join() === title);
+
+      await open("Journal");
+      await isFramed("Journal");
+      await open("Slip-Box");
       await until(async () => (await stageTabs(page)).includes("Slip-Box*"));
       await until(async () => (await hint(page)) === "Write how your Slip-Box is arranged. The notes under it are beside.");
+      await isFramed("Slip-Box");
 
+      await page.locator("dock-desk .stage .own [role=tab]", { hasText: "Journal" }).click();
+      await isFramed("Journal");
+      await open("Slip-Box");
+      await isFramed("Slip-Box");
+
+      // After a reload the stage brings the open book to the front, and the frame goes with it.
       await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => (await stageTabs(page)).includes("Slip-Box"));
+      await until(async () => (await stageTabs(page)).join() === "Journal*,Slip-Box");
+      await isFramed("Journal");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await context.close();

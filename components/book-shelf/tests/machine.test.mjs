@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, showing, tilesOf } from "../machine.js";
+import { machine, showing, tilesOf, framedOf } from "../machine.js";
 
 // The shelf's actor is where the rename decision lives (D11): the view turns Enter or
 // blur into a _rename gesture carrying the fields' texts, and the machine announces it
@@ -269,4 +269,23 @@ test("while the feature is hidden opening the Slip-Box's id does nothing", async
   await flush();
   actor.send({ type: "_select", id: SLIPBOX });
   assert.deepEqual(out, []);
+});
+
+test("the frame is on the Slip-Box while it is in front of the stage, otherwise on the open book", async () => {
+  const { actor } = startWith({ off: [], hidden: [], released: ["slip-box"], shown: ["slip-box"] });
+  await flush();
+  const framed = () => framedOf(actor.getSnapshot().context);
+  const subject = (value) => actor.send({ type: "subject.changed", subject: value });
+  actor.send({ type: "book.opened", id: ID });
+  assert.equal(framed(), ID, "a book in front");
+  subject({ kind: "note", id: SLIPBOX, title: "Slip-Box", view: "book-stage" });
+  assert.equal(framed(), SLIPBOX, "the Slip-Box in front");
+  subject({ kind: "note", id: "01ARZ3NDEKTSV4RRFFQ69G5NOT", title: "A note", view: "book-stage" });
+  assert.equal(framed(), ID, "another note in front keeps the open book");
+  subject({ kind: "note", id: SLIPBOX, title: "Slip-Box", view: "book-stage" });
+  subject({ kind: "book", id: ID, title: "Sample Book", view: "book-stage" });
+  assert.equal(framed(), ID, "back to the book");
+  subject({ kind: "note", id: SLIPBOX, title: "Slip-Box", view: "book-stage" });
+  subject(null);
+  assert.equal(framed(), ID, "nothing in front keeps the open book");
 });
