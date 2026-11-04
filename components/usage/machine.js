@@ -270,6 +270,7 @@ export const machine = setup({
       "chapter.selected": "reading",
       "tabs.shown": "reading",
       "passage.selected": "highlights",
+      "passage.added": "highlights",
       "highlights.edited": "highlights",
       "text.copied": "highlights",
       "link.copied": "highlights",
