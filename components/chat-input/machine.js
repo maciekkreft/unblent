@@ -31,10 +31,15 @@ const USE = {
   note: " To read it, pass this id to the lookup that reads a note.",
 };
 
-export const startText = (subject) => {
-  if (!subject) return START;
-  const named = subject.title ? `${subject.kind} "${subject.title}"` : subject.kind;
-  return `${START}\n\nThe reader currently has open: ${named} (id ${subject.id})${chapterText(subject)}.${USE[subject.kind] ?? ""}`;
+// The expert picked on the shelf above the new chat (expert.picked), if any, adds its
+// prompt after everything else, so the start without one is what it always was.
+export const startText = (subject, expert = null) => {
+  let text = START;
+  if (subject) {
+    const named = subject.title ? `${subject.kind} "${subject.title}"` : subject.kind;
+    text = `${text}\n\nThe reader currently has open: ${named} (id ${subject.id})${chapterText(subject)}.${USE[subject.kind] ?? ""}`;
+  }
+  return expert ? `${text}\n\nYou also speak as an expert on the book "${expert.title}":\n${expert.prompt}` : text;
 };
 
 // The Journal's chapter is a day (subject: read), named by its date rather than a title.
@@ -130,6 +135,12 @@ export const draftKey = (context) => {
 // writes the start only when it first creates the chat (12).
 const isNew = (context) => turns(context.conversation).length === 0;
 
+// What the empty box says: it names the picked expert while the chat is new.
+export const placeholderOf = (context) =>
+  context?.expert && isNew(context) ? `Ask the expert on ${context.expert.title}…` : "Ask about your library…";
+
+const sameThing = (a, b) => (a?.kind ?? null) === (b?.kind ?? null) && (a?.id ?? null) === (b?.id ?? null);
+
 // Picking a chat with no messages puts the cursor in the box (12). The view focuses when
 // `focusRequest` changes; `focusFor` is the picked chat while its read is in flight.
 const focusIfNew = (context, conversation) => ({
@@ -178,9 +189,11 @@ const submit = (context, enqueue, text) => {
   const event = { type: "turn.submitted", conversationId, turn: { id: context.mint(), text: body } };
   if (isNew(context)) {
     event.about = context.subject ? [{ kind: context.subject.kind, id: context.subject.id, ...chapterPart(context.subject) }] : [];
-    event.start = startText(context.subject);
+    event.start = startText(context.subject, context.expert);
   }
   enqueue.emit(event);
+  // The pick was for this new chat only.
+  enqueue.assign({ expert: null });
 };
 
 const retry = (context, enqueue) => {
@@ -233,7 +246,9 @@ export const machine = setup({
       "The box where the user types a question to the chat and sends it. While an answer is " +
       "arriving Send becomes Stop, and a chat left without an answer offers Continue or Try " +
       "again. It writes the instructions a new chat starts with once, when the chat is created, " +
-      "naming the open item on one line; they never change afterwards, so the provider's cache " +
+      "naming the open item on one line, and, when an expert was picked on the shelf above, " +
+      "that the chat also speaks as the expert on that book, with the prompt the user wrote for it; the " +
+      "empty box then says \"Ask the expert on\" and the book's title. They never change afterwards, so the provider's cache " +
       "holds and the chat is an honest record of what the model was told. A new chat is linked " +
       "to the open item and to the chapter open in it, the Journal's open day included. When the user picks a " +
       "chat with no messages yet, such as the New chat row or a new chat made with o or O in " +
@@ -280,6 +295,8 @@ export const machine = setup({
     // Every chat deleted since mount, in order, so the view drops each one's draft even
     // when several land between two renders.
     deleted: [],
+    // The expert picked on the shelf for the new chat ({ book, title, prompt }), or null.
+    expert: null,
   }),
   initial: "starting",
   // Beside the states, so the preference arrives whatever the box is doing and a
@@ -304,7 +321,7 @@ export const machine = setup({
     "conversation.opened": {
       guard: ({ context }) => !context.staged,
       actions: enqueueActions(({ context, event, enqueue, self }) => {
-        enqueue.assign({ openId: event.id, conversation: null, reading: event.id, touched: mark(context.touched, "openId", "conversation") });
+        enqueue.assign({ openId: event.id, conversation: null, reading: event.id, expert: null, touched: mark(context.touched, "openId", "conversation") });
         if (event.id != null) {
           const id = event.id;
           enqueue(() =>
@@ -368,13 +385,24 @@ export const machine = setup({
       actions: assign(({ context, event }) => ({
         deleted: [...context.deleted, event.id],
         ...(event.id === context.openId
-          ? { openId: null, conversation: null, touched: mark(context.touched, "openId", "conversation") }
+          ? { openId: null, conversation: null, expert: null, touched: mark(context.touched, "openId", "conversation") }
           : {}),
       })),
     },
     // The stage moved (4.3): a new chat links to the subject now on the stage.
     "subject.changed": {
-      actions: assign({ subject: ({ event }) => event.subject ?? null, touched: ({ context }) => mark(context.touched, "subject") }),
+      actions: assign(({ context, event }) => ({
+        subject: event.subject ?? null,
+        touched: mark(context.touched, "subject"),
+        // Another thing in front ends the pick, as the shelf does.
+        ...(sameThing(context.subject, event.subject) ? {} : { expert: null }),
+      })),
+    },
+    // The expert picked on the shelf above the new chat (chat-thread): kept for that chat's
+    // start. The stage's box starts no chat from the shelf.
+    "expert.picked": {
+      guard: ({ context }) => !context.staged,
+      actions: assign({ expert: ({ event }) => event.expert ?? null }),
     },
     // The account picture changed (4.3): the box enables or disables to match.
     "llm.changed": {

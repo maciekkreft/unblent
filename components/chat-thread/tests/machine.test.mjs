@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, relinkOf, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS, askedFor, lengthWords, dateWords, openingOf, noteOpening } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS, askedFor, lengthWords, dateWords, openingOf, noteOpening, shelfOf, spineOf } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -742,4 +742,106 @@ test("a link emits its opening event, valid against the thread's own copies of t
   await flush();
   assert.deepEqual(seen.map((e) => e.type), ["day.selected", "chapter.selected", "book.selected", "note.staged", "passage.selected"], "a gone note opens nothing");
   for (const { type, ...payload } of seen) assert.ok(new Validator(own(type), "2020-12").validate(payload).valid, type + " matches its schema");
+});
+
+// --- The experts shelf above a new chat ----------------------------------------------------
+
+const PICKED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "expert.picked.json"), "utf8"));
+const MED = "01HQ8ZK7M4N5P6Q7R8S9T0V1B1";
+const NBP = "01HQ8ZK7M4N5P6Q7R8S9T0V1B2";
+const JRN = "00000000000000000000000JRN";
+
+function shelfStart({ hidden = [], openId = null, chatsById = {}, staged = false, subject = { kind: "book", id: MED, title: "Meditations", view: "book-reader" } } = {}) {
+  const ask = (target, name, payload) => {
+    const key = `${target}: ${name}`;
+    if (key === "conversations: open") return Promise.resolve({ id: openId });
+    if (key === "conversations: read") return Promise.resolve(chatsById[payload.id] ? { conversation: chatsById[payload.id] } : { error: "not-found" });
+    if (key === "settings: read") return Promise.resolve({ vimKeys: false });
+    if (key === "subject: read") return Promise.resolve({ subject });
+    if (key === "flags: read") return see(payload, other("flags", "read").payload), Promise.resolve({ off: [], hidden });
+    if (key === "experts: list") {
+      see(payload, other("experts", "list").payload);
+      return Promise.resolve({
+        experts: [
+          { id: MED, prompt: "Talk plainly about Stoicism.", on: true, version: 1 },
+          { id: NBP, prompt: "   ", on: true, version: 1 },
+          { id: JRN, prompt: "Never shown.", on: true, version: 1 },
+        ],
+      });
+    }
+    if (key === "books: list") {
+      see(payload, other("books", "list").payload);
+      return Promise.resolve({ books: [{ id: JRN, title: "Journal", written: true }, { id: MED, title: "Meditations" }, { id: NBP, title: "No Bad Parts" }] });
+    }
+    throw new Error(`unexpected ask ${key}`);
+  };
+  const actor = createActor(machine, { input: { ask, staged } });
+  const picked = [];
+  actor.on("expert.picked", (e) => {
+    const { type, ...payload } = e;
+    picked.push(payload.expert);
+    see(payload, PICKED);
+  });
+  actor.start();
+  return { actor, picked };
+}
+const shelfNow = (h) => shelfOf(h.actor.getSnapshot());
+const MED_EXPERT = { book: MED, title: "Meditations", prompt: "Talk plainly about Stoicism." };
+
+test("the shelf shows the experts that are on with a prompt, above a new chat, while the feature is shown", async () => {
+  const h = shelfStart();
+  await until(() => shelfNow(h) != null, "shelf");
+  assert.deepEqual(shelfNow(h), { items: [MED_EXPERT], picked: null }, "an empty prompt and the Journal are left out; No expert is picked");
+  h.actor.send({ type: "flags.changed", off: [], hidden: ["book-experts"] });
+  assert.equal(shelfNow(h), null, "hidden with the feature");
+  h.actor.send({ type: "flags.changed", off: [], hidden: [] });
+  h.actor.send({ type: "expert.changed", expert: { id: MED, prompt: "Talk plainly about Stoicism.", on: false, version: 2 } });
+  assert.equal(shelfNow(h), null, "no expert on, no shelf");
+  h.actor.stop();
+  const stage = shelfStart({ staged: true });
+  await flush();
+  await flush();
+  assert.equal(shelfOf(stage.actor.getSnapshot()), null, "never with stage");
+  stage.actor.stop();
+});
+
+test("a pick is announced whole, goes back to No expert with another chat, subject or a gone expert, and the first message ends the shelf", async () => {
+  const h = shelfStart();
+  await until(() => shelfNow(h) != null, "shelf");
+  h.actor.send({ type: "_pick", book: MED });
+  assert.deepEqual(h.picked, [MED_EXPERT]);
+  assert.equal(shelfNow(h).picked, MED);
+  h.actor.send({ type: "_pick", book: NBP });
+  assert.deepEqual(h.picked, [MED_EXPERT], "a book not on the shelf cannot be picked");
+  h.actor.send({ type: "_pick", book: null });
+  assert.deepEqual(h.picked.at(-1), null, "No expert");
+  h.actor.send({ type: "_pick", book: MED });
+  h.actor.send({ type: "subject.changed", subject: { kind: "book", id: MED, title: "Meditations", view: "book-reader", chapter: "c2", chapterTitle: "Two" } });
+  assert.equal(shelfNow(h).picked, MED, "another chapter of the same book keeps it");
+  h.actor.send({ type: "subject.changed", subject: { kind: "book", id: NBP, title: "No Bad Parts", view: "book-reader" } });
+  assert.equal(h.picked.at(-1), null, "another subject");
+  h.actor.send({ type: "_pick", book: MED });
+  h.actor.send({ type: "expert.changed", expert: { id: MED, prompt: "Be brief.", on: true, version: 2 } });
+  assert.deepEqual(h.picked.at(-1), { ...MED_EXPERT, prompt: "Be brief." }, "a changed prompt is announced again");
+  h.actor.send({ type: "book.deleted", id: MED });
+  assert.equal(h.picked.at(-1), null, "its book gone");
+  assert.equal(shelfNow(h), null);
+  h.actor.send({ type: "book.changed", id: MED, title: "Meditations", author: "", cover: null, chapters: [], toc: [], position: { chapter: 0, block: 0 }, version: 3, contentVersion: 1, pending: false, addedAt: 0, updatedAt: 0 });
+  h.actor.send({ type: "_pick", book: MED });
+  h.actor.send({ type: "conversation.opened", id: CHAT });
+  assert.equal(h.picked.at(-1), null, "another chat");
+  await until(() => state(h) === "empty", "the new chat");
+  h.actor.send({ type: "_pick", book: MED });
+  h.actor.send({ type: "conversation.changed", ...emptyChat(CHAT, { turns: [{ id: "01HQ8ZK7M4N5P6Q7R8S9T0V1Q1", role: "user", text: "hi" }] }) });
+  assert.equal(h.picked.at(-1), null, "the first message");
+  assert.equal(shelfNow(h), null, "the shelf hides once the chat has a message");
+  h.actor.stop();
+});
+
+test("a spine's colour and height are fixed by its book", () => {
+  assert.deepEqual(spineOf(MED, "Meditations"), spineOf(MED, "Meditations"));
+  const colours = new Set(Array.from({ length: 40 }, (_, k) => spineOf(`01HQ8ZK7M4N5P6Q7R8S9T0V1${String(k).padStart(2, "0")}`).colour));
+  assert.ok(colours.size > 4, "ids spread over the colours");
+  for (const c of colours) assert.ok(c >= 0 && c < 8);
+  assert.ok([0, 1, 2, 3].includes(spineOf(MED, "x".repeat(17)).height));
 });

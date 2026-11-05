@@ -727,6 +727,80 @@ export function chapterLabelOf(snapshot) {
   };
 }
 
+// --- The experts shelf above a new chat ---------------------------------------------------
+
+// Whether Book experts shows (3.1): not until `flags` answers, and not on a page without
+// it, as book-reader's slipBoxShown.
+export const expertsShown = (hidden) => Array.isArray(hidden) && !hidden.includes("book-experts");
+
+// A book as the shelf needs it. The Journal is the book the user writes (13), so it has
+// no expert, as in the Book experts tab.
+const shelfBook = (b) => ({ id: b.id, title: typeof b.title === "string" && b.title.trim() ? b.title : "Untitled book" });
+const readBooks = (books) => books.filter((b) => typeof b?.id === "string" && !b.written).map(shelfBook);
+
+// The experts on the shelf, in the shelf order books: list gives: every book whose
+// expert is on and holds a prompt. None with `stage`, while the feature is hidden, and
+// until both lists have answered.
+export const shelfItems = (context) => {
+  if (context.staged || !expertsShown(context.hidden) || !context.books || !context.experts) return [];
+  return context.books
+    .filter((b) => context.experts[b.id]?.on === true && context.experts[b.id].prompt.trim() !== "")
+    .map((b) => ({ book: b.id, title: b.title, prompt: context.experts[b.id].prompt }));
+};
+
+// A chat with no message yet: no chat open, an id with no record, or a chat whose record
+// holds no turn. A first message sent from the empty page arrives in conversation.changed
+// without leaving `empty`, so the turns decide in both states.
+export const isNewChat = (snapshot) =>
+  (snapshot.matches("empty") || snapshot.matches("showing")) && !snapshot.context.conversation?.turns?.length;
+
+// What the shelf shows, or null when it shows nothing: only above a new chat, and only
+// with at least one expert on it. `picked` is the book of the picked expert, null for No
+// expert.
+export const shelfOf = (snapshot) => {
+  if (!isNewChat(snapshot)) return null;
+  const items = shelfItems(snapshot.context);
+  if (!items.length) return null;
+  const picked = items.some((x) => x.book === snapshot.context.pick?.book) ? snapshot.context.pick.book : null;
+  return { items, picked };
+};
+
+// A spine's look, fixed by its book: which of the eight feature colours it takes (the
+// grey of Other is left out, so no spine reads as No expert), from a hash of the id, and
+// one of four heights from its title's length, so a row of spines is uneven as on a shelf.
+export const spineOf = (book, title = "") => {
+  let h = 2166136261;
+  for (const c of String(book)) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+  return { colour: h % 8, height: Math.floor(((title.length * 7) % 18) / 5) };
+};
+
+// The pick is announced whole (4.3, third rule), for chat-input, which writes it into the
+// new chat's start. Nothing is announced when nothing changes.
+const sendPick = (enqueue, context, pick) => {
+  const was = context.pick;
+  if (was?.book === pick?.book && was?.title === pick?.title && was?.prompt === pick?.prompt) return;
+  enqueue.assign({ pick });
+  enqueue.emit({ type: "expert.picked", expert: pick });
+};
+
+// The pick holds for one new chat about one thing: another chat, a deleted one, or another
+// subject goes back to No expert.
+const dropPick = enqueueActions(({ context, enqueue }) => sendPick(enqueue, context, null));
+
+// After a change to the experts, the books or the feature: a picked expert that left the
+// shelf goes back to No expert, and one whose prompt or title changed is announced again.
+const refreshPick = enqueueActions(({ context, enqueue }) => {
+  if (!context.pick) return;
+  sendPick(enqueue, context, shelfItems(context).find((x) => x.book === context.pick.book) ?? null);
+});
+
+// The open chat's first message ends the shelf: the pick has gone into its start.
+const pickStarted = enqueueActions(({ context, event, enqueue }) => {
+  if (context.pick && event.id === context.openId && event.turns?.length) sendPick(enqueue, context, null);
+});
+
+const sameThing = (a, b) => (a?.kind ?? null) === (b?.kind ?? null) && (a?.id ?? null) === (b?.id ?? null);
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): which chat is open, then that chat. conversation.opened
@@ -741,6 +815,12 @@ export const machine = setup({
     // What is on the stage, for the chapter label (12). subject.changed that races it is
     // held for us until the reply lands (subject: read supersededBy).
     subject: fromPromise(({ input }) => input.ask("subject", "read", {})),
+    // The experts shelf: which features are hidden (flags.changed held until the reply
+    // lands), the experts (expert.changed held) and the books (book.changed and
+    // book.deleted held), each for the starting picture (4.3).
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    experts: fromPromise(({ input }) => input.ask("experts", "list", {})),
+    books: fromPromise(({ input }) => input.ask("books", "list", {})),
     // A link to a note or a highlight asks notes for it beside whatever the thread is
     // doing; the reply comes back as _noteRead.
     note: fromCallback(({ input, sendBack }) => {
@@ -802,11 +882,22 @@ export const machine = setup({
       "the stage, also after the desk moves its dock, and it is disabled until the chat has its " +
       "first message. With `stage` it is the chat a stage shows for a chat tab: it follows no " +
       "chat opened elsewhere, has no Open on stage, and shows the chat the stage names by `load`; " +
-      "the chat itself is the same as in the Chats panel.",
+      "the chat itself is the same as in the Chats panel. " +
+      "While Book experts is shown, a new chat outside the stage has a shelf above it of the " +
+      "experts that are on, one book spine each with its title running up it, in the shelf's order " +
+      "and in a colour fixed by the book, after a dashed No expert, which is picked at first. A " +
+      "spine is picked with a click, or reached with Tab and the arrow keys (h and l with Vim " +
+      "keys) and picked with Enter or Space; the picked one stands lifted with an accent ring, and " +
+      "the box under it takes the keyboard. The pick says which expert the new chat starts as " +
+      "(expert.picked); it goes back to No expert when another chat opens, the open thing on the " +
+      "stage changes, or the expert leaves the shelf. A heading above the spines, \"Book experts\" " +
+      "and the picked book's title, folds the shelf to one line, which this browser keeps. The " +
+      "shelf hides once the chat has its first message, and does not show without an expert " +
+      "that is on.",
     kind: "view",
     attributes: ["height", "markdown", "stage"],
-    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged", "note.staged", "day.selected", "chapter.selected", "book.selected", "passage.selected", "lookup.followed"],
-    asks: ["conversations: open", "conversations: read", "settings: read", "subject: read", "notes: read"],
+    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged", "note.staged", "day.selected", "chapter.selected", "book.selected", "passage.selected", "lookup.followed", "expert.picked"],
+    asks: ["conversations: open", "conversations: read", "settings: read", "subject: read", "notes: read", "flags: read", "experts: list", "books: list"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -836,6 +927,13 @@ export const machine = setup({
     draft: null,
     // The highlight whose bubble is open.
     chosen: null,
+    // The experts shelf (3.1): the features `flags` reports hidden, the experts by book id
+    // ({ prompt, on }), the books read in shelf order ({ id, title }), each null until it
+    // answers; and the expert picked for the new chat, as last announced, null for none.
+    hidden: null,
+    experts: null,
+    books: null,
+    pick: null,
   }),
   initial: "starting",
   invoke: [
@@ -851,10 +949,73 @@ export const machine = setup({
       onDone: { actions: assign({ subject: ({ event }) => event.output?.subject ?? null }) },
       onError: { actions: [] },
     },
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : null) }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "experts",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: {
+        actions: assign({
+          experts: ({ event }) =>
+            Array.isArray(event.output?.experts) ? Object.fromEntries(event.output.experts.map((x) => [x.id, { prompt: x.prompt, on: x.on }])) : null,
+        }),
+      },
+      onError: { actions: [] },
+    },
+    {
+      src: "books",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ books: ({ event }) => (Array.isArray(event.output?.books) ? readBooks(event.output.books) : null) }) },
+      onError: { actions: [] },
+    },
   ],
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    "subject.changed": { actions: assign({ subject: ({ event }) => event.subject ?? null }) },
+    "subject.changed": [
+      { guard: ({ context, event }) => !sameThing(context.subject, event.subject), actions: [dropPick, assign({ subject: ({ event }) => event.subject ?? null })] },
+      { actions: assign({ subject: ({ event }) => event.subject ?? null }) },
+    ],
+    // The shelf's facts (4.3, fourth rule): the news replaces what the starting picture
+    // gave; before it answered there is nothing to bring up to date.
+    "flags.changed": { actions: [assign({ hidden: ({ event }) => event.hidden }), refreshPick] },
+    "expert.changed": {
+      guard: ({ context }) => context.experts !== null,
+      actions: [
+        assign({ experts: ({ context, event }) => ({ ...context.experts, [event.expert.id]: { prompt: event.expert.prompt, on: event.expert.on } }) }),
+        refreshPick,
+      ],
+    },
+    "book.changed": {
+      guard: ({ context }) => context.books !== null,
+      actions: [
+        assign({
+          books: ({ context, event }) => {
+            const k = context.books.findIndex((b) => b.id === event.id);
+            if (event.written) return context.books.filter((b) => b.id !== event.id);
+            if (k < 0) return [...context.books, shelfBook(event)];
+            return context.books.map((b, i) => (i === k ? shelfBook(event) : b));
+          },
+        }),
+        refreshPick,
+      ],
+    },
+    "book.deleted": {
+      guard: ({ context }) => context.books !== null,
+      actions: [assign({ books: ({ context, event }) => context.books.filter((b) => b.id !== event.id) }), refreshPick],
+    },
+    // A spine picked on the shelf (4.3, fifth rule): the expert, or none for No expert.
+    _pick: {
+      guard: ({ event }) => event.book == null || typeof event.book === "string",
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        const item = event.book == null ? null : shelfItems(context).find((x) => x.book === event.book);
+        if (item === undefined) return;
+        sendPick(enqueue, context, item);
+      }),
+    },
     // The chapter label's button (4.3, fifth rule): the gesture goes to `conversations`
     // with the chat's new links, and the label turns at once; the echo in
     // conversation.changed brings back what the fact now holds. Pressed again, it reverses.
@@ -872,9 +1033,9 @@ export const machine = setup({
       {
         guard: ({ context, event }) => !context.staged && event.id == null,
         target: ".empty",
-        actions: [settle, assign({ openId: null, conversation: null })],
+        actions: [settle, dropPick, assign({ openId: null, conversation: null })],
       },
-      { guard: ({ context }) => !context.staged, target: ".loading", actions: [settle, assign({ openId: ({ event }) => event.id })] },
+      { guard: ({ context }) => !context.staged, target: ".loading", actions: [settle, dropPick, assign({ openId: ({ event }) => event.id })] },
     ],
     // A command addressing this instance (4.4): the stage names the chat of its tab.
     load: {
@@ -911,7 +1072,7 @@ export const machine = setup({
     "conversation.changed": [
       {
         guard: ({ context, event }) => event.id === context.openId,
-        actions: [syncOfChange, assign({ conversation: ({ event }) => asConversation(event) })],
+        actions: [syncOfChange, pickStarted, assign({ conversation: ({ event }) => asConversation(event) })],
       },
       { actions: syncOfChange },
     ],
@@ -923,7 +1084,7 @@ export const machine = setup({
     "conversation.deleted": {
       guard: ({ context, event }) => event.id === context.openId,
       target: ".empty",
-      actions: assign({ openId: null, conversation: null, draft: null, chosen: null }),
+      actions: [dropPick, assign({ openId: null, conversation: null, draft: null, chosen: null })],
     },
   },
   states: {
@@ -969,11 +1130,11 @@ export const machine = setup({
             guard: ({ context, event }) =>
               event.id === context.openId && context.draft != null && lastAnswer(event)?.id !== context.draft.answerId,
             target: ".idle",
-            actions: [syncOfChange, assign({ conversation: ({ event }) => asConversation(event), draft: null })],
+            actions: [syncOfChange, pickStarted, assign({ conversation: ({ event }) => asConversation(event), draft: null })],
           },
           {
             guard: ({ context, event }) => event.id === context.openId,
-            actions: [syncOfChange, assign({ conversation: ({ event }) => asConversation(event) })],
+            actions: [syncOfChange, pickStarted, assign({ conversation: ({ event }) => asConversation(event) })],
           },
         ],
         // A comment's Remove: the box closes and the comment leaves the saved list at once,

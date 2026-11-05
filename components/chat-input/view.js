@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
-import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText, canSend, sendLabel } from "./machine.js";
+import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText, canSend, sendLabel, placeholderOf } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
 import staged from "./events/conversation.staged.json" with { type: "json" };
@@ -245,6 +245,9 @@ class ChatInput extends LitElement {
   #vimOn = false;
   #editable = new Compartment();
   #editableOn = false;
+  // The empty box's words, in a compartment: they name a picked expert (placeholderOf).
+  #placeholder = new Compartment();
+  #placeholderText = "";
   // The Send/Stop button ignores clicks for a moment after it changes role, so a click
   // aimed at Send does not land on the freshly-appeared Stop, and vice versa.
   #pendingWas = false;
@@ -267,7 +270,7 @@ class ChatInput extends LitElement {
       paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       this.#editable.of(EditorView.editable.of(this.#editableOn)),
       editorTheme,
-      placeholder("Ask about your library…"),
+      this.#placeholder.of(placeholder((this.#placeholderText = placeholderOf(this.#actor.snapshot?.context)))),
       EditorView.updateListener.of(this.#onUpdate),
       // `:tab split` typed in this box (the "tab" Ex command above).
       EditorView.domEventHandlers({
@@ -364,6 +367,11 @@ class ChatInput extends LitElement {
       if (editableOn !== this.#editableOn) {
         this.#editableOn = editableOn;
         this.#view.dispatch({ effects: this.#editable.reconfigure(EditorView.editable.of(editableOn)) });
+      }
+      const words = placeholderOf(snapshot.context);
+      if (words !== this.#placeholderText) {
+        this.#placeholderText = words;
+        this.#view.dispatch({ effects: this.#placeholder.reconfigure(placeholder(words)) });
       }
     }
     if (snapshot && snapshot.context.focusRequest !== this.#focusSeen) {

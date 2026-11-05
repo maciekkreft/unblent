@@ -118,3 +118,34 @@ test("following a lookup's link keeps the chat, and only for the change to what 
     unwire();
   }
 });
+
+// The experts shelf with the box below it, real machines on the real bus: a spine picked
+// in the thread reaches chat-input as expert.picked, and the new chat's start holds the
+// expert's prompt. The thread's own asks of flags, experts and books are faked.
+test("an expert picked on the shelf joins the new chat's start", async () => {
+  const BOOK = U("B1");
+  const shelfAsk = (target, name) => {
+    if (target === "flags") return Promise.resolve({ off: [], hidden: [] });
+    if (target === "experts") return Promise.resolve({ experts: [{ id: BOOK, prompt: "Talk plainly about Stoicism.", on: true, version: 1 }] });
+    if (target === "books") return Promise.resolve({ books: [{ id: BOOK, title: "Meditations" }] });
+    if (target === "conversations" && name === "open") return Promise.resolve({ id: null });
+    return Promise.resolve({ error: "no-answerer" });
+  };
+  let n = 0;
+  const { actors, unwire } = await wire(["chat-thread", "chat-input"], {
+    "chat-thread": { ask: shelfAsk },
+    "chat-input": { mint: () => U("M" + String(n++).padStart(1, "0")) },
+  });
+  const submitted = [];
+  actors["chat-input"].on("turn.submitted", (e) => submitted.push(e));
+  try {
+    await until(() => actors["chat-thread"].getSnapshot().context.books != null && actors["chat-input"].getSnapshot().matches("ready"));
+    actors["chat-thread"].send({ type: "_pick", book: BOOK });
+    await until(() => actors["chat-input"].getSnapshot().context.expert?.book === BOOK);
+    actors["chat-input"].send({ type: "_send", text: "Where do I start?" });
+    await until(() => submitted.length === 1);
+    assert.ok(submitted[0].start.endsWith('You also speak as an expert on the book "Meditations":\nTalk plainly about Stoicism.'));
+  } finally {
+    unwire();
+  }
+});

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, draftKey, startText, inputState, pendingTurn, canContinue, retryText, sendable, canSend, sendLabel } from "../machine.js";
+import { machine, draftKey, startText, inputState, pendingTurn, canContinue, retryText, sendable, canSend, sendLabel, placeholderOf } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -456,4 +456,50 @@ test("the stage's box takes the chat load names, ignores the panel's, and :q clo
   assert.deepEqual(emittedOf(h, "conversation.staged"), [], "it is on the stage already");
   h.actor.send({ type: "_quit" });
   assert.deepEqual(emittedOf(h, "conversation.closed").map((e) => e.id), [CHAT]);
+});
+
+// The expert picked on the shelf above a new chat (chat-thread's expert.picked).
+const EXPERT = { book: "01HQ8ZK7M4N5P6Q7R8S9T0V1B1", title: "Meditations", prompt: "Talk plainly about Stoicism." };
+
+test("the start adds the picked expert's prompt after everything else, and is unchanged without one", () => {
+  const subject = { kind: "book", id: "b1", title: "A Book", view: "book-reader" };
+  assert.equal(startText(subject, null), startText(subject));
+  assert.equal(startText(subject, EXPERT), `${startText(subject)}\n\nYou also speak as an expert on the book "Meditations":\nTalk plainly about Stoicism.`);
+  assert.equal(startText(null, EXPERT), `${startText(null)}\n\nYou also speak as an expert on the book "Meditations":\nTalk plainly about Stoicism.`);
+});
+
+test("a picked expert joins the new chat's start, names itself in the empty box, and is kept for that chat only", async () => {
+  const h = start({ subject: { kind: "book", id: "b1", title: "A Book", view: "book-reader" } });
+  await ready(h);
+  assert.equal(placeholderOf(h.actor.getSnapshot().context), "Ask about your library…");
+  h.actor.send({ type: "expert.picked", expert: EXPERT });
+  assert.equal(placeholderOf(h.actor.getSnapshot().context), "Ask the expert on Meditations…");
+  h.actor.send({ type: "_send", text: "hi" });
+  await flush();
+  assert.ok(emittedOf(h, "turn.submitted").at(-1).start.endsWith('expert on the book "Meditations":\nTalk plainly about Stoicism.'));
+  assert.equal(h.actor.getSnapshot().context.expert, null, "sent, the pick is used up");
+  h.actor.stop();
+});
+
+test("No expert, another chat, or another thing in front clears the pick; the stage's box keeps none", async () => {
+  const h = start({ subject: { kind: "book", id: "b1", title: "A Book", view: "book-reader" } });
+  await ready(h);
+  const expert = () => h.actor.getSnapshot().context.expert;
+  h.actor.send({ type: "expert.picked", expert: EXPERT });
+  h.actor.send({ type: "expert.picked", expert: null });
+  assert.equal(expert(), null, "No expert");
+  h.actor.send({ type: "expert.picked", expert: EXPERT });
+  h.actor.send({ type: "subject.changed", subject: { kind: "book", id: "b1", title: "A Book", view: "book-reader", chapter: "c2", chapterTitle: "Two" } });
+  assert.deepEqual(expert(), EXPERT, "another chapter of the same book keeps it");
+  h.actor.send({ type: "subject.changed", subject: { kind: "book", id: "b2", title: "Next", view: "book-reader" } });
+  assert.equal(expert(), null, "another book clears it");
+  h.actor.send({ type: "expert.picked", expert: EXPERT });
+  h.actor.send({ type: "conversation.opened", id: null });
+  assert.equal(expert(), null, "another chat clears it");
+  h.actor.stop();
+  const stage = start({ staged: true });
+  await ready(stage);
+  stage.actor.send({ type: "expert.picked", expert: EXPERT });
+  assert.equal(stage.actor.getSnapshot().context.expert, null);
+  stage.actor.stop();
 });

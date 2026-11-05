@@ -291,6 +291,7 @@ export const machine = setup({
       "conversation.staged": "chats",
       "conversation.closed": "chats",
       "expert.edited": "chats",
+      "expert.picked": "chats",
       "lookup.followed": "chats",
       "evaluator.saved": "evaluators",
       "evaluator.opened": "evaluators",

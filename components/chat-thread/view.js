@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords, openingOf } from "./machine.js";
+import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords, openingOf, shelfOf, spineOf } from "./machine.js";
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
@@ -13,6 +13,7 @@ import chapterSelected from "./events/chapter.selected.json" with { type: "json"
 import bookSelected from "./events/book.selected.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
 import lookupFollowed from "./events/lookup.followed.json" with { type: "json" };
+import expertPicked from "./events/expert.picked.json" with { type: "json" };
 import load from "./commands/load.json" with { type: "json" };
 
 // The gap between a passage's last line and the comment box under it, in px; the box is
@@ -21,6 +22,23 @@ const POPOVER_GAP = 6;
 // How long a finger's selection must stay still before its comment box opens: a touch
 // selection is adjusted with handles that send no pointer events, only selection changes.
 const TOUCH_SETTLE_MS = 700;
+
+// Whether the experts shelf is folded, kept in this browser (3.1) under the component's
+// name; losing it only opens the shelf again. Wrapped, so a browser refusing storage
+// reads it open and drops the write.
+const FOLDED_KEY = "chat-thread.experts-folded";
+const readFolded = () => {
+  try {
+    return localStorage.getItem(FOLDED_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+const writeFolded = (folded) => {
+  try {
+    localStorage.setItem(FOLDED_KEY, folded ? "1" : "0");
+  } catch {}
+};
 
 // The comments of an answer, numbered in reading order; its highlights carry no number.
 const numberedOf = (marking) => (marking.highlights ? marking.list.filter((m) => !marking.highlights.has(m.id)) : marking.list);
@@ -45,7 +63,7 @@ class ActorController {
         // Parsed by the time hostConnected runs, so the actor is born knowing it.
         staged: this.host.hasAttribute("stage"),
       },
-      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked, "conversation.staged": staged, "note.staged": noteStaged, "day.selected": daySelected, "chapter.selected": chapterSelected, "book.selected": bookSelected, "passage.selected": passageSelected, "lookup.followed": lookupFollowed },
+      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked, "conversation.staged": staged, "note.staged": noteStaged, "day.selected": daySelected, "chapter.selected": chapterSelected, "book.selected": bookSelected, "passage.selected": passageSelected, "lookup.followed": lookupFollowed, "expert.picked": expertPicked },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -118,6 +136,123 @@ class ChatThread extends LitElement {
     }
     :host([height="fill"]) {
       flex: 1;
+    }
+    /* The experts shelf above a new chat: a heading that folds it, and the spines standing
+       on a shelf line, each title running up its spine. The picked one is lifted and ringed
+       in the accent; No expert is a dashed neutral spine. */
+    .experts {
+      flex: none;
+      border-bottom: var(--border-width) solid var(--color-border);
+      padding: var(--space-xs) var(--space-md) var(--space-sm);
+    }
+    .ex-head {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+      appearance: none;
+      border: 0;
+      background: none;
+      padding: var(--space-2xs) 0;
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--text-caption);
+      line-height: var(--leading-normal);
+      color: var(--color-body-mid);
+      width: 100%;
+      text-align: left;
+      border-radius: var(--radius-sm);
+    }
+    .ex-head:hover {
+      color: var(--color-ink);
+    }
+    .ex-head:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .ex-head svg {
+      display: block;
+      transition: transform var(--duration-fast) var(--ease);
+    }
+    .ex-head[aria-expanded="true"] svg {
+      transform: rotate(90deg);
+    }
+    .ex-head .chosen {
+      color: var(--color-ink);
+      margin-left: var(--space-2xs);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ex-row {
+      display: flex;
+      gap: var(--space-xs);
+      align-items: flex-end;
+      overflow-x: auto;
+      min-height: calc(var(--space-2xl) + var(--space-xl) + var(--space-md) - var(--space-2xs));
+      padding: var(--space-sm) var(--space-2xs) 0;
+      border-bottom: calc(var(--border-width) * 3) solid var(--color-border-strong);
+    }
+    .ex {
+      flex: none;
+      appearance: none;
+      width: calc(var(--space-lg) + var(--space-sm) + var(--space-2xs));
+      height: calc(var(--space-2xl) + var(--space-lg) + var(--space-xs));
+      border: 0;
+      padding: var(--space-sm) 0;
+      border-radius: var(--radius-sm) var(--radius-sm) var(--space-2xs) var(--space-2xs);
+      cursor: pointer;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      font: inherit;
+      font-size: calc(var(--text-caption) - var(--space-2xs));
+      font-weight: var(--weight-semibold);
+      line-height: var(--leading-tight);
+      /* Dark text in both schemes: on every feature colour it reads far better than white. */
+      color: light-dark(var(--color-ink), var(--color-canvas));
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: transform var(--duration-fast) var(--ease);
+    }
+    .ex.h1 {
+      height: calc(var(--space-2xl) + var(--space-lg) + var(--space-xs) + var(--space-2xs) * 3);
+    }
+    .ex.h2 {
+      height: calc(var(--space-2xl) + var(--space-lg) + var(--space-xs) + var(--space-2xs) * 5);
+    }
+    .ex.h3 {
+      height: calc(var(--space-2xl) + var(--space-lg) + var(--space-xs) + var(--space-2xs) * 8);
+    }
+    .ex.c0 { background: var(--color-feature-journal); }
+    .ex.c1 { background: var(--color-feature-reading); }
+    .ex.c2 { background: var(--color-feature-highlights); }
+    .ex.c3 { background: var(--color-feature-notes); }
+    .ex.c4 { background: var(--color-feature-chats); }
+    .ex.c5 { background: var(--color-feature-evaluators); }
+    .ex.c6 { background: var(--color-feature-choice); }
+    .ex.c7 { background: var(--color-feature-values); }
+    .ex.none {
+      height: calc(var(--space-2xl) + var(--space-lg) - var(--space-2xs));
+      background: var(--color-canvas-soft);
+      color: var(--color-body-mid);
+      border: var(--border-width) dashed var(--color-border-strong);
+      font-weight: var(--weight-normal);
+    }
+    .ex:hover,
+    .ex[aria-pressed="true"] {
+      transform: rotate(180deg) translateY(var(--space-sm));
+    }
+    .ex[aria-pressed="true"] {
+      box-shadow: 0 0 0 var(--space-2xs) var(--color-canvas), 0 0 0 var(--space-xs) var(--color-accent);
+    }
+    .ex:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .ex[aria-pressed="true"]:focus-visible {
+      box-shadow: 0 0 0 var(--space-2xs) var(--color-canvas), 0 0 0 var(--space-xs) var(--color-accent);
     }
     /* The header: the chapter label at the left. */
     /* Open on stage: muted, accent while the chat has a tab on the stage, as the note
@@ -835,9 +970,79 @@ class ChatThread extends LitElement {
     else super.focus(options);
   }
 
+  // The experts shelf (machine.js: shelfOf decides whether it shows and what is picked).
+  #folded = readFolded();
+
+  #fold() {
+    this.#folded = !this.#folded;
+    writeFolded(this.#folded);
+    this.requestUpdate();
+  }
+
+  // A pick lands the keyboard in the box below, where the first question is typed.
+  #pick(book) {
+    this.#actor.send({ type: "_pick", book });
+    this.#box()?.focus();
+  }
+
+  // The spines are one stop of Tab (the picked one); the arrows, and h and l with Vim keys,
+  // move along them, never past either end (12, "Vim keys").
+  #shelfKey(event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const vim = this.#actor.snapshot?.context.vimKeys === true;
+    const step = { ArrowLeft: -1, ArrowRight: 1, ...(vim ? { h: -1, l: 1 } : {}) }[event.key];
+    if (!step) return;
+    const spines = [...event.currentTarget.querySelectorAll(".ex")];
+    const at = spines.indexOf(this.renderRoot.activeElement);
+    if (at < 0) return;
+    event.preventDefault();
+    spines[Math.max(0, Math.min(spines.length - 1, at + step))].focus();
+  }
+
+  #shelf(snapshot) {
+    const shelf = snapshot ? shelfOf(snapshot) : null;
+    if (!shelf) return nothing;
+    const picked = shelf.items.find((x) => x.book === shelf.picked) ?? null;
+    return html`<div class="experts">
+      <button class="ex-head" type="button" aria-expanded=${this.#folded ? "false" : "true"} aria-controls="ex-row" @click=${() => this.#fold()}>
+        ${icon("caret-right")}Book experts${picked ? html`<span class="chosen">· ${picked.title}</span>` : nothing}
+      </button>
+      ${this.#folded
+        ? nothing
+        : html`<div class="ex-row" id="ex-row" role="group" aria-label="Book experts" @keydown=${(e) => this.#shelfKey(e)}>
+            <button
+              class="ex none"
+              type="button"
+              aria-pressed=${picked ? "false" : "true"}
+              aria-label="No expert, a plain chat"
+              tabindex=${picked ? "-1" : "0"}
+              @click=${() => this.#pick(null)}
+            >
+              No expert
+            </button>
+            ${shelf.items.map((x) => {
+              const spine = spineOf(x.book, x.title);
+              const on = x.book === shelf.picked;
+              return html`<button
+                class=${`ex c${spine.colour}${spine.height ? ` h${spine.height}` : ""}`}
+                type="button"
+                aria-pressed=${on ? "true" : "false"}
+                aria-label=${`Expert on ${x.title}`}
+                title=${x.title}
+                tabindex=${on ? "0" : "-1"}
+                @click=${() => this.#pick(x.book)}
+              >
+                ${x.title}
+              </button>`;
+            })}
+          </div>`}
+    </div>`;
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     return html`
+      ${this.#shelf(snapshot)}
       ${this.#header(snapshot)}
       <div class="frame">
         <div

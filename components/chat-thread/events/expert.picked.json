@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user picked an expert on the shelf above a new chat, or No expert (null). The pick holds for that new chat only: its prompt joins the chat's start.",
+  "type": "object",
+  "properties": {
+    "expert": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "book": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The id of the book the expert is on."
+            },
+            "title": {
+              "type": "string",
+              "description": "The book's title."
+            },
+            "prompt": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The expert's prompt."
+            }
+          },
+          "required": [
+            "book",
+            "title",
+            "prompt"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": [
+    "expert"
+  ],
+  "additionalProperties": false
+}
