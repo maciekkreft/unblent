@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote, slipBoxShown } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote, slipBoxShown, canRead, wordAt } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -77,6 +77,42 @@ const PENDING = "reader-pending";
 const LINE_SCAN = 4000;
 // One line holds two characters whose boxes share the column and overlap by more than
 // half their height; a fraction, not a length (7.4).
+// Reading aloud: the names of the spoken word's paint in the highlight registry, and a
+// moment of silence the one audio element plays at the press that starts reading, so a
+// browser that lets audio play only after a press lets the clips that follow play too.
+const SPOKEN = "reader-spoken";
+const SILENCE = (() => {
+  const bytes = new Uint8Array(46);
+  const view = new DataView(bytes.buffer);
+  const ascii = (at, text) => [...text].forEach((c, i) => (bytes[at + i] = c.charCodeAt(0)));
+  ascii(0, "RIFF");
+  view.setUint32(4, 38, true);
+  ascii(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true);
+  view.setUint32(28, 8000, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  ascii(36, "data");
+  view.setUint32(40, 2, true);
+  bytes[44] = 128;
+  bytes[45] = 128;
+  return `data:audio/wav;base64,${btoa(String.fromCharCode(...bytes))}`;
+})();
+// What reading aloud is doing, from the actor's state: idle, reading (also while the next
+// clip is fetched) or paused (also when Pause came before the clip did).
+const speechMode = (snapshot) => {
+  if (!snapshot?.matches({ reading: "ready" })) return "idle";
+  const speech = snapshot.context.speech;
+  if (snapshot.matches({ reading: { ready: { speech: "idle" } } }) || !speech) return "idle";
+  if (snapshot.matches({ reading: { ready: { speech: { speaking: "paused" } } } })) return "paused";
+  if (snapshot.matches({ reading: { ready: { speech: "loading" } } }) && speech.held) return "paused";
+  return "reading";
+};
+// A block a voice can read: one with words in it, not a picture, a table or a listing.
+const speakable = (el) => Boolean(el) && !el.matches("figure, table, pre, hr, img") && el.textContent.trim() !== "";
 const sameLine = (a, b) => a.col === b.col && Math.abs(a.top - b.top) < Math.min(a.height, b.height) / 2;
 
 class BookReader extends LitElement {
@@ -140,7 +176,9 @@ class BookReader extends LitElement {
       height: 100%;
       width: 100%;
       max-width: calc(var(--space-2xl) * 11);
-      padding-inline: var(--space-lg);
+      /* The side margin, which the reading-aloud speaker sits in (.say). */
+      --gutter: var(--space-lg);
+      padding-inline: var(--gutter);
       box-sizing: border-box;
       overflow: hidden;
       isolation: isolate;
@@ -202,7 +240,8 @@ class BookReader extends LitElement {
     }
     @media (prefers-reduced-motion: reduce) {
       .strip,
-      .cursor {
+      .cursor,
+      .say {
         transition: none;
         animation: none;
       }
@@ -238,7 +277,7 @@ class BookReader extends LitElement {
        does not fill a column that holds five words a line. */
     @container reader (width < 45rem) {
       .page {
-        padding-inline: var(--space-md);
+        --gutter: var(--space-md);
       }
       .strip :is(h1, h2) {
         font-size: var(--text-subtitle);
@@ -304,6 +343,62 @@ class BookReader extends LitElement {
       color: var(--color-accent-text);
       border-radius: var(--radius-sm);
       pointer-events: none;
+    }
+    /* Reading aloud (3.1): the word being said, in the selection tone, through the Custom
+       Highlight API so the text never moves, and the paragraph being read tinted as a box
+       with a soft edge, a shadow and a background that add nothing to its size. */
+    ::highlight(reader-spoken) {
+      background-color: var(--color-accent-selection);
+    }
+    .strip > .speaking {
+      background: var(--color-accent-subtle);
+      box-shadow: 0 0 0 var(--space-xs) var(--color-accent-subtle);
+      border-radius: var(--radius-sm);
+    }
+    /* The speaker in the page's left margin, beside the paragraph under the mouse, and the
+       Stop in its place beside the paragraph being read. Placed in JS on the paragraph's
+       first line on this page, and slid with the strip, as the cursor is; inside the
+       page's padding, so the text never moves. A finger has no hover: the footer's Read
+       page is the way in on a phone. */
+    .say {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--sx, 0) calc(var(--sy, 0) + var(--space-2xs));
+      transform: translateX(calc(-1 * var(--page, 0) * (100cqw + var(--space-xl))));
+      transition: transform var(--duration-slide) var(--ease);
+      z-index: 1;
+      width: var(--gutter);
+      height: var(--space-lg);
+      display: grid;
+      place-items: center;
+      appearance: none;
+      border: 0;
+      background: none;
+      padding: 0;
+      cursor: pointer;
+      color: var(--color-body-mid);
+      font-size: var(--text-body);
+      border-radius: var(--radius-sm);
+    }
+    .say:hover,
+    .say.stop {
+      color: var(--color-accent);
+    }
+    .say:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .say svg {
+      display: block;
+    }
+    .say[hidden] {
+      display: none;
+    }
+    @media (hover: none) {
+      .say {
+        display: none;
+      }
     }
     .strip mark.commented {
       box-shadow: inset 0 calc(-1 * var(--border-width)) 0 var(--color-accent);
@@ -527,6 +622,38 @@ class BookReader extends LitElement {
     }
     .footer .pageno {
       flex: none;
+    }
+    /* Read page, and while anything is read Pause or Resume and Stop, before the page
+       number. */
+    .footer .speakctl {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    .speak {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      appearance: none;
+      border: 0;
+      background: none;
+      padding: 0 var(--space-2xs);
+      cursor: pointer;
+      font: inherit;
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+      border-radius: var(--radius-sm);
+    }
+    .speak:hover {
+      color: var(--color-ink);
+    }
+    .speak:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .speak svg {
+      display: block;
     }
     .footer .turns {
       flex: none;
@@ -811,6 +938,11 @@ class BookReader extends LitElement {
     this.#visual = null;
     this.#pending = null;
     this.#paintCursor();
+    cancelAnimationFrame(this.#speechRaf);
+    this.#speechRaf = 0;
+    this.#clipLoaded = false;
+    this.#audio?.pause();
+    globalThis.CSS?.highlights?.delete(SPOKEN);
     super.disconnectedCallback();
   }
 
@@ -854,6 +986,8 @@ class BookReader extends LitElement {
     // The cursor and a highlight in progress were counted in the old fragment's text.
     this.#forgetCursor();
     this.#dropPending();
+    this.#hush();
+    this.#hovered = null;
     this.#figure = null;
     this.#strip.replaceChildren();
     // A fresh fragment starts at its first page at once, with no transform transition: a
@@ -1334,7 +1468,8 @@ class BookReader extends LitElement {
       else if (key === "d" && !this.#visual) {
         if (dHeld) this.#removeAtCursor();
         else this.#dAt = Date.now();
-      } else if (key === "Enter" && this.#visual) this.#endVisual(true);
+      } else if ((key === "r" || key === "R") && !this.#visual && canRead(this.#actor.snapshot.context)) this.#readAtCursor(key === "R");
+      else if (key === "Enter" && this.#visual) this.#endVisual(true);
       else if (key === "Escape" && this.#visual) this.#endVisual(false);
       else return false;
     }
@@ -1443,6 +1578,229 @@ class BookReader extends LitElement {
     this.#endSettle();
     this.#cursor = null;
     this.#turn(page);
+  }
+
+  // --- Reading aloud (3.1) ------------------------------------------------------------
+  //
+  // The actor decides what is read and when each block ends; the view plays the clip it
+  // is handed on one audio element, lights the word being said, tints its block and
+  // places the margin speaker. The block under the mouse, the clip loaded, and the word
+  // last lit are the view's own UI state (3.1).
+  #audio = null;
+  #clipN = 0;
+  #clipLoaded = false;
+  #words = [];
+  #hovered = null;
+  #lit = null;
+  #speechRaf = 0;
+  #lastNotice = 0;
+
+  #player() {
+    if (!this.#audio) {
+      const audio = new Audio();
+      audio.addEventListener("ended", () => {
+        if (this.#clipLoaded) this.#actor.send({ type: "_spoken", n: this.#clipN });
+      });
+      this.#audio = audio;
+    }
+    return this.#audio;
+  }
+
+  // A browser that refuses to play without a press ends the reading quietly; a play cut
+  // short by a pause or the next clip is no refusal.
+  #play(audio) {
+    audio.play().catch((e) => {
+      if (e?.name === "NotAllowedError" && this.#clipLoaded) this.#actor.send({ type: "_hush" });
+    });
+  }
+
+  // The press that starts reading plays a moment of silence on the audio element at
+  // once, inside the press, which is what lets the clips that arrive later play.
+  #say(items) {
+    const context = this.#actor.snapshot?.context;
+    if (!context || !canRead(context) || !items.length) return;
+    const audio = this.#player();
+    this.#clipLoaded = false;
+    audio.src = SILENCE;
+    this.#play(audio);
+    this.#actor.send({ type: "_say", blocks: items });
+  }
+
+  // The blocks to read, each with its text exactly as the page counts it, so the voice's
+  // character offsets fall on the page's own text; the top block of the page, when it
+  // runs in from the page before, from where this page starts.
+  #items(blocks, top = null, start = 0) {
+    const texts = this.#blockTexts();
+    return blocks
+      .filter((b) => speakable(this.#strip.children[b]))
+      .map((b) => (b === top && start > 0 ? { block: b, text: texts[b].slice(start), start } : { block: b, text: texts[b], start: 0 }));
+  }
+
+  // The blocks from one on to the last that starts on the page shown.
+  #toPageEnd(from) {
+    const out = [];
+    for (let b = from; b < this.#pageOf.length && (b === from || this.#pageOf[b] <= this.#page); b += 1) out.push(b);
+    return out;
+  }
+
+  #readPage() {
+    const top = this.#topBlock(this.#page);
+    const start = this.#anchor.block === top ? this.#anchor.offset : 0;
+    this.#say(this.#items(this.#toPageEnd(top), top, start));
+  }
+
+  // r reads the paragraph holding the Vim cursor, R the page from it.
+  #readAtCursor(page) {
+    if (this.#cursor == null) return;
+    const chapter = this.#chapterText();
+    const [from] = textObject(chapter, this.#cursor, "p");
+    const { block } = pointAt(chapter, from);
+    this.#say(this.#items(page ? this.#toPageEnd(block) : [block]));
+  }
+
+  #hush() {
+    if (speechMode(this.#actor.snapshot) !== "idle") this.#actor.send({ type: "_hush" });
+  }
+
+  #pauseOrResume() {
+    const mode = speechMode(this.#actor.snapshot);
+    if (mode === "reading") this.#actor.send({ type: "_pause" });
+    else if (mode === "paused") this.#actor.send({ type: "_resume" });
+  }
+
+  // The audio element follows the actor: a new clip is loaded and played once, Pause and
+  // Resume pause and play it, and the end of reading silences it.
+  #syncSpeech(force = false) {
+    const snapshot = this.#actor.snapshot;
+    const mode = speechMode(snapshot);
+    const clip = mode === "idle" ? null : snapshot.context.speech.clip;
+    if (mode === "idle") {
+      if (this.#clipLoaded) this.#audio.pause();
+      this.#clipLoaded = false;
+    } else if (clip && clip.n !== this.#clipN) {
+      this.#clipN = clip.n;
+      this.#clipLoaded = true;
+      this.#words = clip.words;
+      const audio = this.#player();
+      audio.src = `data:${clip.mime};base64,${clip.audio}`;
+      if (mode === "reading") this.#play(audio);
+    } else if (clip && this.#clipLoaded) {
+      if (mode === "reading" && this.#audio.paused && !this.#audio.ended) this.#play(this.#audio);
+      else if (mode === "paused" && !this.#audio.paused) this.#audio.pause();
+    }
+    this.#paintSpeech(force);
+    if (mode === "reading" && this.#clipLoaded && !this.#speechRaf) this.#speechRaf = requestAnimationFrame(this.#tickSpeech);
+  }
+
+  #tickSpeech = () => {
+    this.#speechRaf = 0;
+    if (speechMode(this.#actor.snapshot) !== "reading" || !this.#clipLoaded) return;
+    this.#paintSpeech();
+    this.#speechRaf = requestAnimationFrame(this.#tickSpeech);
+  };
+
+  // A block's characters [from, to) as a DOM range, through the text nodes its places
+  // are counted in.
+  #blockRange(block, from, to) {
+    const nodes = this.#textNodes(block);
+    const at = (i) => {
+      for (let k = nodes.length - 1; k >= 0; k -= 1) {
+        if (nodes[k].start <= i) return { node: nodes[k].node, offset: Math.min(i - nodes[k].start, nodes[k].node.data.length) };
+      }
+      return null;
+    };
+    const a = at(from);
+    const b = at(to);
+    if (!a || !b) return null;
+    const range = document.createRange();
+    range.setStart(a.node, a.offset);
+    range.setEnd(b.node, b.offset);
+    return range;
+  }
+
+  // The block being read tinted, and the word being said lit, by the clip's own clock.
+  // `force` paints again after the marks were rebuilt, which moves the text nodes.
+  #paintSpeech(force = false) {
+    const snapshot = this.#actor.snapshot;
+    const speech = speechMode(snapshot) === "idle" ? null : snapshot.context.speech;
+    const item = speech?.queue[speech.at] ?? null;
+    const target = item ? this.#strip.children[item.block] : null;
+    let word = -1;
+    if (item && this.#clipLoaded && speech.clip?.n === this.#clipN) word = wordAt(this.#words, this.#audio.currentTime);
+    const key = item ? `${this.#clipN}:${item.block}:${word}` : null;
+    if (!force && key === this.#lit) return;
+    this.#lit = key;
+    for (const el of this.#strip.querySelectorAll(":scope > .speaking")) if (el !== target) el.classList.remove("speaking");
+    target?.classList.add("speaking");
+    const registry = globalThis.CSS?.highlights;
+    if (registry) {
+      const w = word >= 0 ? this.#words[word] : null;
+      const range = w ? this.#blockRange(item.block, item.start + w.from, item.start + w.to) : null;
+      // A new Highlight every time, as the cursor's passage (#paintCursor), for Safari.
+      if (range) registry.set(SPOKEN, new Highlight(range));
+      else registry.delete(SPOKEN);
+      this.#strip.classList.toggle("repaint");
+    }
+    this.#placeSay();
+  }
+
+  // The margin speaker beside the block under the mouse, and Stop beside the block being
+  // read, each on that block's first line on the page shown.
+  #placeSay() {
+    const snapshot = this.#actor.snapshot;
+    const speech = speechMode(snapshot) === "idle" ? null : snapshot.context.speech;
+    const reading = speech?.queue[speech.at]?.block ?? null;
+    this.#placeAt(this.renderRoot?.querySelector(".say.stop"), reading);
+    this.#placeAt(this.renderRoot?.querySelector(".say.read"), this.#hovered === reading ? null : this.#hovered);
+  }
+
+  #placeAt(button, block) {
+    if (!button) return;
+    const el = block == null ? null : this.#strip.children[block];
+    let line = null;
+    if (el) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      line = [...range.getClientRects()].find((r) => (r.width > 0 || r.height > 0) && this.#columnOf(r) === this.#page) ?? null;
+    }
+    if (!line) {
+      button.hidden = true;
+      return;
+    }
+    const strip = this.#strip;
+    const box = strip.getBoundingClientRect();
+    const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
+    button.hidden = false;
+    // The page's left edge in the strip's own frame: the button slides with --page, as
+    // the strip does, so it is placed on the page's column and the slide brings it home.
+    button.style.setProperty("--sx", `${strip.offsetLeft + this.#page * (box.width + gap) - button.offsetWidth}px`);
+    button.style.setProperty("--sy", `${strip.offsetTop + line.top - box.top}px`);
+    if (button.style.getPropertyValue("--page") !== String(this.#page)) {
+      button.style.transition = "none";
+      button.style.setProperty("--page", this.#page);
+      void button.offsetWidth;
+      button.style.transition = "";
+    }
+    button.dataset.block = block;
+  }
+
+  // The block under the mouse, for the margin speaker; the speaker itself keeps it.
+  #hover(e) {
+    if (e.pointerType !== "mouse" || !canRead(this.#actor.snapshot?.context ?? {})) return;
+    const target = e.composedPath()[0];
+    if (target?.closest?.(".say")) return;
+    let el = target?.nodeType === 1 ? target : target?.parentElement;
+    while (el && el.parentNode !== this.#strip) el = el.parentElement;
+    const block = el && speakable(el) ? [...this.#strip.children].indexOf(el) : null;
+    if (block === this.#hovered) return;
+    this.#hovered = block;
+    this.#placeSay();
+  }
+
+  #unhover() {
+    if (this.#hovered == null) return;
+    this.#hovered = null;
+    this.#placeSay();
   }
 
   // Open the bubble on a highlight (session 3): its own UI state, so a normal mark click
@@ -1696,7 +2054,7 @@ class BookReader extends LitElement {
   #place(page, animate) {
     if (animate && this.#strip.style.getPropertyValue("--page") !== String(page)) this.#startSlide();
     // The cursor slides with the text it sits on, the same distance at the same time.
-    const moving = [this.#strip, this.renderRoot?.querySelector(".cursor")].filter(Boolean);
+    const moving = [this.#strip, this.renderRoot?.querySelector(".cursor"), ...(this.renderRoot?.querySelectorAll(".say") ?? [])].filter(Boolean);
     for (const el of moving) {
       if (!animate) el.style.transition = "none";
       el.style.setProperty("--page", page);
@@ -1719,11 +2077,14 @@ class BookReader extends LitElement {
     this.requestUpdate();
     this.#actor.send({ type: "_settled", chapter: this.#chapter, block: this.#anchor.block });
     this.#paintCursor();
+    this.#placeSay();
   }
 
   // A turn: the anchor becomes the top of the page turned to.
   #turn(page) {
     this.#dropPending();
+    // A page turned ends reading aloud: what is read is the page shown.
+    this.#hush();
     this.#anchor = this.#anchorOnPage(Math.max(0, Math.min(this.#pages - 1, page)));
     this.#show(page);
   }
@@ -1824,6 +2185,13 @@ class BookReader extends LitElement {
       return;
     }
     if (this.#commandLine(e)) return;
+    // While anything is read aloud Space pauses and resumes it, before Space turns a page.
+    if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey && speechMode(this.#actor.snapshot) !== "idle") {
+      e.preventDefault();
+      e.stopPropagation();
+      this.#pauseOrResume();
+      return;
+    }
     if (this.#vimKey(e)) return;
     if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
       e.preventDefault();
@@ -1851,6 +2219,10 @@ class BookReader extends LitElement {
       e.preventDefault();
       e.stopPropagation();
       this.#dropPending();
+    } else if (e.key === "Escape" && speechMode(this.#actor.snapshot) !== "idle") {
+      e.preventDefault();
+      e.stopPropagation();
+      this.#hush();
     }
   }
 
@@ -1877,6 +2249,7 @@ class BookReader extends LitElement {
   }
 
   #pointermove(e) {
+    this.#hover(e);
     const d = this.#drag;
     if (!d || d.abandoned || e.pointerId !== d.pointerId) return;
     const dx = e.clientX - d.x0;
@@ -1963,12 +2336,16 @@ class BookReader extends LitElement {
         this.#lastHtml = null;
         this.#lastHighlightKey = null;
       }
+      this.#syncSpeech();
       return;
     }
     // While a chapter is fetched the actor already names it but still holds the old
     // fragment; the page keeps showing the old chapter, whole, until the new one lands,
     // rather than the old text under the new title.
-    if (!snapshot.matches({ reading: "ready" })) return;
+    if (!snapshot.matches({ reading: "ready" })) {
+      this.#syncSpeech();
+      return;
+    }
     const { html: htmlText, pending, chapter } = snapshot.context;
     const pendingKey = pending ? `${pending.chapter}:${pending.block}` : null;
     // A rebuilt fragment starts with no marks, so it must be repainted whatever the key.
@@ -2003,7 +2380,8 @@ class BookReader extends LitElement {
     // a saved, changed or removed highlight changes the key. Marks are inline, so painting
     // after the measure never shifts a column (Decision 4).
     const highlightKey = this.#highlightKey(snapshot);
-    if (rebuilt || highlightKey !== this.#lastHighlightKey) {
+    const repainted = rebuilt || highlightKey !== this.#lastHighlightKey;
+    if (repainted) {
       this.#paint();
       this.#lastHighlightKey = highlightKey;
     }
@@ -2041,6 +2419,14 @@ class BookReader extends LitElement {
       else this.#closeBubble();
     }
     if (this.#pending) this.#positionMake();
+    // Reading aloud follows the actor, painted after the marks, which move the text nodes.
+    this.#syncSpeech(repainted);
+    const notice = snapshot.context.notice;
+    if (notice && notice.n !== this.#lastNotice) {
+      this.#lastNotice = notice.n;
+      this.#why = notice.text;
+      this.#flashCopied("why");
+    }
   }
 
   // The bubble for the open highlight (session 3): Copy, Copy link, Add to note (while Slip-Box is shown) and Remove. Rendered inside .page so it is placed
@@ -2105,6 +2491,52 @@ class BookReader extends LitElement {
         <button class="act highlight" type="button" @click=${() => this.#makePending()}>Highlight</button>
       </div>
     `;
+  }
+
+  // The margin speaker and its Stop (placed in #placeAt). A press on either is never a
+  // page turn, and leaves the keyboard on the page.
+  #sayButtons(snapshot) {
+    if (!canRead(snapshot.context)) return nothing;
+    const keep = (e) => e.stopPropagation();
+    const still = (e) => e.preventDefault();
+    return html`<button
+        class="say read"
+        type="button"
+        hidden
+        aria-label="Read this paragraph aloud"
+        title="Read aloud"
+        @pointerdown=${keep}
+        @mousedown=${still}
+        @click=${() => this.#hovered != null && this.#say(this.#items([this.#hovered]))}
+      >
+        ${icon("speaker-high")}</button
+      ><button class="say stop" type="button" hidden aria-label="Stop reading" title="Stop" @pointerdown=${keep} @mousedown=${still} @click=${() => this.#hush()}>
+        ${icon("stop")}
+      </button>`;
+  }
+
+  // Read page, and while anything is read Pause or Resume and Stop (Norman: every control
+  // visible, the one that undoes the last beside it).
+  #speakControls(snapshot) {
+    if (!canRead(snapshot.context)) return nothing;
+    const mode = speechMode(snapshot);
+    const still = (e) => e.preventDefault();
+    if (mode === "idle")
+      return html`<span class="speakctl"
+        ><button class="speak page-read" type="button" @mousedown=${still} @click=${() => this.#readPage()}>${icon("speaker-high")}<span>Read page</span></button></span
+      >`;
+    return html`<span class="speakctl"
+      >${mode === "reading"
+        ? html`<button class="speak pause" type="button" @mousedown=${still} @click=${() => this.#pauseOrResume()}>${icon("pause")}<span>Pause</span></button>`
+        : html`<button class="speak resume" type="button" @mousedown=${still} @click=${() => this.#pauseOrResume()}>${icon("play")}<span>Resume</span></button>`}<button
+        class="speak stop"
+        type="button"
+        @mousedown=${still}
+        @click=${() => this.#hush()}
+      >
+        ${icon("stop")}<span>Stop</span>
+      </button></span
+    >`;
   }
 
   #command({ command, notACommand }) {
@@ -2393,10 +2825,11 @@ class BookReader extends LitElement {
           @pointerup=${(e) => this.#pointerup(e)}
           @pointercancel=${() => (this.#drag = null)}
         >
-          <div class="page"><span class="cursor" aria-hidden="true" hidden></span>${this.#bubble(snapshot)}${this.#makeButton()}</div>
+          <div class="page" @pointerleave=${() => this.#unhover()}><span class="cursor" aria-hidden="true" hidden></span>${this.#sayButtons(snapshot)}${this.#bubble(snapshot)}${this.#makeButton()}</div>
         </div>
         <div class="footer">
           <span class="chap">${title}</span>
+          ${this.#speakControls(snapshot)}
           <span class="pageno">Page ${this.#page + 1} of ${this.#pages}</span>
           <span class="turns">
             <button class="turn" type="button" aria-label="Previous page" ?disabled=${atFirst} @click=${() => this.#prev()}>

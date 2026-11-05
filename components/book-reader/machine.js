@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise, emit, enqueueActions, raise, cancel } from "xstate";
+import { setup, assign, fromPromise, emit, enqueueActions, raise, cancel, and, not, stateIn } from "xstate";
 
 // The view component that reads one book (8, kind 4): it owns only UI state — which
 // book and chapter it is showing, that chapter's fragment, a place it still owes the
@@ -516,6 +516,142 @@ const commandKey = enqueueActions(({ context, event, enqueue }) => {
   } else if (key.length === 1) enqueue.assign({ command: line + key });
 });
 
+// --- Reading aloud (3.1: the reading-aloud feature) ---------------------------------
+//
+// The reader reads a paragraph, or the page, aloud through `voice: speak`. The view
+// hands the blocks to read, each with its text exactly as #blockTexts gives it (and,
+// for a block running in from the page before, where on the page it starts), so the
+// character offsets the voice answers for each word line up with the page's text.
+
+// Whether Reading aloud shows (3.1): not until `flags` answers, and not on a page
+// without it, as slipBoxShown.
+export const readingShown = (hidden) => Array.isArray(hidden) && !hidden.includes("reading-aloud");
+
+// Whether the reader offers reading aloud: the feature shown and `voice` on the page,
+// having answered with a picture.
+export const canRead = (context) => readingShown(context.hidden) && context.voice != null;
+
+const isVoicePicture = (v) => (v?.here === "mac" || v?.here === "web") && typeof v.voice === "string" && Array.isArray(v.voices);
+const isClip = (r) => typeof r?.mime === "string" && typeof r.audio === "string" && Array.isArray(r.words);
+
+// What the footer says when the voice cannot read: what to do about it, where there is
+// something to do.
+export const speakMessage = (error) =>
+  error === "not-downloaded"
+    ? "Download the voice in Settings"
+    : error === "no-key"
+      ? "Add your Inworld key in Settings"
+      : "The voice is not available now";
+
+// The word being said at a time in the clip: the last one started by then, or -1 before
+// the first. Words come in order, so a gap between two keeps the one before lit.
+export const wordAt = (words, t) => {
+  let at = -1;
+  for (let i = 0; i < words.length; i += 1) {
+    if (words[i].start <= t) at = i;
+    else break;
+  }
+  return at;
+};
+
+// The blocks to read, cleaned: a block with no word to say (an empty block, white space)
+// is dropped, so the queue never asks the voice for nothing.
+const sayable = (blocks) =>
+  (Array.isArray(blocks) ? blocks : []).filter((b) => Number.isInteger(b?.block) && typeof b.text === "string" && b.text.trim() !== "");
+
+// The clip the view plays, with a nonce counted over every reading, so each clip is
+// played once; returned with the count, for one assign.
+const withClip = (context, reply, speech) => ({
+  said: context.said + 1,
+  speech: { ...speech, clip: { mime: reply.mime, audio: reply.audio, words: reply.words, n: context.said + 1 } },
+});
+
+// The voice's refusal, said over the footer once (a nonce, like reveal).
+const noticeOf = (context, error) => ({ text: speakMessage(error), n: (context.notice?.n ?? 0) + 1 });
+
+// Reading aloud, the second region of a page that shows (ready): idle; loading, while
+// the voice is asked for the block's audio; speaking, while it plays or is paused, with
+// the next block's audio asked for ahead. _say starts afresh from any of them; _hush,
+// sent on a page turn, a new fragment or Stop, ends it, and so does leaving the page.
+const SPEECH = {
+  initial: "idle",
+  on: {
+    _say: {
+      guard: ({ context, event }) => canRead(context) && sayable(event.blocks).length > 0,
+      target: ".loading",
+      reenter: true,
+      actions: assign({ speech: ({ event }) => ({ queue: sayable(event.blocks), at: 0, clip: null, ahead: null, held: false }) }),
+    },
+    _hush: { target: ".idle" },
+  },
+  states: {
+    idle: { entry: assign({ speech: null }) },
+    loading: {
+      invoke: {
+        src: "speak",
+        input: ({ context }) => ({ ask: context.ask, text: context.speech.queue[context.speech.at].text }),
+        onDone: [
+          {
+            guard: ({ event }) => isClip(event.output),
+            target: "speaking",
+            actions: assign(({ context, event }) => withClip(context, event.output, context.speech)),
+          },
+          { target: "idle", actions: assign({ notice: ({ context, event }) => noticeOf(context, event.output?.error) }) },
+        ],
+        onError: { target: "idle", actions: assign({ notice: ({ context }) => noticeOf(context, "unavailable") }) },
+      },
+      on: {
+        // Pause before the audio arrived: it waits, paused, once it comes.
+        _pause: { actions: assign({ speech: ({ context }) => ({ ...context.speech, held: true }) }) },
+        _resume: { actions: assign({ speech: ({ context }) => ({ ...context.speech, held: false }) }) },
+      },
+    },
+    speaking: {
+      initial: "playing",
+      invoke: {
+        src: "ahead",
+        input: ({ context }) => ({ ask: context.ask, text: context.speech.queue[context.speech.at + 1]?.text }),
+        onDone: {
+          guard: ({ event }) => isClip(event.output),
+          actions: assign({ speech: ({ context, event }) => ({ ...context.speech, ahead: { at: context.speech.at + 1, reply: event.output } }) }),
+        },
+        onError: { actions: [] },
+      },
+      on: {
+        // The view's clip ended: the next block, from the audio fetched ahead when it has
+        // come, else asked for now; after the last block, the reading is over.
+        _spoken: [
+          { guard: ({ context, event }) => event.n !== context.speech.clip?.n },
+          {
+            guard: ({ context }) => context.speech.at + 1 < context.speech.queue.length && context.speech.ahead?.at === context.speech.at + 1,
+            target: "speaking",
+            reenter: true,
+            actions: assign(({ context }) =>
+              withClip(context, context.speech.ahead.reply, { ...context.speech, at: context.speech.at + 1, ahead: null, held: false }),
+            ),
+          },
+          {
+            guard: ({ context }) => context.speech.at + 1 < context.speech.queue.length,
+            target: "loading",
+            actions: assign({ speech: ({ context }) => ({ ...context.speech, at: context.speech.at + 1, clip: null, ahead: null, held: false }) }),
+          },
+          { target: "idle" },
+        ],
+      },
+      states: {
+        playing: {
+          always: { guard: ({ context }) => context.speech.held, target: "paused" },
+          on: { _pause: "paused" },
+        },
+        paused: {
+          entry: assign({ speech: ({ context }) => ({ ...context.speech, held: false }) }),
+          on: { _resume: "playing" },
+        },
+      },
+    },
+  },
+};
+
 export const machine = setup({
   actors: {
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
@@ -540,6 +676,13 @@ export const machine = setup({
     // cannot find drops out; the survivor missing aborts the merge.
     // Which features are hidden (3.1); flags.changed is held until the reply lands.
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    // Whether `voice` is on the page and how it reads (3.1); voice.changed is held until
+    // the reply lands.
+    voice: fromPromise(({ input }) => input.ask("voice", "read", {})),
+    // One block's audio, and the next block's while one plays, so the reading runs on
+    // without a pause to fetch it.
+    speak: fromPromise(({ input }) => input.ask("voice", "speak", { text: input.text })),
+    ahead: fromPromise(({ input }) => (input.text ? input.ask("voice", "speak", { text: input.text }) : Promise.resolve(null))),
     // The note open in the Notes panel when the reader starts, since the editor may have
     // announced it (note.opened) before this reader was mounted.
     openNote: fromPromise(({ input }) => input.ask("notes", "open", {})),
@@ -560,6 +703,7 @@ export const machine = setup({
     movedInChapter: (args) => movedElsewhere(args) && args.event.position.chapter === args.context.chapter,
     oursSameContent: (args) => isOurs(args) && !reimported(args),
     ours: isOurs,
+    dirty: stateIn({ reading: { ready: { place: "dirty" } } }),
     // The view landing where the fact put it, or landing again where it already was (a
     // re-measure): neither is the user's turn, so neither is progress to announce.
     landed: ({ context, event }) => context.quiet && samePos(event, context.pending),
@@ -625,11 +769,23 @@ export const machine = setup({
       "even at the page's edge, opens it alone over the reader, never a page turn: Turn turns it a " +
       "quarter clockwise each time, on past a full turn, fitted to the reader's box so a sideways " +
       "picture gets the long side; a double tap, the wheel or a pinch zooms it, a drag moves it, " +
-      "and Close, Escape or a tap beside it goes back to the same page. Nothing of it is saved.",
+      "and Close, Escape or a tap beside it goes back to the same page. Nothing of it is saved. " +
+      "While Reading aloud is shown and `voice` is on the page, the page reads aloud: with a " +
+      "mouse, a speaker shows in the left margin beside the paragraph under the pointer, and a " +
+      "click reads that paragraph and stops at its end; while it is read the speaker shows Stop. " +
+      "The footer offers Read page, which reads the page's paragraphs and headings in order, " +
+      "and while anything is read Pause, or Resume once paused, and Stop; a phone has only the " +
+      "footer. The paragraph being read is tinted and the word being said lights up, and the " +
+      "next paragraph's audio is fetched while one plays. A page turn, another chapter or " +
+      "another book stops it. With Vim keys on, r reads the cursor's paragraph and R the page " +
+      "from it; while anything is read, Space pauses and resumes and Escape stops. A voice that " +
+      "cannot read says why over the footer for a moment: Download the voice in Settings, Add " +
+      "your Inworld key in Settings, or that it is not available now. Listening changes no data, " +
+      "so it is not a step.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "text.copied", "book.closed", "passage.added"],
     attributes: ["height", "highlights"],
-    asks: ["books: open", "books: read", "books: chapter", "notes: list", "notes: read", "notes: open", "settings: read", "flags: read"],
+    asks: ["books: open", "books: read", "books: chapter", "notes: list", "notes: read", "notes: open", "settings: read", "flags: read", "voice: read", "voice: speak"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -658,6 +814,18 @@ export const machine = setup({
     openSeen: false,
     // The features `flags` reports hidden (3.1); null until it answers.
     hidden: null,
+    // The picture `voice` last gave (voice: read, voice.changed), or null on a page
+    // without it: only with it does the reader offer reading aloud.
+    voice: null,
+    // What is being read aloud, or null: the blocks in order (queue), the one being read
+    // (at), its clip once the voice answered, the next block's clip fetched ahead, and
+    // whether Pause was pressed while a clip was still being fetched (held).
+    speech: null,
+    // How many clips have been handed to the view, the nonce of the next.
+    said: 0,
+    // A one-shot for the view, like reveal: why the voice could not read, said over the
+    // footer for a moment.
+    notice: null,
     // A one-shot for the view: a drag wholly inside an existing highlight makes no new
     // note; instead the reader opens that highlight's bubble (Decision 6, session 3). The
     // bus cannot route an internal message to a view, so the id rides in context with a
@@ -712,6 +880,12 @@ export const machine = setup({
       onError: { actions: [] },
     },
     {
+      src: "voice",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ voice: ({ event }) => (isVoicePicture(event.output) ? event.output : null) }) },
+      onError: { actions: [] },
+    },
+    {
       src: "openNote",
       input: ({ context }) => ({ ask: context.ask }),
       onDone: {
@@ -730,6 +904,7 @@ export const machine = setup({
       })),
     },
     "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
+    "voice.changed": { actions: assign({ voice: ({ event: { type, ...picture } }) => (isVoicePicture(picture) ? picture : null) }) },
     // The note the Notes panel shows (the stage's editor never announces one), which Add
     // to note adds a passage to.
     "note.opened": { actions: assign({ opened: ({ event }) => event.id, openSeen: true }) },
@@ -1056,8 +1231,11 @@ export const machine = setup({
               quiet: false,
             }),
           },
+          // While a turn is unannounced (ready.place.dirty) only a re-import moves the
+          // reader; dirty itself takes the rest, and reading aloud, the other region of a
+          // page that shows, must not let them through to here as well.
           {
-            guard: "movedToOtherChapter",
+            guard: and(["movedToOtherChapter", not("dirty")]),
             target: ".fetching",
             actions: assign({
               book: ({ event }) => pickBook(event),
@@ -1067,10 +1245,10 @@ export const machine = setup({
             }),
           },
           {
-            guard: "movedInChapter",
+            guard: and(["movedInChapter", not("dirty")]),
             actions: assign({ book: ({ event }) => pickBook(event), pending: ({ event }) => ({ ...event.position }), quiet: true }),
           },
-          { guard: "ours", actions: assign({ book: ({ event }) => pickBook(event) }) },
+          { guard: and(["ours", not("dirty")]), actions: assign({ book: ({ event }) => pickBook(event) }) },
         ],
       },
       states: {
@@ -1089,51 +1267,59 @@ export const machine = setup({
             onError: "offline",
           },
         },
+        // Two things go on at once on a page that shows: the place, announced after a
+        // turn, and reading aloud, which leaving the page (a fetch, a merge) ends.
         ready: {
-          initial: "clean",
+          type: "parallel",
           states: {
-            clean: {
-              on: {
-                // The view settled on a page and reports its top block. A landing is
-                // only noted; a place the user moved to is recorded and begins the
-                // announcement window.
-                _settled: [
-                  {
-                    guard: "landed",
-                    actions: assign({ at: ({ event }) => ({ chapter: event.chapter, block: event.block }), pending: null, quiet: false }),
+            place: {
+              initial: "clean",
+              states: {
+                clean: {
+                  on: {
+                    // The view settled on a page and reports its top block. A landing is
+                    // only noted; a place the user moved to is recorded and begins the
+                    // announcement window.
+                    _settled: [
+                      {
+                        guard: "landed",
+                        actions: assign({ at: ({ event }) => ({ chapter: event.chapter, block: event.block }), pending: null, quiet: false }),
+                      },
+                      { guard: "unmoved", actions: assign({ pending: null }) },
+                      {
+                        target: "dirty",
+                        actions: assign({
+                          sent: ({ event }) => ({ chapter: event.chapter, block: event.block }),
+                          at: ({ event }) => ({ chapter: event.chapter, block: event.block }),
+                          pending: null,
+                        }),
+                      },
+                    ],
                   },
-                  { guard: "unmoved", actions: assign({ pending: null }) },
-                  {
-                    target: "dirty",
-                    actions: assign({
-                      sent: ({ event }) => ({ chapter: event.chapter, block: event.block }),
-                      at: ({ event }) => ({ chapter: event.chapter, block: event.block }),
-                      pending: null,
-                    }),
-                  },
-                ],
-              },
-            },
-            dirty: {
-              on: {
-                // Targetless so the window is not restarted: turns within it join the
-                // one announcement at its end (4.3, third rule).
-                _settled: {
-                  actions: assign({
-                    sent: ({ event }) => ({ chapter: event.chapter, block: event.block }),
-                    at: ({ event }) => ({ chapter: event.chapter, block: event.block }),
-                    pending: null,
-                  }),
                 },
-                // An unannounced turn is the newest place (5: last write wins); the
-                // fact's news, the ack of an earlier place, refreshes the metadata and
-                // never moves the reader. A re-import falls through to the parent.
-                "book.changed": { guard: "oursSameContent", actions: assign({ book: ({ event }) => pickBook(event) }) },
-              },
-              after: {
-                [PROGRESS_MS]: { target: "clean", actions: "announce" },
+                dirty: {
+                  on: {
+                    // Targetless so the window is not restarted: turns within it join the
+                    // one announcement at its end (4.3, third rule).
+                    _settled: {
+                      actions: assign({
+                        sent: ({ event }) => ({ chapter: event.chapter, block: event.block }),
+                        at: ({ event }) => ({ chapter: event.chapter, block: event.block }),
+                        pending: null,
+                      }),
+                    },
+                    // An unannounced turn is the newest place (5: last write wins); the
+                    // fact's news, the ack of an earlier place, refreshes the metadata and
+                    // never moves the reader. A re-import falls through to the parent.
+                    "book.changed": { guard: "oursSameContent", actions: assign({ book: ({ event }) => pickBook(event) }) },
+                  },
+                  after: {
+                    [PROGRESS_MS]: { target: "clean", actions: "announce" },
+                  },
+                },
               },
             },
+            speech: SPEECH,
           },
         },
         offline: {
