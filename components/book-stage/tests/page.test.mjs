@@ -246,22 +246,44 @@ const stageChat = (page) =>
     return child?.id === "stage-chat" ? [...child.shadowRoot.querySelectorAll(".turn")].map((t) => t.textContent.trim().slice(0, 20)) : null;
   });
 
+const seedChat = async (cookie) => {
+  const put = async (path, type, body) => {
+    const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
+    assert.equal(res.status, 200, `PUT ${path}`);
+  };
+  await put(`/api/books/${SAMPLE_ID}`, "application/epub+zip", SAMPLE);
+  await put(`/api/books/${SAMPLE_ID}/opened`, "application/json", "{}");
+  const about = [{ kind: "book", id: SAMPLE_ID, chapter: "chapter-one", chapterTitle: "Chapter One" }];
+  const turns = [
+    { id: "01K0000000000000000000TRN1", role: "user", text: "What is it about?", at: 1 },
+    { id: "01K0000000000000000000TRN2", role: "assistant", text: "A sample.", status: "done", at: 2 },
+  ];
+  await put(`/api/conversations/${CHAT_ID}`, "application/json", JSON.stringify({ title: "What is it about?", about, start: "", turns }));
+};
+
+const openChatOnStage = async (page) => {
+  await page.waitForFunction(() => {
+    const button = document.querySelector("#chats-thread")?.shadowRoot?.querySelector("button.open");
+    return button && !button.disabled;
+  });
+  await page.evaluate(() => document.querySelector("#chats-thread").shadowRoot.querySelector("button.open").click());
+  await until(async () => (await stageChat(page))?.length === 2);
+  assert.deepEqual(await stageTabs(page), ["Sample Book", "What is it about?*"]);
+  await page.waitForFunction(() => document.querySelector("#chats-thread").shadowRoot.querySelector("button.open").getAttribute("aria-pressed") === "true");
+};
+
+const closeChatTab = async (page) => {
+  await page.evaluate(() => document.querySelector("dock-desk").shadowRoot.querySelector('.stage button.close[aria-label="Close What is it about?"]').click());
+  await until(async () => JSON.stringify(await stageTabs(page)) === JSON.stringify(["Sample Book*"]));
+  assert.equal(await shown(page), "book-reader");
+};
+
 for (const engine of ENGINES) {
-  // Browser: a page's composition.
-  test(`a chat opened on the stage gets a tab, survives a reload and closes by its × in ${engine.name}`, async () => {
+  // Browser: a page's composition. The product page's own wiring of the chat and the stage;
+  // the reload is on the stage's stem page below, since two loads of this page use the budget (11).
+  test(`on the product page a chat opened on the stage gets a tab and closes by its × in ${engine.name}`, async () => {
     const cookie = forgeCookie("book-stage-chat");
-    const put = async (path, type, body) => {
-      const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
-      assert.equal(res.status, 200, `PUT ${path}`);
-    };
-    await put(`/api/books/${SAMPLE_ID}`, "application/epub+zip", SAMPLE);
-    await put(`/api/books/${SAMPLE_ID}/opened`, "application/json", "{}");
-    const about = [{ kind: "book", id: SAMPLE_ID, chapter: "chapter-one", chapterTitle: "Chapter One" }];
-    const turns = [
-      { id: "01K0000000000000000000TRN1", role: "user", text: "What is it about?", at: 1 },
-      { id: "01K0000000000000000000TRN2", role: "assistant", text: "A sample.", status: "done", at: 2 },
-    ];
-    await put(`/api/conversations/${CHAT_ID}`, "application/json", JSON.stringify({ title: "What is it about?", about, start: "", turns }));
+    await seedChat(cookie);
     const browser = await engine.launch();
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     context.setDefaultTimeout(4000);
@@ -270,14 +292,28 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       const problems = watch(page);
       await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => {
-        const button = document.querySelector("#chats-thread")?.shadowRoot?.querySelector("button.open");
-        return button && !button.disabled;
-      });
-      await page.evaluate(() => document.querySelector("#chats-thread").shadowRoot.querySelector("button.open").click());
-      await until(async () => (await stageChat(page))?.length === 2);
-      assert.deepEqual(await stageTabs(page), ["Sample Book", "What is it about?*"]);
-      await page.waitForFunction(() => document.querySelector("#chats-thread").shadowRoot.querySelector("button.open").getAttribute("aria-pressed") === "true");
+      await openChatOnStage(page);
+      await closeChatTab(page);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
+  // Browser: a reload against real storage.
+  test(`a chat opened on the stage gets a tab, survives a reload and closes by its × in ${engine.name}`, async () => {
+    const cookie = forgeCookie("book-stage-chat");
+    await seedChat(cookie);
+    const browser = await engine.launch();
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    context.setDefaultTimeout(4000);
+    try {
+      await signedIn(context, cookie);
+      const page = await context.newPage();
+      const problems = watch(page);
+      await page.goto(`${BASE_URL}/workshop/design/book-stage`, { waitUntil: "domcontentloaded" });
+      await openChatOnStage(page);
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await until(async () => JSON.stringify(await stageTabs(page)) === JSON.stringify(["Sample Book*", "What is it about?"]), 8000);
@@ -286,9 +322,7 @@ for (const engine of ENGINES) {
       );
       await until(async () => (await stageChat(page))?.length === 2);
 
-      await page.evaluate(() => document.querySelector("dock-desk").shadowRoot.querySelector('.stage button.close[aria-label="Close What is it about?"]').click());
-      await until(async () => JSON.stringify(await stageTabs(page)) === JSON.stringify(["Sample Book*"]));
-      assert.equal(await shown(page), "book-reader");
+      await closeChatTab(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await context.close();
