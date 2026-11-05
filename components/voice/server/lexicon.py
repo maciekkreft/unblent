@@ -6,8 +6,12 @@ How a dictionary entry becomes Kokoro's phonemes, the stress marks included, fol
 misaki's own `en.Lexicon` (en.py at the pinned commit), cut down to what needs no tagger:
 an entry that differs by part of speech takes its default, or its "None" form at the end
 of a sentence. Numbers are written out in words by our own code. A word in neither
-dictionary, with no known stem, is split at hyphens and apostrophes; a part still not
-found is spelled letter by letter.
+dictionary, with no known stem or ending, is split at hyphens and apostrophes; a part
+still not found is cut into two known words if it can be, and otherwise sounded out by our
+own letters-to-sounds rules (`sound_out`), which write the dictionaries' notation and read
+a name as English reads Latin and Greek names. Only an all-capital word and a word with no
+vowel letter are spelled letter by letter. A word in another script, such as Greek, is
+silent: its token stays in the text with no phonemes, and the engine gives it no time.
 
 `tokens(text)` returns every word, number and punctuation mark of the text in order, each
 with where it stands in the text and its phonemes, so the engine can tell when each word
@@ -18,7 +22,7 @@ import json
 import re
 import threading
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _DATA = Path(__file__).parent / "data"
@@ -223,6 +227,49 @@ def _stem_ing(word, stress, fv):
     return _ing(_lookup(stem, stress, fv))
 
 
+def _stem_y(word, stress, fv):
+    # wearied from weary, wearier from weary.
+    if len(word) < 5 or word[-3:] not in ("ied", "ier") or not _is_known(word[:-3] + "y"):
+        return None
+    stem = _lookup(word[:-3] + "y", stress, fv)
+    if not stem:
+        return None
+    return _ed(stem) if word.endswith("d") else stem + "əɹ"
+
+
+def _flapped(stem, ending):
+    # The dictionaries flap a t before these endings: greatest is ɡɹˈAɾᵻst.
+    if len(stem) > 1 and stem[-1] == "t" and stem[-2] in US_TAUS:
+        return stem[:-1] + "ɾ" + ending
+    return stem + ending
+
+
+def _archaic_stem(word):
+    # hopest is hope and not hop, so a stem with its e goes first, and a stem in the gold
+    # dictionary before one that only the silver dictionary holds, because silver holds
+    # many surnames (Beare beside bear).
+    golds, _ = _load()
+    base = word[:-3]
+    found = [base + "e", base]
+    if len(base) > 2 and base[-1] == base[-2]:
+        found.append(base[:-1])
+    if base.endswith("i"):
+        found.append(base[:-1] + "y")
+    found = [w for w in found if len(w) > 1]
+    return next((w for w in found if w in golds), next((w for w in found if _is_known(w)), None))
+
+
+def _stem_archaic(word, stress, fv):
+    # The old second and third person of a known verb: thinkest, seest, loveth, shouldst.
+    if len(word) >= 5 and word[-3:] in ("est", "eth"):
+        stem = _archaic_stem(word)
+        if stem:
+            return _flapped(_lookup(stem, stress, fv) or "", "ᵻst" if word.endswith("t") else "əθ")
+    if len(word) >= 5 and re.search(r"[dtln]st$", word) and _is_known(word[:-2]):
+        return (_lookup(word[:-2], stress, fv) or "") + "st"
+    return None
+
+
 def _special(word: str, fv):
     # misaki's special cases that need no tagger, read as the common part of speech:
     # "a" and "the" as articles, "to" and "in" as prepositions, "I" as the pronoun.
@@ -258,7 +305,7 @@ def _word(word: str, fv) -> str | None:
         and word not in golds
         and word not in silvers
         and (word == word.upper() or word[1:] == word[1:].lower())
-        and (lower in golds or lower in silvers or any(fn(lower, stress, fv) for fn in (_stem_s, _stem_ed, _stem_ing)))
+        and (lower in golds or lower in silvers or any(fn(lower, stress, fv) for fn in (_stem_s, _stem_ed, _stem_ing, _stem_y, _stem_archaic)))
     ):
         word = lower
     if _is_known(word):
@@ -267,7 +314,13 @@ def _word(word: str, fv) -> str | None:
         return _lookup(word[:-2] + "'s", stress, fv)
     if word.endswith("'") and _is_known(word[:-1]):
         return _lookup(word[:-1], stress, fv)
-    for fn, s in ((_stem_s, stress), (_stem_ed, stress), (_stem_ing, 0.5 if stress is None else stress)):
+    for fn, s in (
+        (_stem_s, stress),
+        (_stem_ed, stress),
+        (_stem_ing, 0.5 if stress is None else stress),
+        (_stem_y, stress),
+        (_stem_archaic, stress),
+    ):
         ps = fn(word, s, fv)
         if ps is not None:
             return ps
@@ -276,7 +329,7 @@ def _word(word: str, fv) -> str | None:
 
 def word_phonemes(word: str, future_vowel=None) -> str:
     """A word as Kokoro reads it: from the dictionaries; else its parts split at hyphens
-    and apostrophes; else spelled letter by letter."""
+    and apostrophes; else what `_unknown` makes of it."""
     word = _plain(word)
     ps = _word(word, future_vowel)
     if ps is not None:
@@ -291,9 +344,39 @@ def word_phonemes(word: str, future_vowel=None) -> str:
             if part.isdigit():
                 out.append(number_phonemes(part))
             else:
-                out.append(_word(part, future_vowel) or spell(part) or "")
+                out.append(_word(part, future_vowel) or _unknown(part, future_vowel))
         return " ".join(p for p in out if p)
-    return spell(word) or ""
+    return _unknown(parts[0], future_vowel) if parts else ""
+
+
+def _unknown(word: str, fv) -> str:
+    """A word no dictionary or ending explains. Silent in another script, because English
+    letter names and rules say nothing true about it. Spelled when all capitals (NASA) or
+    when no vowel letter gives it a syllable. Otherwise two known words, or sounded out."""
+    letters = _latin(word)
+    if letters is None:
+        return ""
+    if not re.search(r"[aeiouy]", letters) or (len(word) > 1 and word == word.upper()):
+        return spell(word) or ""
+    return _compound(word, fv) or sound_out(word)
+
+
+def _compound(word: str, fv) -> str | None:
+    # A written-together word, homebred as home and bred. A capitalized word needs longer
+    # parts, because a Latin name falls into short English words by chance (Mar and cus).
+    golds, _ = _load()
+    low = word.lower()
+    least = 3 if word == low else 4
+    if low.startswith("un") and len(low) - 2 >= least:
+        rest = _word(low[2:], fv)
+        if rest:
+            return "ʌn" + rest
+    for cut in range(len(low) - least, least - 1, -1):
+        if low[:cut] in golds:
+            head, tail = _word(low[:cut], fv), _word(low[cut:], fv)
+            if head and tail:
+                return apply_stress(head, 2) + apply_stress(tail, -1)
+    return None
 
 
 def _plain(word: str) -> str:
@@ -302,6 +385,329 @@ def _plain(word: str) -> str:
     word = word.replace("‘", "'").replace("’", "'")
     decomposed = unicodedata.normalize("NFKD", word)
     return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+# --- Letters to sounds ----------------------------------------------------------------
+
+_LATIN_LETTERS = {"æ": "ae", "œ": "oe", "ø": "o", "ß": "ss"}
+_VOWEL_LETTERS = frozenset("aeiouy")
+_VOICED = frozenset("bdɡvmnlɹŋðʒ")
+_STOP_LETTERS = ("b", "c", "d", "f", "g", "p", "t", "ch", "ph", "th")
+# Consonants before which an unstressed u keeps its y sound: Æsculapius is ˌɛskjəlˈApiəs.
+_U_GLIDES = frozenset("kpbɡmf")
+# Latin's long penults, which a spelling cannot show: Antoninus, Epictetus, Severus. Without
+# one a light penult sends the stress back a syllable, as in Rusticus.
+_LONG_PENULT = re.compile(r"(?:an|in|at|et|en|ut|on|er)(?:us|um|a|as)$|ed(?:es)$")
+_CLASSICAL_END = re.compile(r"(?:us|um|a|ae|es|on|as|is|os|ax|ix|i|o)$")
+_LONG = {"a": "A", "e": "i", "i": "I", "y": "I", "o": "O", "u": "u"}
+_SHORT = {"a": "æ", "e": "ɛ", "i": "ɪ", "y": "ɪ", "o": "ɑ", "u": "ʌ"}
+_BEFORE_R = {"a": "ɑ", "e": "ɜ", "i": "ɜ", "y": "ɜ", "o": "ɔ", "u": "ɜ"}
+_REDUCED = {"a": "ə", "e": "ə", "i": "ɪ", "y": "ɪ", "o": "ə", "u": "ə"}
+_FINAL = {"a": "ə", "e": "i", "i": "I", "y": "i", "o": "O", "u": "u"}
+_TEAMS = {"ae": "i", "oe": "i", "au": "ɔ", "eu": "ju", "ai": "A", "ay": "A", "ei": "A", "ey": "A",
+          "oa": "O", "ou": "W", "oi": "Y", "oy": "Y", "aw": "ɔ", "ew": "ju", "ee": "i"}
+
+
+def _latin(word: str) -> str | None:
+    """The word's letters as plain lower-case a to z, or None when any is outside them."""
+    low = "".join(_LATIN_LETTERS.get(c, c) for c in word.lower())
+    return low if re.fullmatch(r"[a-z]+", low) else None
+
+
+@dataclass
+class _Vowel:
+    letters: str  # one vowel letter, or a team such as ae
+    sound: str = ""  # a team's sound
+    after: list = field(default_factory=list)  # the consonants up to the next vowel
+
+
+@dataclass
+class _Consonant:
+    letters: str
+    sound: str
+    double: bool = False  # written twice, or x: it closes the syllable before it
+
+
+def _team(low: str, i: int) -> _Vowel | None:
+    rest = low[i:]
+    two = rest[:2]
+    after = rest[2:3]
+    if rest.startswith(("eigh", "aigh")):
+        return _Vowel(rest[:4], "A")
+    if rest.startswith(("augh", "ough")):
+        return _Vowel(rest[:4], "ɔ")
+    if rest.startswith("igh"):
+        return _Vowel(rest[:3], "I")
+    if two == "oo":
+        return _Vowel(two, "ʊ" if after == "k" else "u")
+    if two == "ow":
+        return _Vowel(two, "O" if not rest[2:] else "W")
+    if two == "ey" and not rest[2:]:
+        return _Vowel(two, "i")
+    if two == "ai" and after and after in _VOWEL_LETTERS:
+        return _Vowel(two, "I")
+    # Not a team before an e (Theaetetus, written with æ) or last in a word (Panthea).
+    if two == "ea" and rest[2:] and after != "e":
+        return _Vowel(two, "i")
+    if two in ("ie", "ue") and not rest[2:]:
+        return _Vowel(two, "i" if two == "ie" else "u")
+    # A final -aus and -eus are two syllables: Archelaus, Orpheus.
+    if (two == "au" and i > 1 and rest == "aus") or (two == "eu" and i > 0 and rest == "eus"):
+        return None
+    if two in _TEAMS:
+        return _Vowel(two, _TEAMS[two])
+    return None
+
+
+def _consonant(low: str, i: int, classical: bool) -> _Consonant:
+    rest = low[i:]
+    c = low[i]
+    after = rest[1:2]
+    first = i == 0
+    if rest.startswith("tch"):
+        return _Consonant("tch", "ʧ")
+    if rest == "tz":
+        return _Consonant("tz", "ts")
+    if rest[:2] == "sc" and rest[2:3] and rest[2:3] in "eiy":
+        return _Consonant("sc", "s")
+    if rest.startswith("sch"):
+        return _Consonant("sch", "sk" if rest[3:4] == "o" else "ʃ")
+    if rest.startswith("cch"):
+        return _Consonant("cch", "k", True)
+    if rest.startswith("tth"):
+        return _Consonant("tth", "θ", True)
+    if rest.startswith("qu"):
+        return _Consonant("qu", "k" if rest == "que" else "kw")
+    if c == "c" and after == "h":
+        hard = classical or rest[2:3] not in _VOWEL_LETTERS
+        return _Consonant("ch", "k" if hard else "ʧ")
+    # -tia, -tius, -cius and -tion, but not at the start of a word and not after an s (Philistion).
+    if c in "tc" and after == "i" and rest[2:3] and rest[2:3] in _VOWEL_LETTERS:
+        if any(v in low[:i] for v in _VOWEL_LETTERS) and not (c == "t" and low[i - 1] == "s"):
+            return _Consonant(rest[:2], "ʃ")
+    for pair, sound in (("ph", "f"), ("th", "θ"), ("sh", "ʃ"), ("ck", "k"), ("rh", "ɹ"), ("wh", "w"), ("dg", "ʤ")):
+        if rest.startswith(pair):
+            return _Consonant(pair, sound)
+    if c == "g" and after == "h":
+        return _Consonant("gh", "ɡ" if first else "")
+    if first and rest[:2] in ("gn", "kn", "wr", "ps", "pt"):
+        return _Consonant(rest[:2], {"gn": "n", "kn": "n", "wr": "ɹ", "ps": "s", "pt": "t"}[rest[:2]])
+    if rest == "mb":
+        return _Consonant("mb", "m")
+    if c == "n" and after == "g":
+        if rest[2:3] and rest[2:3] in "eiy":
+            return _Consonant("ng", "nʤ", True)
+        return _Consonant("ng", "ŋɡ" if rest[2:3] and rest[2:3] in _VOWEL_LETTERS else "ŋ", True)
+    if c == "n" and after and after in "kcqx":
+        return _Consonant("n", "ŋ")
+    if c == after:
+        soft = rest[2:3] and rest[2:3] in "eiy"
+        return _Consonant(c + c, {"c": "ks" if soft else "k", "g": "ɡ", "r": "ɹ"}.get(c, c), True)
+    if c == "c":
+        return _Consonant("c", "s" if after and after in "eiy" else "k")
+    if c == "g":
+        return _Consonant("g", "ʤ" if after and after in "eiy" else "ɡ")
+    if c == "x":
+        return _Consonant("x", "z" if first else "ks", not first)
+    return _Consonant(c, {"j": "ʤ", "r": "ɹ", "y": "j"}.get(c, c))
+
+
+def _parse(low: str, classical: bool) -> tuple[list[_Consonant], list[_Vowel]]:
+    """The consonants before the first vowel, then each vowel with the consonants after it."""
+    onset: list[_Consonant] = []
+    vowels: list[_Vowel] = []
+    i = 0
+    while i < len(low):
+        c = low[i]
+        vowel = c in "aeiou" or (c == "y" and not (i == 0 and low[1:2] and low[1:2] in _VOWEL_LETTERS))
+        if vowel:
+            found = _team(low, i) or _Vowel(c)
+            vowels.append(found)
+            i += len(found.letters)
+            continue
+        unit = _consonant(low, i, classical)
+        (vowels[-1].after if vowels else onset).append(unit)
+        i += len(unit.letters)
+    return onset, vowels
+
+
+def _closed(vowel: _Vowel, last: bool) -> bool:
+    """Whether the consonants after this vowel close its syllable. Two consonants do,
+    unless they are a stop and an l or r, which begin the next syllable together (Heraclitus)."""
+    after = vowel.after
+    if not after:
+        return False
+    if last:
+        return True
+    if len(after) == 1:
+        return after[0].double
+    return not (len(after) == 2 and after[0].letters in _STOP_LETTERS and after[1].letters in ("l", "r"))
+
+
+def _stress_at(vowels: list[_Vowel], low: str) -> int:
+    n = len(vowels)
+    if n < 3:
+        return 0
+    penult = vowels[-2]
+    heavy = (
+        len(penult.letters) > 1
+        or _closed(penult, False)
+        or bool(penult.after and penult.after[0].sound == "ʃ")
+        or bool(_LONG_PENULT.search(low))
+    )
+    return n - 2 if heavy else n - 3
+
+
+def _lax(vowels: list[_Vowel], k: int, secondary: bool) -> bool:
+    # A stress three or more syllables from the end shortens its vowel (Seneca, Socrates),
+    # but only an i before an i or e that opens a syllable of its own (Helvidius, and not
+    # Aurelius or Demetrius). A secondary stress is short too (Heraclitus).
+    if secondary:
+        return True
+    if k <= len(vowels) - 3:
+        following = vowels[k + 1]
+        return vowels[k].letters in "iy" or bool(following.after) or following.letters not in ("i", "e", "y")
+    return False
+
+
+def _stressed(vowels: list[_Vowel], k: int, secondary: bool, magic: bool) -> str:
+    vowel = vowels[k]
+    letter, after = vowel.letters, vowel.after
+    last = k == len(vowels) - 1
+    if after and after[0].letters == "r" and (last or len(after) > 1):
+        return _BEFORE_R[letter]
+    if not after and last:
+        return "ɑ" if letter == "a" else _LONG[letter]
+    hiatus = not after
+    # Only an i keeps short before a sh sound: Domitia, but Horatius.
+    short_before_sh = letter in "iy" and after and after[0].sound == "ʃ"
+    closed = _closed(vowel, last)
+    long = (magic and last) or hiatus or (not closed and not short_before_sh and (letter == "u" or not _lax(vowels, k, secondary)))
+    if len(after) == 1 and after[0].letters == "r" and not last:
+        if letter in "aou":
+            return {"a": "ɛ", "o": "ɔ", "u": "ʊ"}[letter]
+        if letter == "e":
+            return "ɪ" if long else "ɛ"
+    return _LONG[letter] if long else _SHORT[letter]
+
+
+def _unstressed(vowels: list[_Vowel], k: int, magic: bool) -> str:
+    vowel = vowels[k]
+    letter, after = vowel.letters, vowel.after
+    last = k == len(vowels) - 1
+    if last and not after:
+        return _FINAL[letter]
+    if not after:
+        if letter in "iy":
+            return "I" if k == 0 else "i"
+        return {"a": "ə", "e": "i", "o": "O", "u": "u"}[letter]
+    if last and magic:
+        return _LONG[letter]
+    if after[0].letters == "r" and (last or len(after) > 1):
+        return "ə" if last else _BEFORE_R[letter]
+    if last:
+        tail = after[0].letters
+        if letter == "o" and tail == "n":
+            # -ion is reduced (Dion, Phocion), and any other -on is not (Xenophon).
+            before = vowels[k - 1].after if k else []
+            return "ə" if k and (not before or before[-1].sound == "ʃ") else "ɑ"
+        if letter == "o" and tail == "s":
+            return "ɑ"
+        if tail == "x":
+            return _SHORT[letter]
+    if k == 0 and _closed(vowel, last):
+        return _SHORT[letter]
+    return _REDUCED[letter]
+
+
+def _team_sound(vowel: _Vowel, stressed: bool, last: bool) -> str:
+    if vowel.letters in ("ae", "oe") and not last:
+        if _closed(vowel, False):
+            return "ɛ"
+        return "i" if stressed else "ɪ"
+    return vowel.sound
+
+
+def _sound_of(vowels: list[_Vowel], k: int, at: int, second: int | None, magic: bool, before: str) -> str:
+    """One vowel's sound with its stress mark, by where it stands. How a Latin name's vowels
+    fall follows the gold dictionary: Titus tˈIɾəs, Seneca sˈɛnəkə, Julius ʤˈuliəs,
+    Heraclitus hˌɛɹəklˈIɾəs, Xenophon zˈɛnəfˌɑn."""
+    vowel = vowels[k]
+    stressed = k in (at, second)
+    last = k == len(vowels) - 1
+    if len(vowel.letters) > 1:
+        sound = _team_sound(vowel, stressed, last)
+    elif stressed:
+        sound = _stressed(vowels, k, k == second and not last, magic)
+        if sound == "u" and (before in _U_GLIDES or not before):
+            sound = "ju"
+    else:
+        sound = _unstressed(vowels, k, magic)
+        if sound == "ə" and vowel.letters == "u" and not last and before in _U_GLIDES and not _closed(vowel, False):
+            sound = "jə"
+    mark = PRIMARY if k == at else SECONDARY if k == second else ""
+    # The dictionaries put the mark right before the vowel, after a y sound: Europe is jˈʊɹəp.
+    return "j" + mark + sound[1:] if sound[0] == "j" else mark + sound
+
+
+def _s_sound(vowels: list[_Vowel], k: int, j: int, at: int) -> str:
+    # An s between two vowels sounds as z before an unstressed one (Orosius, but Chrysippus),
+    # and a final s after a voiced consonant does too (Jenkins).
+    after = vowels[k].after
+    if k < len(vowels) - 1:
+        return "z" if len(after) == 1 and k + 1 != at else "s"
+    if j == len(after) - 1 and j > 0 and after[j - 1].sound[-1:] in _VOICED:
+        return "z"
+    return "s"
+
+
+def sound_out(word: str) -> str:
+    """A word no dictionary knows, read from its spelling in the dictionaries' notation,
+    with one primary stress."""
+    low = _latin(word) or ""
+    if not low:
+        return ""
+    capital = word[:1].isupper()
+    has_vowel = bool(re.search(r"[aeiouy]", low[:-2]))
+    if not capital and len(low) > 4 and has_vowel and re.search(r"[^aeiouy]e[ds]$", low):
+        # An unknown verb's or noun's ending, read as on a known stem. A stem ending in one
+        # vowel and one consonant takes back its silent e (blaked from blake).
+        stem = low[:-2] + ("e" if re.search(r"[aeiouy][^aeiouyw]$", low[:-2]) else "")
+        return (_ed if low.endswith("d") else _s)(sound_out(stem)) or ""
+    tail = ""
+    body = low
+    if re.search(r"[aeiouy].*[^aeiouy]le$", low):
+        body, tail = low[:-2], "ᵊl"
+    elif re.search(r"[aeiouy].*[^aeiouyr]re$", low):
+        body, tail = low[:-2], "əɹ"
+    classical = (capital and bool(_CLASSICAL_END.search(low))) or low.endswith(("us", "um"))
+    onset, vowels = _parse(body, classical)
+    if not vowels:
+        return spell(word) or ""
+    magic = False
+    if len(vowels) > 1 and not tail and vowels[-1].letters == "e" and not vowels[-1].after:
+        # A final e is silent, and after one consonant it lengthens the vowel before it.
+        vowels.pop()
+        magic = len(vowels[-1].after) == 1 and not vowels[-1].after[0].double
+    # A name's -es is a syllable with a long e: Socrates, Diogenes.
+    name_es = capital and len(vowels) > 1 and low.endswith("es") and vowels[-1].letters == "e"
+    at = _stress_at(vowels, low)
+    second = at - 2 if at >= 2 else None
+    if second is None and at <= len(vowels) - 3 and low.endswith("on") and vowels[-2].after and vowels[-2].after[-1].sound != "ʃ":
+        second = len(vowels) - 1
+    out = "".join(u.sound for u in onset)
+    before = onset[-1].sound[-1:] if onset else ""
+    for k, vowel in enumerate(vowels):
+        last = k == len(vowels) - 1
+        if last and name_es:
+            out += "iz"
+            break
+        out += _sound_of(vowels, k, at, second, magic, before)
+        for j, unit in enumerate(vowel.after):
+            out += _s_sound(vowels, k, j, at) if unit.letters == "s" else unit.sound
+        before = vowel.after[-1].sound[-1:] if vowel.after else ""
+    # The dictionaries flap a t between a vowel and an unstressed one: Titus is tˈIɾəs.
+    return re.sub(r"(?<=[AIOWYiuæɑəɛɪɹʊʌ])t(?=[AIOWYiuæɑəɛɪʊʌᵻ])", "ɾ", out + tail)
 
 
 # --- Numbers -------------------------------------------------------------------------

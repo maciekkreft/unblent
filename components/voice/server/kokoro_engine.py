@@ -6,7 +6,8 @@ the vocabulary lacks is dropped, as kokoro-onnx does.
 
 The model takes at most 510 phonemes at a time, so a long paragraph is read in pieces,
 each ending at a sentence or a clause where it can. This export reports no durations, so
-each word's time is its share of its piece by its number of phonemes.
+each word's time is its share of its piece by its number of phonemes. A word with no
+phonemes, such as one in Greek, takes no time and is not lit: the reader skips it.
 
 onnxruntime and numpy are imported only when the voice first speaks, so a server that
 never reads aloud with Kokoro never loads them.
@@ -67,6 +68,8 @@ def _ids(tokens: list) -> tuple[list[int], list[tuple[object, int, int]]]:
     """The piece's vocabulary numbers, and for each word the span of numbers it holds."""
     ids, spans = [], []
     for t in tokens:
+        if not t.phonemes:
+            continue
         if ids and t.space:
             ids.append(_VOCAB[" "])
         start = len(ids)
@@ -78,12 +81,18 @@ def _ids(tokens: list) -> tuple[list[int], list[tuple[object, int, int]]]:
 
 def speak(text: str, voice: str, model: Path, voices_file: Path) -> tuple[bytes, list[dict]]:
     """The text as 16-bit mono WAV at 24 kHz, with when each word is said."""
+    tokens = lexicon.tokens(text)
+    if not any(t.phonemes for t in tokens):
+        # A paragraph all in Greek: a moment of silence, so the reader goes on to the next
+        # paragraph rather than stopping with an error.
+        return wav(bytes(2 * int(_PAUSE * SAMPLE_RATE)), SAMPLE_RATE), []
+
     import numpy as np
 
     session, voices = _session(model, voices_file)
     style_of = voices[voice]
     audio, words, offset = [], [], 0.0
-    for piece in _pieces(lexicon.tokens(text)):
+    for piece in _pieces(tokens):
         ids, spans = _ids(piece)
         if not ids:
             continue

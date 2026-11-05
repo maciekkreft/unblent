@@ -55,8 +55,10 @@ export const machine = setup({
       "it counts as ready) and then it works offline and costs nothing; Cancel stops the " +
       "download and keeps nothing; the voice picked is kept on this Mac. Words become " +
       "sounds through misaki's pronunciation dictionaries, numbers are written out in " +
-      "words, and a word in neither is split at its hyphens and apostrophes or else " +
-      "spelled letter by letter. On the website it reads with Inworld on the account's own " +
+      "words, and a word in neither is split at its hyphens and apostrophes and then " +
+      "sounded out by our own rules, which read a Latin or Greek name the way English does; " +
+      "only an all-capital word and a word with no vowel letter are spelled letter by " +
+      "letter, and a word in another script, such as Greek, is silent. On the website it reads with Inworld on the account's own " +
       "Inworld key, kept encrypted on the server and never sent back; the voice picked is " +
       "kept with the account. `voice: read` answers the picture and voice.changed announces " +
       "each change of it, every second while a download runs; `voice: speak` answers a " +
