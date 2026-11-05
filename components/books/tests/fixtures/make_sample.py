@@ -1,5 +1,5 @@
 """Build the epub fixtures the api and page tests use, run once by hand and the
-output (sample.epub, broken.epub, gaps.epub, onepiece.epub) committed. Never built at
+output (sample.epub, broken.epub, gaps.epub, onepiece.epub, footnotes.epub) committed. Never built at
 check time, so a test never depends on this running. Stdlib only.
 
     python3 components/books/tests/fixtures/make_sample.py
@@ -455,6 +455,62 @@ STYLED_TEXT = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
+FOOTNOTES_OPF = ONEPIECE_OPF.replace(
+    "</manifest>", '<item id="forms" href="forms.xhtml" media-type="application/xhtml+xml"/></manifest>'
+).replace("</spine>", '<itemref idref="forms"/></spine>')
+
+FOOTNOTES_NAV = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Contents</title></head>
+  <body><nav epub:type="toc" id="toc"><ol>
+    <li><a href="text.xhtml">Marked</a></li>
+    <li><a href="forms.xhtml">Forms</a></li>
+  </ol></nav></body>
+</html>
+"""
+
+FOOTNOTES_TEXT = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Marked</title></head>
+  <body>
+    <h1>Marked</h1>
+    <p>Verus<a href="#n" role="doc-noteref" epub:type="noteref">1</a> remembered, father,<a href="#n" role="doc-noteref" epub:type="noteref">2</a> modesty.</p>
+    <p><a href="#n" role="doc-noteref" epub:type="noteref">3</a></p>
+    <p>In 1984 too.</p>
+    <p id="n">A note.</p>
+  </body>
+</html>
+"""
+
+FOOTNOTES_FORMS = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Forms</title></head>
+  <body>
+    <h1>Forms</h1>
+    <p><a epub:type="noteref" href="#n">1</a></p>
+    <p><a role="doc-noteref" href="#n">[2]</a></p>
+    <p><sup><a href="#n">3</a></sup></p>
+    <p><a href="#n"><sup>*</sup></a></p>
+    <p>See chapter <a href="#n">4</a></p>
+    <p>Square x<sup>2</sup></p>
+    <p><a role="doc-noteref" href="#n">a whole phrase</a></p>
+    <p><sup><a href="https://example.com/">5</a></sup></p>
+    <p id="n">The note.</p>
+  </body>
+</html>
+"""
+
+
+def build_footnotes(path: Path) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", CONTAINER)
+        zf.writestr("OEBPS/content.opf", FOOTNOTES_OPF)
+        zf.writestr("OEBPS/nav.xhtml", FOOTNOTES_NAV)
+        zf.writestr("OEBPS/text.xhtml", FOOTNOTES_TEXT)
+        zf.writestr("OEBPS/forms.xhtml", FOOTNOTES_FORMS)
+
+
 def build_styled(path: Path) -> None:
     opf = ONEPIECE_OPF.replace(
         "</manifest>", '<item id="css" href="s.css" media-type="text/css"/></manifest>'
@@ -474,4 +530,5 @@ if __name__ == "__main__":
     build_gaps(HERE / "gaps.epub")
     build_onepiece(HERE / "onepiece.epub")
     build_styled(HERE / "styled.epub")
-    print("wrote sample.epub, broken.epub, gaps.epub, onepiece.epub and styled.epub")
+    build_footnotes(HERE / "footnotes.epub")
+    print("wrote sample.epub, broken.epub, gaps.epub, onepiece.epub, styled.epub and footnotes.epub")

@@ -36,7 +36,8 @@ _REMOVE = {"script", "style", "svg", "math", "video", "audio", "iframe", "object
 _SVG_DRAW = {"path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "use"}
 # Serialised as HTML5: no self-closing slash, no end tag.
 _VOID = {"br", "hr", "img"}
-# The only attributes kept, per tag (step 4); links gain data-chapter/data-block on resolution.
+# The only attributes kept, per tag (step 4); links gain data-chapter/data-block on resolution,
+# and a footnote reference gains data-noteref (_mark_noteref).
 _ATTRS = {"img": {"src", "alt"}, "a": {"href"}, "th": {"colspan", "rowspan"}, "td": {"colspan", "rowspan"}}
 
 _IMAGE_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/svg+xml": ".svg", "image/webp": ".webp"}
@@ -127,6 +128,31 @@ def _has_content(nodes) -> bool:
     return any(isinstance(n, dict) or (isinstance(n, str) and n.strip()) for n in nodes)
 
 
+# A footnote reference's text is a number, a symbol or one letter. A publisher may mark a
+# whole phrase as the reference; that phrase is part of the sentence and is still read.
+_NOTEREF_TEXT = re.compile(r"\W*(?:\d+|[^\W\d_])?\W*")
+
+
+def _declares_noteref(attrs: dict) -> bool:
+    return "noteref" in (attrs.get("epub:type") or "").split() or "doc-noteref" in (attrs.get("role") or "").split()
+
+
+def _sole_element(nodes):
+    """The one element among the nodes when they hold nothing else but white space."""
+    rest = [n for n in nodes if isinstance(n, dict) or n.strip()]
+    return rest[0] if len(rest) == 1 and isinstance(rest[0], dict) else None
+
+
+def _mark_noteref(anchor: dict) -> None:
+    """Mark a link as a footnote reference, so the reader can leave it out of what a voice
+    reads. Only the book's markup says so, never the look of the text alone, so a number
+    that is part of a sentence, even one that is a link, is still read: the import keeps
+    no other trace of epub:type and role."""
+    href = anchor["attrs"].get("href")
+    if href and not _is_external(href) and _NOTEREF_TEXT.fullmatch(_text_of(anchor)):
+        anchor["attrs"]["data-noteref"] = ""
+
+
 def _convert(el, links: list, heads: dict | None = None):
     """Return a list of output nodes for one input element, applying the whitelist.
     A removed element yields nothing; an unwrapped one yields its children, carrying
@@ -155,8 +181,13 @@ def _convert(el, links: list, heads: dict | None = None):
         if eid:
             ids.add(eid)
         node = {"tag": tag, "attrs": kept, "children": child_nodes, "ids": ids}
+        sole = _sole_element(child_nodes)
         if tag == "a":
             links.append((node, el.attrs.get("href")))
+            if _declares_noteref(el.attrs) or (sole and sole["tag"] == "sup"):
+                _mark_noteref(node)
+        elif tag == "sup" and sole and sole["tag"] == "a":
+            _mark_noteref(sole)
         return [node]
     # Unwrapped: keep the children, drop the tag; preserve its id on the first child.
     if eid:

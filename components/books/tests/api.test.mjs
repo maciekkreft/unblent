@@ -24,6 +24,7 @@ const BROKEN = readFileSync(new URL("./fixtures/broken.epub", import.meta.url));
 const GAPS = readFileSync(new URL("./fixtures/gaps.epub", import.meta.url));
 const ONEPIECE = readFileSync(new URL("./fixtures/onepiece.epub", import.meta.url));
 const STYLED = readFileSync(new URL("./fixtures/styled.epub", import.meta.url));
+const FOOTNOTES = readFileSync(new URL("./fixtures/footnotes.epub", import.meta.url));
 
 const cookieFor = (userId) =>
   `unblent_session=${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
@@ -168,6 +169,18 @@ test("a paragraph the book's stylesheet makes large becomes a heading", async ()
   assert.match(html, /<h3>A small heading<\/h3>/, "1.2x and bold is a subheading");
   assert.match(html, /<p>Body text\.<\/p>/, "body stays a paragraph");
   assert.match(html, /<p>Large but not bold/, "large without bold stays a paragraph");
+});
+
+test("a link the book marks as a footnote reference is marked, and any other number is not", async () => {
+  const cookie = cookieFor(freshUser());
+  await importBook(ID, FOOTNOTES, cookie);
+  const html = await (await getChapter(ID, 1, 1, cookie)).text();
+  const marked = [...html.matchAll(/<a [^>]*data-noteref[^>]*>(.*?)<\/a>/g)].map((m) => m[1]);
+  assert.deepEqual(marked, ["1", "[2]", "3", "<sup>*</sup>"], "epub:type, role, a link in a sup, a sup in a link");
+  assert.match(html, /chapter <a href="#" data-chapter="1" data-block="\d+">4<\/a>/, "a plain numbered link is a real number");
+  assert.match(html, /x<sup>2<\/sup>/, "a bare superscript is a real number");
+  assert.doesNotMatch(html.match(/<a [^>]*>a whole phrase/)[0], /data-noteref/, "a phrase is read, whatever the book calls it");
+  assert.doesNotMatch(html.match(/<a [^>]*>5</)[0], /data-noteref/, "a link out of the book is no reference");
 });
 
 test("a second import of the same id is idempotent, returning the row unchanged", async () => {

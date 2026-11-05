@@ -15,6 +15,7 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLE = resolve(HERE, "..", "..", "books", "tests", "fixtures", "sample.epub");
+const FOOTNOTES = resolve(HERE, "..", "..", "books", "tests", "fixtures", "footnotes.epub");
 const PAGE = `${BASE_URL}/workshop/design/books`;
 const BOOK_ID = "01K00000000000000000000SMP";
 
@@ -22,8 +23,8 @@ const seed = (vimKeys) =>
   JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
 
 // One user per run: the sample book, open, and the test voice picked.
-const seedUser = async () => {
-  const cookie = forgeCookie("reader-speak");
+const seedUser = async (name = "reader-speak", book = SAMPLE) => {
+  const cookie = forgeCookie(name);
   const put = async (path, type, body) => {
     const res = await fetch(`${BASE_URL}${path}`, {
       method: "PUT",
@@ -32,7 +33,7 @@ const seedUser = async () => {
     });
     assert.equal(res.status, 200, `PUT ${path}`);
   };
-  await put(`/api/books/${BOOK_ID}`, "application/epub+zip", readFileSync(SAMPLE));
+  await put(`/api/books/${BOOK_ID}`, "application/epub+zip", readFileSync(book));
   await put(`/api/books/${BOOK_ID}/opened`, "application/json", "{}");
   await put("/api/voice", "application/json", JSON.stringify({ voice: "test" }));
   return cookie;
@@ -63,17 +64,18 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
   describe(`reading aloud in ${engine.name}`, { timeout: 40000 }, () => {
     let browser;
     let cookie;
+    let footnotes;
     before(async () => {
-      [browser, cookie] = await Promise.all([engine.launch(), seedUser()]);
+      [browser, cookie, footnotes] = await Promise.all([engine.launch(), seedUser(), seedUser("reader-speak-notes", FOOTNOTES)]);
     }, { timeout: 20000 });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
 
-    async function open({ vimKeys = false, phone = false, hidden = [], route } = {}) {
+    async function open({ vimKeys = false, phone = false, hidden = [], route, user = cookie } = {}) {
       const context = await browser.newContext({ viewport: { width: 1300, height: 800 } });
       context.setDefaultTimeout(4000);
-      await signedIn(context, cookie);
+      await signedIn(context, user);
       await context.route(/\/api\/flags$/, (r) =>
         r.fulfill({ json: { off: [], hidden, released: ["reading-aloud"], shown: hidden.includes("reading-aloud") ? [] : ["reading-aloud"] } }),
       );
@@ -186,6 +188,39 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await look(page)).tinted === 0);
         await page.keyboard.press("Escape");
         await until(async () => (await look(page)).foot[0] === "Read page");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: rendering and layout.
+    test("a footnote reference stays on the page and is left out of what the voice is given and lights up", async () => {
+      const told = [];
+      const route = (r) => {
+        told.push(r.request().postDataJSON().text);
+        return r.continue();
+      };
+      const { context, page, problems } = await open({ route, user: footnotes });
+      try {
+        const reader = page.locator("book-reader");
+        assert.match(await reader.locator(".strip > p").first().textContent(), /Verus1 remembered, father,2 modesty\./, "the page still shows them");
+        // A paragraph holding only a reference offers no speaker.
+        await reader.locator(".strip > p").nth(1).hover();
+        await new Promise((r) => setTimeout(r, 100));
+        assert.equal((await look(page)).read, null);
+        await reader.locator(".speak.page-read").click();
+        const lit = new Set();
+        await until(async () => {
+          const { word, foot } = await look(page);
+          if (word) lit.add(word);
+          return foot[0] === "Read page" && told.length > 0;
+        }, 4500, 20);
+        assert.deepEqual(told, ["Marked", "Verus  remembered, father,  modesty.", "In 1984 too.", "A note."]);
+        assert.ok(lit.has("remembered"), `the word after a reference lights up: `);
+        assert.ok(lit.has("modesty"), `and the word after the second: `);
+        assert.ok(lit.has("1984"), `a real number is read: `);
+        assert.ok(![...lit].some((w) => /^[123]$/.test(w) || /Verus\S/.test(w)), `a reference never lights up: `);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

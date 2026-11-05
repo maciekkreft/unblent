@@ -111,8 +111,19 @@ const speechMode = (snapshot) => {
   if (snapshot.matches({ reading: { ready: { speech: "loading" } } }) && speech.held) return "paused";
   return "reading";
 };
+// A block's text as a voice gets it. A footnote reference is never said, and the import
+// marked each from the book's own markup; it becomes spaces, not nothing, so the character
+// offsets the voice answers still fall on the page's own text (#blockRange).
+const spokenText = (el) => {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let text = "";
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    text += node.parentElement.closest("a[data-noteref]") ? " ".repeat(node.data.length) : node.data;
+  }
+  return text;
+};
 // A block a voice can read: one with words in it, not a picture, a table or a listing.
-const speakable = (el) => Boolean(el) && !el.matches("figure, table, pre, hr, img") && el.textContent.trim() !== "";
+const speakable = (el) => Boolean(el) && !el.matches("figure, table, pre, hr, img") && spokenText(el).trim() !== "";
 const sameLine = (a, b) => a.col === b.col && Math.abs(a.top - b.top) < Math.min(a.height, b.height) / 2;
 
 class BookReader extends LitElement {
@@ -1626,14 +1637,17 @@ class BookReader extends LitElement {
     this.#actor.send({ type: "_say", blocks: items });
   }
 
-  // The blocks to read, each with its text exactly as the page counts it, so the voice's
+  // The blocks to read, each with its text as long as the page counts it, so the voice's
   // character offsets fall on the page's own text; the top block of the page, when it
   // runs in from the page before, from where this page starts.
   #items(blocks, top = null, start = 0) {
-    const texts = this.#blockTexts();
     return blocks
       .filter((b) => speakable(this.#strip.children[b]))
-      .map((b) => (b === top && start > 0 ? { block: b, text: texts[b].slice(start), start } : { block: b, text: texts[b], start: 0 }));
+      .map((b) => {
+        const text = spokenText(this.#strip.children[b]);
+        return b === top && start > 0 ? { block: b, text: text.slice(start), start } : { block: b, text, start: 0 };
+      })
+      .filter((item) => item.text.trim() !== "");
   }
 
   // The blocks from one on to the last that starts on the page shown.

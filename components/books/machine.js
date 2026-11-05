@@ -1001,7 +1001,11 @@ export const machine = setup({
       "Owns the books in the library: each book's title, author, chapters, table of contents, " +
       "reading position, and which book is open. A book is added only while signed in, because adding " +
       "uploads the epub file; its chapters and images are extracted once on the server and " +
-      "fetched by URL, so this fact never holds the file. A book whose file holds several " +
+      "fetched by URL, so this fact never holds the file. The import marks a book's footnote " +
+      "references, so reading aloud can leave them out: a link the book declares a reference " +
+      "(epub:type noteref, role doc-noteref) or a link that is superscript, when its text is " +
+      "only a number, a symbol or one letter. A book imported before this has no marks until " +
+      "it is imported again. A book whose file holds several " +
       "chapters in one piece is cut where its contents say each chapter begins. The reading " +
       "position, a title and an author the user gives a book, and which book is open are last " +
       "write wins: they are never refused, and a pull brings them to every device. So is a book's place " +

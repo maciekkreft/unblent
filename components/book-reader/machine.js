@@ -776,7 +776,10 @@ export const machine = setup({
       "The footer offers Read page, which reads the page's paragraphs and headings in order, " +
       "and while anything is read Pause, or Resume once paused, and Stop; a phone has only the " +
       "footer. The paragraph being read is tinted and the word being said lights up, and the " +
-      "next paragraph's audio is fetched while one plays. A page turn, another chapter or " +
+      "next paragraph's audio is fetched while one plays. A footnote reference the book marks " +
+      "as one is never said or lit: the page still shows it and it can still be followed, a " +
+      "paragraph holding nothing else is skipped and offers no speaker, and a number in a " +
+      "sentence is read, as is a footnote's own text where the book places it. A page turn, another chapter or " +
       "another book stops it. With Vim keys on, r reads the cursor's paragraph and R the page " +
       "from it; while anything is read, Space pauses and resumes and Escape stops. A voice that " +
       "cannot read says why over the footer for a moment: Download the voice in Settings, Add " +
