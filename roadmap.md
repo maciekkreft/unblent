@@ -37,7 +37,11 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Hiding an evaluator's mark and its hint on one line of a day that can still be edited, leaving a faint dot that shows them again (sketch: `~/.claude/plans/hints-and-locks.md`).
 - The push gate also covering the phone preview and signed-in and signed-out use in both browsers, run only when the owner pushes by hand, never by a coding session (sketch: `~/.claude/plans/hints-and-locks.md`).
 - Notes and chats kept with the day they were made, so each day shows only its own, with a checkbox on a note or a chat that shows it on every day.
-- Highlights and comments on past journal days, and summaries of journal days.
+- Highlights and comments on past journal days.
+- Summaries of journal days, shown to the user beside each day; today the journal summary generator writes one sentence per day, which only the chat reads.
+- Summaries of book chapters, shown to the user beside each chapter.
+- A Wheel of Life sheet, the coaching exercise in which a person rates the areas of their life, on the topic of coaching (see the sheets offered by topic above), which can be added to every journal.
+- Getting books from https://standardebooks.org/ebooks and other places whose books are legal to download, from inside the app.
 - Versions of a note, as a new feature: each version of a note is kept, and the user can compare two versions and see what changed between them, with a vendored library that finds the differences.
 - A set of example goals for the Therapy Goal evaluator, each with the answer it should get, run again after a change to the evaluator's options to show which answers moved (sketch: `~/.claude/plans/evaluator-dataset.md`).
 - Copying a choice point, or any later kind of sheet, from an earlier day to today as the next version of the original, which stays unchanged, with a link in the bottom left corner of the copy that opens the version it continues.
