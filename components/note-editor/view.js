@@ -7,7 +7,7 @@ import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, refreshLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, notePicker, refreshPicker, pickerKey, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, hintOf, showing, startsTyping, linkMissing, linkTitleOf, linkHintOf, linkableNotes, notSynced, knownTags, lineMarksOf, homeOf, footerOf, slipBoxTargets } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, hintOf, showing, startsTyping, prewritten, linkMissing, linkTitleOf, linkHintOf, linkableNotes, notSynced, knownTags, lineMarksOf, homeOf, footerOf, slipBoxTargets } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
@@ -1065,6 +1065,8 @@ class NoteEditor extends LitElement {
         },
         focus: () => {
           this.#actor.send({ type: "_focused" });
+          // A press on the title moves the cursor there after this.
+          if (this.#actor.snapshot && prewritten(this.#actor.snapshot)) this.#view?.dispatch({ selection: { anchor: this.#view.state.doc.length } });
           this.#startTyping();
         },
         // The page-wide Vim level keys arrive here as a "level" event (setLineLevel).
@@ -1156,7 +1158,7 @@ class NoteEditor extends LitElement {
       // Shadow-DOM: CM6 reads the selection through the root and style-mod mounts its
       // sheet there, not on document (7.5), so it must know the shadow root.
       root: this.renderRoot,
-      state: EditorState.create({ doc, extensions: this.#extensions() }),
+      state: EditorState.create({ doc, selection: { anchor: this.#actor.snapshot && prewritten(this.#actor.snapshot) ? doc.length : 0 }, extensions: this.#extensions() }),
     });
     this.#shown = body; // before the leveling dispatch, so #onUpdate sees no change
     this.#checksFrom = undefined;
@@ -1222,6 +1224,7 @@ class NoteEditor extends LitElement {
     this.#shown = body;
     this.#view.dispatch({
       changes: { from: 0, to: this.#view.state.doc.length, insert: doc },
+      ...(prewritten(snapshot) ? { selection: { anchor: doc.length } } : {}),
       effects: [setAllLevels.of(levels), this.#history.reconfigure([])],
     });
     this.#view.dispatch({ effects: this.#history.reconfigure(history()) });

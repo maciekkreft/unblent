@@ -356,6 +356,29 @@ export const defaultType = (context) => {
   return link?.kind === "book" && link.id !== JOURNAL ? "literature" : "fleeting";
 };
 
+// The text a new literature note starts with (13, Note type), with the blank line and the
+// empty line the cursor waits on, as Enter after the title would leave them.
+export const LITERATURE_START = "# Literature Note\n\n";
+
+// What a page with no note yet holds: only while types show, since the text names a type.
+const startText = (context) =>
+  slipBoxShown(context.hidden) && context.id !== SLIPBOX && defaultType(context) === "literature" ? LITERATURE_START : "";
+
+// Keeps such a page's text right as flags and the subject arrive, in `empty` and `blank`,
+// which any typing leaves, so what they hold is always untouched. The text is also what
+// `sent` holds, so it is not a change (dirty, unchanged) until the user edits it.
+const prewrite = {
+  guard: ({ context }) => context.body !== startText(context),
+  actions: assign(({ context }) => {
+    const body = startText(context);
+    return { body, sent: body === "" ? null : { body } };
+  }),
+};
+
+// Whether the editor shows pre-written text nobody has touched, so the view puts the cursor
+// below the title.
+export const prewritten = (snapshot) => snapshot.context.body !== "" && (snapshot.matches("empty") || snapshot.matches("blank"));
+
 // The notes under the open note, judged by each note's parents. A
 // deleted note's entry stays (entries, above), so it must still exist to count.
 const notesUnder = (context) =>
@@ -821,7 +844,8 @@ export const machine = setup({
     // line, so there is nothing to ask and nothing to show.
     readChecks: enqueueActions(({ context, enqueue }) => {
       const due = checksDue(context);
-      const hashed = due.text?.includes("#") === true;
+      // The pre-written title is no hashtag line, and no note is written yet.
+      const hashed = due.text !== LITERATURE_START && due.text?.includes("#") === true;
       enqueue.assign({ checkedId: due.id, checkedText: due.text, ...(due.reset || !hashed ? { checks: null } : {}) });
       enqueue.stopChild("checks");
       if (hashed) enqueue.spawnChild("checks", { id: "checks", input: { ask: context.ask, id: due.id, text: due.text } });
@@ -922,7 +946,13 @@ export const machine = setup({
       "note with notes under it keeps its type: the other two are greyed with the tooltip \"Move or delete the notes under it " +
       "first\", and a press or Enter on one shows those words in its line and changes nothing. A new note is " +
       "permanent when it is made under a Permanent note or the Slip-Box, literature when it is made beside a book, and " +
-      "fleeting in the Journal or with no link. A new note written while a note that is not Permanent is the subject is " +
+      "fleeting in the Journal or with no link. A new literature note starts with the line \"Literature Note\" at Title level " +
+      "and the cursor on a new line below it, after a gap, on the empty page as on a new note picked in the list, also " +
+      "after turning to a chapter with no note or an Undo of a new note. That text alone is an empty page: leaving it " +
+      "saves nothing and no note exists, and a note about the subject arriving later fills it. The first change, to " +
+      "the title or below it, saves the whole text, one step for Undo, and from then on it is text like any other: a " +
+      "later change of type never touches it, and changing an existing note to Literature adds no title. With Slip-Box " +
+      "hidden a new note starts empty. A new note written while a note that is not Permanent is the subject is " +
       "linked to nothing, since only a Permanent note or the Slip-Box can have notes under it; a " +
       "note without a type is fleeting. With Slip-Box hidden the type is kept but not shown. Fixed at the bottom of a written note and of the Slip-Box, above the level bar, " +
       "three sections fold each with its caret, the folds kept in this browser for every note: Passages, the " +
@@ -1413,6 +1443,7 @@ export const machine = setup({
     // for the open one (12, "Which note is open").
     empty: {
       entry: enqueueActions(({ context, enqueue }) => announceOpened(context, enqueue, null)),
+      always: prewrite,
       on: {
         _typed: mintAndType,
         // A note for the subject (in its open chapter, when it has one) arrived after the
@@ -1507,6 +1538,7 @@ export const machine = setup({
     // creates it. A null base under an id notes does not hold upserts as version 1
     // (notes.applySave), so nothing here differs from an editor that just minted.
     blank: {
+      always: prewrite,
       on: { _typed: { target: "editing.dirty", actions: assignTyped } },
     },
     failed: {},

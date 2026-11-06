@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, homeOf, footerOf, noteTypeOf, strands, SLIPBOX } from "../machine.js";
+import { machine, homeOf, footerOf, noteTypeOf, strands, prewritten, SLIPBOX, LITERATURE_START } from "../machine.js";
 
 // Note types (13), decided by the machine: the label and its menu, when Permanent may be
 // chosen, which places keep a permanent note in the Slip-Box, and a new note's type.
@@ -41,7 +41,10 @@ const settle = async () => {
 
 function editor({ hidden = [], note = null, subject = null, subjecting = false, keepOpen = false } = {}) {
   const saved = [];
+  const opened = [];
+  const asked = [];
   const ask = (target, name) => {
+    asked.push(target);
     if (target === "flags") return Promise.resolve({ hidden });
     if (target === "subject") return Promise.resolve({ subject });
     if (target === "settings") return Promise.resolve({ keepOpen });
@@ -56,8 +59,9 @@ function editor({ hidden = [], note = null, subject = null, subjecting = false, 
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
+  actor.on("note.opened", (e) => opened.push(e.id));
   actor.start();
-  return { actor, saved, clock };
+  return { actor, saved, clock, opened, asked, arrives: (later) => { note = later; } };
 }
 
 async function opened(note, options = {}) {
@@ -255,4 +259,150 @@ test("with the open note kept, a new note's type still follows the link it is sa
   none.clock.increment(THROTTLE_MS);
   assert.deepEqual(none.saved[0].about, []);
   assert.equal(none.saved[0].noteType, "fleeting");
+});
+
+// The pre-written title of a new literature note (13, Note type).
+const besideBook = async (options = {}) => {
+  const e = editor({ subjecting: true, subject: asBook(BOOK), ...options });
+  await settle();
+  return e;
+};
+const bodyOf = (e) => e.actor.getSnapshot().context.body;
+const leaves = (e) => {
+  e.actor.send({ type: "_focused" });
+  e.actor.send({ type: "_finished", lines: [] });
+  e.actor.send({ type: "_blurred" });
+};
+
+test("beside a book the empty page holds the title, and leaving it untouched saves nothing and makes no note", async () => {
+  const e = await besideBook();
+  assert.equal(e.actor.getSnapshot().value, "empty");
+  assert.equal(bodyOf(e), LITERATURE_START);
+  assert.equal(prewritten(e.actor.getSnapshot()), true);
+  leaves(e);
+  e.clock.increment(THROTTLE_MS * 2);
+  e.actor.send({ type: "subject.changed", subject: asBook(JOURNAL) });
+  await settle();
+  assert.deepEqual(e.saved, []);
+  assert.equal(e.actor.getSnapshot().context.id, null);
+});
+
+test("the first typing saves the whole text as literature, with one save until the keyboard leaves", async () => {
+  const e = await besideBook();
+  e.actor.send({ type: "_typed", body: `${LITERATURE_START}A line` });
+  assert.equal(e.actor.getSnapshot().context.id, NEW);
+  e.clock.increment(THROTTLE_MS);
+  assert.equal(e.saved.length, 1);
+  assert.equal(e.saved[0].body, "# Literature Note\n\nA line");
+  assert.equal(e.saved[0].title, "Literature Note");
+  assert.equal(e.saved[0].noteType, "literature");
+  assert.deepEqual(e.saved[0].about, [{ kind: "book", id: BOOK }]);
+  assert.ok(valid(e.saved[0]));
+  e.actor.send({ type: "_blurred" });
+  assert.equal(e.saved.length, 2);
+  assert.equal(e.saved[1].left, true);
+  assert.equal(e.saved[1].body, "# Literature Note\n\nA line");
+});
+
+test("changing only the title is typing and saves", async () => {
+  const e = await besideBook();
+  e.actor.send({ type: "_typed", body: "# Chapter thoughts\n\n" });
+  e.clock.increment(THROTTLE_MS);
+  assert.equal(e.saved[0].body, "# Chapter thoughts\n\n");
+  assert.equal(e.saved[0].title, "Chapter thoughts");
+});
+
+test("typing back to the title before the first save saves nothing", async () => {
+  const e = await besideBook();
+  e.actor.send({ type: "_typed", body: `${LITERATURE_START}x` });
+  e.actor.send({ type: "_typed", body: LITERATURE_START });
+  e.clock.increment(THROTTLE_MS);
+  e.actor.send({ type: "_blurred" });
+  assert.deepEqual(e.saved, []);
+});
+
+test("only a new literature note starts with the title: not in the Journal, with no link, under a note, or with Slip-Box hidden", async () => {
+  const day = { ...asBook(JOURNAL), chapter: "2026-11-06", chapterTitle: "Today" };
+  for (const options of [{ subject: day }, { subject: null }, { subject: asNote(SUB) }, { subject: asNote(SLIPBOX) }, { hidden: ["slip-box"] }]) {
+    const e = await besideBook(options);
+    assert.equal(bodyOf(e), "", JSON.stringify(options));
+    assert.equal(prewritten(e.actor.getSnapshot()), false);
+  }
+  const off = await besideBook({ hidden: ["slip-box"] });
+  off.actor.send({ type: "flags.changed", hidden: [], released: [], shown: [] });
+  assert.equal(bodyOf(off), LITERATURE_START, "the title comes with the feature");
+  off.actor.send({ type: "flags.changed", hidden: ["slip-box"], released: [], shown: [] });
+  assert.equal(bodyOf(off), "", "and goes with it");
+});
+
+test("a new note picked beside a book holds the title, and picking another saves nothing", async () => {
+  const e = await besideBook();
+  e.actor.send({ type: "load", id: NEW });
+  await settle();
+  assert.equal(e.actor.getSnapshot().value, "blank");
+  assert.equal(bodyOf(e), LITERATURE_START);
+  e.actor.send({ type: "load", id: "01ARZ3NDEKTSV4RRFFQ69G5FAA" });
+  await settle();
+  e.actor.send({ type: "_blurred" });
+  assert.deepEqual(e.saved, []);
+  e.actor.send({ type: "_typed", body: `${LITERATURE_START}Mine` });
+  e.clock.increment(THROTTLE_MS);
+  assert.equal(e.saved[0].id, "01ARZ3NDEKTSV4RRFFQ69G5FAA");
+  assert.equal(e.saved[0].body, `${LITERATURE_START}Mine`);
+  assert.equal(e.saved[0].noteType, "literature");
+});
+
+test("a chapter with no note shows the title again, and with the keyboard on the page the page stays", async () => {
+  const chapter = (n) => ({ ...asBook(BOOK), chapter: `c${n}`, chapterTitle: `Chapter ${n}` });
+  const e = await besideBook({ subject: chapter(1) });
+  e.actor.send({ type: "subject.changed", subject: chapter(2) });
+  assert.equal(bodyOf(e), "", "nothing is shown while the notes are read");
+  await settle();
+  assert.equal(bodyOf(e), LITERATURE_START);
+  e.actor.send({ type: "_focused" });
+  e.actor.send({ type: "subject.changed", subject: chapter(3) });
+  await settle();
+  assert.equal(bodyOf(e), LITERATURE_START);
+  e.actor.send({ type: "_typed", body: `${LITERATURE_START}Mine` });
+  e.clock.increment(THROTTLE_MS);
+  assert.deepEqual(e.saved[0].about, [{ kind: "book", id: BOOK, chapter: "c3", chapterTitle: "Chapter 3" }]);
+});
+
+test("a note about the subject arriving later replaces the untouched title", async () => {
+  const note = { id: ME, title: "Me", body: "Me", version: 3, pending: false, updatedAt: 4, about: [{ kind: "book", id: BOOK }] };
+  const e = await besideBook();
+  e.arrives(note);
+  e.actor.send({ type: "note.changed", ...note });
+  await settle();
+  assert.equal(bodyOf(e), "Me");
+  assert.deepEqual(e.saved, []);
+});
+
+test("deleting the new note, as Undo does, brings the title back as an empty page", async () => {
+  const e = await besideBook();
+  e.actor.send({ type: "_typed", body: `${LITERATURE_START}Gone` });
+  e.clock.increment(THROTTLE_MS);
+  e.actor.send({ type: "note.changed", id: NEW, title: "Literature Note", body: `${LITERATURE_START}Gone`, version: 1, pending: false, updatedAt: 9, about: [{ kind: "book", id: BOOK }] });
+  e.actor.send({ type: "_blurred" });
+  const count = e.saved.length;
+  e.actor.send({ type: "note.deleted", id: NEW });
+  await settle();
+  assert.equal(bodyOf(e), LITERATURE_START);
+  assert.equal(e.actor.getSnapshot().context.id, null);
+  e.actor.send({ type: "_blurred" });
+  assert.equal(e.saved.length, count);
+});
+
+test("line-checks is not asked about the untouched title", async () => {
+  const e = await besideBook();
+  e.actor.send({ type: "load", id: NEW });
+  await settle();
+  assert.equal(e.asked.includes("line-checks"), false);
+});
+
+test("changing an existing note to Literature adds no title", async () => {
+  const e = await opened(mine([]));
+  e.actor.send({ type: "_retype", noteType: "literature" });
+  assert.equal(e.saved[0].noteType, "literature");
+  assert.equal(e.saved[0].body, "Me");
 });
