@@ -1659,6 +1659,20 @@ def backup_files() -> dict:
     return files
 
 
+DISK_LIMIT_PERCENT = 80
+
+
+def disk_problem(used: int, free: int) -> str | None:
+    """What to tell the owner when the disk has crossed the limit, else None. Counted as
+    df counts it, against the space a user can have, because a full disk stops the
+    server's writes and the backup long before a share of the raw size says so."""
+    percent = 100 * used / (used + free)
+    if percent < DISK_LIMIT_PERCENT:
+        return None
+    return (f"the disk is {percent:.0f}% full, over the limit of {DISK_LIMIT_PERCENT}%, with {free / 2**30:.1f} GB free; "
+            "tell the owner, and find what fills it: sudo du -xh --max-depth=2 / | sort -h | tail -20")
+
+
 def check_backup() -> None:
     # Only the production host runs the backup; elsewhere there is nothing to check,
     # and a machine without systemd (a Mac) has no systemctl at all.
@@ -1670,6 +1684,12 @@ def check_backup() -> None:
     fields = dict(line.partition("=")[::2] for line in state.stdout.splitlines())
     if state.returncode != 0 or fields.get("LoadState") != "loaded":
         return
+    # Asked here because the backup service is how a check knows it is on the production
+    # host: a contributor's laptop that is 80% full has nothing wrong with the project,
+    # and a second systemctl call would spend the fast phase's budget (11).
+    usage = shutil.disk_usage(ROOT)
+    if problem := disk_problem(usage.used, usage.free):
+        fail("deploy/", "disk check (11.2)", problem)
     where = f"deploy/systemd/{BACKUP_UNIT}.service"
     if fields.get("ActiveState") != "active":
         fail(where, "backup check (11.2)", f"the backup is {fields.get('ActiveState')}: sudo systemctl start {BACKUP_UNIT}")
