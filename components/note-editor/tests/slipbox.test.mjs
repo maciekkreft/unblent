@@ -21,6 +21,10 @@ const LOOSE = "01K0000000000000000000NTE1";
 const PANEL = "note-editor:not([stage])";
 const inPanel = (page, fn, arg) => page.evaluate(([sel, body, arg]) => new Function("root", "arg", body)(document.querySelector(sel).shadowRoot, arg), [PANEL, fn, arg]);
 
+// The panel's editor follows the stage (D7) and opens afresh when the Slip-Box reaches it,
+// so a note picked before that would be replaced; its home line names the Slip-Box then.
+const panelFollowsSlipBox = (page) => until(() => inPanel(page, `return root.querySelector(".home")?.textContent.includes("Slip-Box")`));
+
 // The product page on the phone preview with Slip-Box shown, the Slip-Box opened on the
 // stage; `body` drives it from there.
 async function onSlipBox(engine, body, setup = null, seed = null) {
@@ -79,6 +83,7 @@ const onLooseNote = (engine, body) =>
         },
       };
       await until(() => page.evaluate(() => Boolean(document.querySelector("note-editor[stage]")?.shadowRoot?.querySelector(".cm-content"))));
+      await panelFollowsSlipBox(page);
       await until(() =>
         page.evaluate(() => {
           const row = [...(document.querySelector("note-list")?.shadowRoot?.querySelectorAll("li") ?? [])].find((r) => r.querySelector(".name")?.textContent.trim() === "Loose note");
@@ -327,6 +332,7 @@ for (const engine of ENGINES) {
         const label = () => inPanel(page, `return root.querySelector(".home-type")?.textContent.trim() ?? null`);
         const line = (i) => inPanel(page, `return root.querySelectorAll(".type-row")[arg]?.querySelector(".under").textContent ?? null`, i);
         const REASON = "Move or delete the notes under it first";
+        await panelFollowsSlipBox(page);
         await until(() =>
           page.evaluate(() => {
             const row = [...(document.querySelector("note-list")?.shadowRoot?.querySelectorAll("li") ?? [])].find((r) => r.querySelector(".name")?.textContent.trim() === "Parent");
