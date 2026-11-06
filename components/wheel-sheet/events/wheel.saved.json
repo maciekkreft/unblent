@@ -38,6 +38,10 @@
         "maximum": 10
       },
       "description": "The Wanted score of each area, in the fixed order Health, Work, Money, Family, Love, Friends, Growth, Fun: 1 to 10, or null where there is none."
+    },
+    "finished": {
+      "type": "boolean",
+      "description": "True ends the stretch of rating, so the next change is an Undo step of its own (12, Undo): the view sends it when the sheet folds. Absent or false while the user is still rating."
     }
   },
   "required": [
