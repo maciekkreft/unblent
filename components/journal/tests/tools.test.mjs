@@ -66,7 +66,7 @@ test("open answers the day the journal page last announced, with its text and wh
     assert.deepEqual(await page.open(), { shown: null }, "no journal page has announced a day");
     page.show({ day: "2026-10-12", writable: false });
     await until(async () => (await page.open()).shown?.day === "2026-10-12");
-    assert.deepEqual(await page.open(), { shown: { day: "2026-10-12", text: "# Monday\nEarlier", writable: false } });
+    assert.deepEqual(await page.open(), { shown: { id: D1, day: "2026-10-12", text: "# Monday\nEarlier", writable: false } });
     // Today's page with nothing written yet; without `writable`, only today counts as writable.
     page.show({ day: "2026-10-15" });
     await until(async () => (await page.open()).shown?.day === "2026-10-15");
@@ -84,8 +84,8 @@ test("days answers the written days in a range of dates, oldest first, without d
   try {
     assert.deepEqual(await page.days({}), {
       days: [
-        { day: "2026-10-12", text: "# Monday\nEarlier" },
-        { day: "2026-10-14", text: "Later" },
+        { id: D1, day: "2026-10-12", text: "# Monday\nEarlier" },
+        { id: D2, day: "2026-10-14", text: "Later" },
       ],
     });
     assert.deepEqual(await dates({ from: "2026-10-14" }), ["2026-10-14"], "from alone is one day");

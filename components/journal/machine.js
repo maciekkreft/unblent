@@ -190,13 +190,14 @@ const body = (c) => {
 
 // journal: open. The shown day is the one journal-entry last announced in day.shown;
 // which day the page shows is that view's rule, so this fact only remembers it. Its text
-// is the day's record, or empty for today's page not yet written on. A day.shown without
-// `writable` counts only today as writable, as that event says.
+// is the day's record, or empty for today's page not yet written on, which has no id for
+// a chat's link to open (7.7). A day.shown without `writable` counts only today as
+// writable, as that event says.
 const opened = (c) => {
   if (!c.shown) return { shown: null };
   const { day, writable } = c.shown;
   const record = visible(c.days).find((d) => d.day === day);
-  return { shown: { day, text: record?.text ?? "", writable: writable ?? day === todayOf(c.now()) } };
+  return { shown: { ...(record ? { id: record.id } : {}), day, text: record?.text ?? "", writable: writable ?? day === todayOf(c.now()) } };
 };
 
 // journal: days, oldest first and at most DAYS_MAX of them. `from` alone names one day;
@@ -206,7 +207,7 @@ const between = (c, { from, to } = {}) => {
   const all = visible(c.days)
     .filter((d) => d.text !== "" && (!from || d.day >= from) && (!last || d.day <= last))
     .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id));
-  const reply = { days: all.slice(0, DAYS_MAX).map(({ day, text }) => ({ day, text })) };
+  const reply = { days: all.slice(0, DAYS_MAX).map(({ id, day, text }) => ({ id, day, text })) };
   // Only a range longer than DAYS_MAX carries `more`, so the reply of a short one is as before.
   if (all.length > DAYS_MAX) reply.more = all.length - DAYS_MAX;
   return reply;

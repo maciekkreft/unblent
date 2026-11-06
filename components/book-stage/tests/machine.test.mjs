@@ -345,6 +345,11 @@ test("a chapter or a passage picked in the open book brings its tab forward; ano
   assert.equal(last().active, BOOK);
   assert.equal(shownOf(actor.getSnapshot().context), "reader");
   actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "book.selected", id: NOTE_B });
+  assert.equal(last().active, NOTE_A, "a book not open comes forward with book.opened");
+  actor.send({ type: "book.selected", id: BOOK });
+  assert.equal(last().active, BOOK, "no book.opened comes for the open book, so the pick itself brings it");
+  actor.send({ type: "note.staged", id: NOTE_A });
   actor.send({ type: "passage.selected", book: BOOK, id: NOTE_B, place: { chapter: 0, start: { block: 0, offset: 0 }, end: { block: 0, offset: 1 } } });
   assert.equal(last().active, BOOK);
   actor.send({ type: "note.staged", id: NOTE_A });

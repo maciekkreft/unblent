@@ -843,7 +843,8 @@ export const machine = setup({
       "short text, and a name in it is a link, reached with Tab, that opens what it names where it " +
       "is normally seen while the chat keeps its place: a note on the stage as a tab of its own, a " +
       "highlight in its book at its passage, a journal day in the journal, a chapter in its book, and " +
-      "the book of Where you are in it at its saved reading place, as the shelf opens it. Just " +
+      "a book, as Where you are in it and the books listed or opened name it, at its saved reading " +
+      "place, as the shelf opens it. Just " +
       "before it opens one it says which chat the link was in and what it brings in front, so " +
       "`conversations` keeps that chat open when the subject changes to it. Answers " +
       "are written in markdown and drawn as formatted text by a small renderer of our own, " +

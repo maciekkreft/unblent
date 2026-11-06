@@ -78,4 +78,45 @@ for (const engine of ENGINES) {
       await browser.close();
     }
   });
+
+  // A page's composition: on the phone a book's link leaves the chat's drawer for the
+  // book's own contents, as the shelf does, and the stage behind them shows that book.
+  test(`a lookup's link to a book folds the chat on the phone in ${engine.name}`, async () => {
+    const cookie = forgeCookie("chat-links-book");
+    const books = { books: [{ id: "00000000000000000000000JRN", title: "My days", author: "", cover: null, position: { chapter: 0, block: 0 }, chapterCount: 0, pending: false, addedAt: 1, written: true }] };
+    const turns = [
+      { id: U("Q1"), role: "user", text: "Which books do I have?" },
+      { id: U("A1"), role: "assistant", text: "", status: "done", calls: [{ id: "c1", target: "books", name: "list", payload: {}, label: "Listing the books" }] },
+      { id: U("R1"), role: "user", text: "", results: [{ callId: "c1", content: JSON.stringify(books) }] },
+      { id: U("A2"), role: "assistant", text: "One.", status: "done" },
+    ];
+    await put(cookie, "/api/conversations/" + CHAT, { title: "Library", about: [], start: "", turns });
+    const browser = await engine.launch();
+    try {
+      const context = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+      try {
+        context.setDefaultTimeout(4000);
+        await signedIn(context, cookie);
+        await context.addInitScript(() => localStorage.setItem("viewport", "phone"));
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(BASE_URL + "/");
+        const folded = (side) => page.locator(`dock-desk .dock.${side}`).evaluate((d) => d.classList.contains("folded"));
+        await page.locator('dock-desk .dock.right .fold[aria-label="Unfold"]').click();
+        await page.locator("dock-desk").getByRole("tab", { name: "Chats" }).click();
+        await page.locator("conversation-list").getByText("Library", { exact: true }).click();
+        await page.locator("#chats-thread .lookup summary", { hasText: "Listing the books" }).click();
+        await page.locator("#chats-thread .got .open", { hasText: "My days" }).click();
+
+        await until(() => folded("right"));
+        await until(async () => !(await folded("left")));
+        await until(() => page.locator("journal-entry").evaluate((el) => el.checkVisibility()));
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+    }
+  });
 }

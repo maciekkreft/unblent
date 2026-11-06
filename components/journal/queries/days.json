@@ -27,6 +27,11 @@
         "items": {
           "type": "object",
           "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "The day's record, which the journal page opens."
+            },
             "day": {
               "type": "string",
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
@@ -54,6 +59,7 @@
   "tool": {
     "description": "Returns the full text of the reader's journal days, oldest first, at most seven per ask. Give from alone (YYYY-MM-DD) for one day, or from and to for a range (both included). Days with nothing written are left out; when the range holds more than seven written days, more says how many were left out after the last one returned, so ask again from the day after it, or better, read only the days that matter. Find those days first with the journal index tool, the short list, and read here only the ones it names. The text is markdown: a line starting with # is a title, ## a heading, ### a subheading. To know which day the journal page shows now, read the open journal day instead.",
     "label": "Reading journal day text", "title": "Journal day text", "group": "Journal", "order": 320,
-    "items": "/days", "itemName": "/day", "itemExcerpt": "/text"
+    "items": "/days", "itemName": "/day", "itemExcerpt": "/text",
+    "opens": "journal-day"
   }
 }

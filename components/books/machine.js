@@ -1027,7 +1027,7 @@ export const machine = setup({
       "page is not a step and refuses nothing. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
       "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
-      "book's tab to the front on the stage, and so does picking a chapter of a book, or a day of the " +
+      "book's tab to the front on the stage, and so does picking a book, a chapter of a book, or a day of the " +
       "journal, from a lookup in the chat. The chat may ask where the reader is in the open " +
       "book: the chapter, and the paragraph at the reading place with the next ones up to about " +
       "300 words, the paragraphs counted the way the reader counts them. Signing out keeps the library, the reading places " +

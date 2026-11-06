@@ -551,9 +551,11 @@ export const machine = setup({
     },
     "book.closed": { actions: enqueueActions(close) },
     // A place picked in the open book (a lookup's link in the chat, a source link, the
-    // contents): while a note or a chat tab is in front, the book's tab comes forward, so
-    // the picked place is seen. A book not open yet comes forward with the book.opened
-    // that `books` opening it brings.
+    // contents), or the open book itself picked (a lookup's link, the shelf): while a note
+    // or a chat tab is in front, the book's tab comes forward, so the pick is seen; `books`
+    // announces no book.opened for the book already open. A book not open yet comes forward
+    // with the book.opened that `books` opening it brings.
+    "book.selected": { actions: enqueueActions(({ context, event, enqueue }) => toBook(context, enqueue, event.id)) },
     "chapter.selected": { actions: enqueueActions(({ context, event, enqueue }) => toBook(context, enqueue, event.id)) },
     "passage.selected": { actions: enqueueActions(({ context, event, enqueue }) => toBook(context, enqueue, event.book)) },
     "day.selected": { actions: enqueueActions(({ context, enqueue }) => toBook(context, enqueue, context.written ? context.openId : null)) },

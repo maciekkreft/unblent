@@ -899,6 +899,10 @@ test("the recorded tool exchange is what the machine emits (seam for the views)"
 
 const entryOf = (q) => ({ label: q.tool.label, reply: q.reply, ...q.tool });
 const JOURNAL_INDEX = other("journal", "queries", "index");
+const JOURNAL_DAYS = other("journal", "queries", "days");
+const JOURNAL_OPEN = other("journal", "queries", "open");
+const BOOKS_LIST = other("books", "queries", "list");
+const BOOKS_READ = other("books", "queries", "read");
 const NOTES_HIGHLIGHTS = other("notes", "queries", "highlights");
 
 test("a JSON pointer is followed as RFC 6901 says", () => {
@@ -952,6 +956,22 @@ test("a listing says how many it returned, how many match, and names its first 2
   assert.equal("excerpt" in two[1], false, "a blank text gives no excerpt");
   const hl = JSON.stringify({ highlights: [{ id: BOOK, passage: "Thoughts are words.", comment: "", book: BOOK, chapter: 2, updatedAt: 1 }, { id: CHAT, passage: "  ", comment: "", book: BOOK, chapter: 2, updatedAt: 1 }], total: 2, more: 0 });
   assert.deepEqual(lookupItems({ callId: "c", content: hl }, entryOf(NOTES_HIGHLIGHTS)), { count: 2, total: 2, items: [{ name: "Thoughts are words.", id: BOOK, opens: "highlight" }] });
+});
+
+test("journal days and the books are links, and a result stored before they had ids stays plain", () => {
+  const days = (id) => JSON.stringify({ days: [{ ...id, day: "2026-10-30", text: "Rain." }] });
+  assert.deepEqual(lookupItems({ callId: "c", content: days({ id: BOOK }) }, entryOf(JOURNAL_DAYS)).items, [{ name: "2026-10-30", excerpt: "Rain.", id: BOOK, opens: "journal-day" }]);
+  assert.deepEqual(lookupItems({ callId: "c", content: days({}) }, entryOf(JOURNAL_DAYS)).items, [{ name: "2026-10-30", excerpt: "Rain." }]);
+
+  const open = (id) => JSON.stringify({ shown: { ...id, day: "2026-10-30", text: "Rain.", writable: false } });
+  assert.deepEqual(lookupName({ callId: "c", content: open({ id: BOOK }) }, entryOf(JOURNAL_OPEN)), { name: "2026-10-30", excerpt: "Rain.", opens: "journal-day", id: BOOK });
+  assert.deepEqual(lookupName({ callId: "c", content: open({}) }, entryOf(JOURNAL_OPEN)), { name: "2026-10-30", excerpt: "Rain." }, "a day with no record has nothing to open");
+  assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ shown: null }) }, entryOf(JOURNAL_OPEN)), {});
+
+  const books = JSON.stringify({ books: [{ id: BOOK, title: "Dune", author: "Herbert", cover: null, position: { chapter: 0, block: 0 }, chapterCount: 2, pending: false, addedAt: 1 }] });
+  assert.deepEqual(lookupItems({ callId: "c", content: books }, entryOf(BOOKS_LIST)).items, [{ name: "Dune", excerpt: "Herbert", id: BOOK, opens: "book" }]);
+  assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ book: { id: BOOK, title: "Dune" } }) }, entryOf(BOOKS_READ), { id: BOOK }), { name: "Dune", opens: "book", id: BOOK });
+  assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ error: "not-found" }) }, entryOf(BOOKS_READ), { id: BOOK }), {});
 });
 
 test("an empty listing, an error, a cut result and a single thing carry no items", () => {

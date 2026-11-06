@@ -47,6 +47,7 @@
   "tool": {
     "description": "Lists every book in the reader's library — id, title, author, where they are up to, and chapter count. Use to find a book by title or survey the whole library; gives the ids that the other book lookups, the notes and the highlights need to narrow to one book. Takes no arguments.",
     "label": "Listing the books", "title": "Titles and authors", "group": "Books", "order": 210,
-    "items": "/books", "itemName": "/title", "itemExcerpt": "/author"
+    "items": "/books", "itemName": "/title", "itemExcerpt": "/author",
+    "opens": "book"
   }
 }
