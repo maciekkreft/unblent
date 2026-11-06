@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 // process, because data/flags.db is shared by every account: releasing a feature on the
 // check's server would change what every other test sees.
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
-const ALL = ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts"];
+const ALL = ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts", "wheel-of-life"];
 
 const PRELUDE = `
 import json, os
@@ -110,7 +110,7 @@ print(json.dumps(out))
 test("a feature starts held back when it is added, and the Release of an older one is kept", () => {
   const out = run(HELD);
   const p = (off) => [200, { off, hidden: [], released: ALL.filter((f) => !off.includes(f)), shown: ALL }];
-  const later = ["slip-box", "reading-aloud", "book-experts"];
+  const later = ["slip-box", "reading-aloud", "book-experts", "wheel-of-life"];
   assert.deepEqual(out.fresh, p(["usage", ...later]), "a fresh file holds the new features back and keeps choice-points released");
   assert.deepEqual(out.released, p(later));
   assert.deepEqual(out.reopened, p(later), "the admin's release sticks when the file is opened again");

@@ -302,6 +302,7 @@ export const machine = setup({
       "marks.edited": "evaluators",
       "starter.ticked": "evaluators",
       "choice-point.saved": "choice",
+      "wheel.saved": "journal",
       "values.saved": "values",
       "values.placed": "values",
       "settings.edited": "other",

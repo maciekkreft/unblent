@@ -110,3 +110,13 @@ test("a step is refused when the switch was changed since, on any device", async
   assert.deepEqual(settled.at(-1), { id: steps[0].id, owner: "flags", outcome: "refused", reason: "changed" });
   assert.equal(srv.saves.length, saved, "nothing written");
 });
+
+test("the Wheel of Life is named as people know it in a step's label", async () => {
+  const { actor, steps } = start(server());
+  await flush();
+  actor.send({ type: "flag.switched", feature: "wheel-of-life", on: true, column: "release" });
+  await flush();
+  actor.send({ type: "flag.switched", feature: "wheel-of-life", on: true, column: "show" });
+  await flush();
+  assert.deepEqual(steps.map((s) => s.label), ["release Wheel of Life", "show Wheel of Life"]);
+});

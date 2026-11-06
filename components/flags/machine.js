@@ -9,7 +9,7 @@ import { ulid } from "ulid";
 // definition importable in Node.
 
 // The features that have a flag (3.1). Pages name them in `flag="…"` (8).
-export const FEATURES = ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts"];
+export const FEATURES = ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts", "wheel-of-life"];
 
 const list = (value) => (Array.isArray(value) ? value.filter((f) => typeof f === "string") : null);
 
@@ -71,6 +71,7 @@ const NAMES = {
   "slip-box": "Slip-Box",
   "reading-aloud": "Reading aloud",
   "book-experts": "Book experts",
+  "wheel-of-life": "Wheel of Life",
 };
 const labelOf = (feature, column, on) =>
   column === "release" ? `${on ? "release" : "hold back"} ${NAMES[feature] ?? feature}` : `${on ? "show" : "hide"} ${NAMES[feature] ?? feature}`;
@@ -108,7 +109,7 @@ export const machine = setup({
   id: "flags",
   meta: {
     description:
-      "Owns which features each person sees: Values and Choice Points, Usage, Slip-Box, Reading aloud, and Book experts. Each has " +
+      "Owns which features each person sees: Values and Choice Points, Usage, Slip-Box, Reading aloud, Book experts, and Wheel of Life. Each has " +
       "two switches in the Features tab. Release, set by the admin on the website, gives the " +
       "feature to everyone; one not released is hidden from everyone but the admin on the " +
       "website. A feature starts held back when it is added, until the admin releases it. " +

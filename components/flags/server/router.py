@@ -35,7 +35,7 @@ FROZEN = _HERE / "released.json"
 
 # The features that have a flag, in the order the Features tab shows them; the
 # browser half of this component holds the same list (machine.js).
-FEATURES = ("choice-points", "usage", "slip-box", "reading-aloud", "book-experts")
+FEATURES = ("choice-points", "usage", "slip-box", "reading-aloud", "book-experts", "wheel-of-life")
 
 # A feature starts held back when it is added, until the admin releases it (3.1). These
 # features had a flag before that rule, so a file that has not seen them yet keeps the

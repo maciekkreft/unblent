@@ -1,0 +1,91 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The day whose wheels are wanted; every day's when left out.",
+    "type": "object",
+    "properties": {
+      "day": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      }
+    },
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The wheels, oldest first, each whole as wheel.changed carries it.",
+    "type": "object",
+    "properties": {
+      "wheels": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "day": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "description": "The journal day the wheel is kept with, as its date; it never changes."
+            },
+            "actual": {
+              "type": "array",
+              "minItems": 8,
+              "maxItems": 8,
+              "items": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 10
+              },
+              "description": "The Actual score of each area, in the fixed order Health, Work, Money, Family, Love, Friends, Growth, Fun: 1 to 10, or null where there is none."
+            },
+            "wanted": {
+              "type": "array",
+              "minItems": 8,
+              "maxItems": 8,
+              "items": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 10
+              },
+              "description": "The Wanted score of each area, in the fixed order Health, Work, Money, Family, Love, Friends, Growth, Fun: 1 to 10, or null where there is none."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "pending": {
+              "type": "boolean",
+              "description": "A change the server has not acknowledged yet (5)."
+            }
+          },
+          "required": [
+            "id",
+            "day",
+            "actual",
+            "wanted",
+            "version",
+            "pending"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "wheels"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "wheel.changed",
+    "wheel.deleted"
+  ]
+}
