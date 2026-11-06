@@ -216,6 +216,15 @@ for (const [key, level] of [["\\1", "title"], ["\\2", "heading"], ["\\3", "subhe
   Vim.mapCommand(key, "action", "setLineLevel", { level }, { context: "normal" });
 }
 
+// The type menu's key, one page-wide map like the level keys: only this editor listens for
+// "typemenu", so every other editor on the page ignores it.
+Vim.defineAction("openTypeMenu", (cm) => {
+  cm.cm6?.contentDOM.dispatchEvent(new CustomEvent("typemenu"));
+});
+Vim.mapCommand("\\t", "action", "openTypeMenu", {}, { context: "normal" });
+// Where the keyboard returns after a menu opened by that key: the text, not a control.
+const TO_EDITOR = "editor";
+
 // `:tab split` (or `:tab sp`) shows the note on the stage. Ex commands are one set for the
 // page, like the level maps, so it reaches the focused editor's own element as a
 // "tabsplit" event, and an editor that does not listen ignores it.
@@ -1063,6 +1072,12 @@ class NoteEditor extends LitElement {
           view.dispatch(toLevel(view.state, e.detail));
           return true;
         },
+        // \t typed in this editor (openTypeMenu); a note with no type label ignores it.
+        typemenu: () => {
+          const type = this.#homeNow(this.#actor.snapshot)?.type;
+          if (type) this.#openTypes(type, TO_EDITOR);
+          return true;
+        },
         // `:tab split` typed in this editor (the "tab" Ex command above).
         tabsplit: () => {
           this.#actor.send({ type: "_stage" });
@@ -1359,9 +1374,21 @@ class NoteEditor extends LitElement {
   // The type menu (UI state): open or not, and the row marked for Enter.
   #types = { open: false, selected: 0 };
 
-  #openTypes(type) {
+  // While Slip-Box shows, the home line takes the About line's place (and the stage's
+  // editor gets one too).
+  #homeNow(snapshot) {
+    return snapshot.context.subjecting || snapshot.context.staged ? homeOf(snapshot) : null;
+  }
+
+  // The keyboard returns where it came from: a key typed in the text goes back to the text,
+  // since that is where the user was working (`back` is TO_EDITOR or a control's selector).
+  #giveBack(back) {
+    this.updateComplete.then(() => (back === TO_EDITOR ? this.focusEditor() : this.renderRoot.querySelector(back)?.focus()));
+  }
+
+  #openTypes(type, back = ".home-type") {
     const at = type.options.findIndex((t) => t.value === type.value);
-    this.#types = { open: !this.#types.open, selected: Math.max(0, at) };
+    this.#types = { open: !this.#types.open, selected: Math.max(0, at), back };
     this.#slip = { open: false, selected: 0 };
     this.requestUpdate();
     if (this.#types.open) this.updateComplete.then(() => this.renderRoot.querySelector(".type-menu")?.focus());
@@ -1369,9 +1396,10 @@ class NoteEditor extends LitElement {
 
   #closeTypes(refocus) {
     if (!this.#types.open) return;
+    const { back } = this.#types;
     this.#types = { open: false, selected: 0 };
     this.requestUpdate();
-    if (refocus) this.updateComplete.then(() => this.renderRoot.querySelector(".home-type")?.focus());
+    if (refocus) this.#giveBack(back);
   }
 
   // A type picked: set it, or, for Permanent while the note is not in the Slip-Box, open
@@ -1385,9 +1413,10 @@ class NoteEditor extends LitElement {
       return;
     }
     if (option.needsPlace) {
+      const { back } = this.#types;
       this.#types = { open: false, selected: 0 };
       this.#slip = { open: false, selected: 0 };
-      this.#openSlip(".home-type");
+      this.#openSlip(back);
       return;
     }
     this.#actor.send({ type: "_retype", noteType: option.value });
@@ -1402,7 +1431,7 @@ class NoteEditor extends LitElement {
     if (key === "close") return this.#closeTypes(true);
     if (key === "pick") return this.#pickType(type.options[this.#types.selected]);
     const n = type.options.length;
-    this.#types = { open: true, selected: (((this.#types.selected + (key === "down" ? 1 : -1)) % n) + n) % n };
+    this.#types = { open: true, back: this.#types.back, selected: (((this.#types.selected + (key === "down" ? 1 : -1)) % n) + n) % n };
     this.requestUpdate();
   }
 
@@ -1436,7 +1465,7 @@ class NoteEditor extends LitElement {
     </div>`;
   }
 
-  // `back` is the control that opened the list, where the keyboard returns.
+  // `back` is where the keyboard returns (#giveBack).
   #openSlip(back = ".home-add") {
     this.#slip = { open: !this.#slip.open, selected: 0, back };
     this.requestUpdate();
@@ -1449,7 +1478,7 @@ class NoteEditor extends LitElement {
     const { back } = this.#slip;
     this.#slip = { open: false, selected: 0 };
     this.requestUpdate();
-    if (refocus) this.updateComplete.then(() => this.renderRoot.querySelector(back)?.focus());
+    if (refocus) this.#giveBack(back);
   }
 
   #pickSlip(targets, index) {
@@ -1502,18 +1531,19 @@ class NoteEditor extends LitElement {
 
   // The home line (machine.js: homeOf decides what it names and offers).
   #home(snapshot, home) {
+    const { vimKeys } = snapshot.context;
     const type = home.type
       ? html`<button
           class="home-type"
           type="button"
           aria-haspopup="menu"
           aria-expanded=${this.#types.open}
-          title="Type of note"
-          aria-label=${`Type of note: ${home.type.options.find((t) => t.value === home.type.value).label}`}
+          title=${`Type of note${vimKeys ? " (\\t)" : ""}`}
+          aria-label=${`Type of note: ${home.type.options.find((t) => t.value === home.type.value).label}${vimKeys ? " (\\t)" : ""}`}
           @mousedown=${(e) => e.preventDefault()}
           @click=${() => this.#openTypes(home.type)}
         >
-          ${home.type.options.find((t) => t.value === home.type.value).label}
+          ${vimKeys ? html`<kbd>\\t</kbd> ` : nothing}${home.type.options.find((t) => t.value === home.type.value).label}
         </button>`
       : null;
     const books = home.books.map(
@@ -1637,11 +1667,10 @@ class NoteEditor extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
-    const { subjecting, staged, id, vimKeys } = snapshot.context;
+    const { subjecting, id, vimKeys } = snapshot.context;
     const aboutTitle = this.#aboutTitle(snapshot);
-    // While Slip-Box shows, the home line takes the About line's place (and the stage's
-    // editor gets one too); the footer sits above the level bar.
-    const home = subjecting || staged ? homeOf(snapshot) : null;
+    // The footer sits above the level bar.
+    const home = this.#homeNow(snapshot);
     const footer = footerOf(snapshot.context);
     if (!home && this.#slip.open) this.#slip = { open: false, selected: 0 };
     if (!home?.type && this.#types.open) this.#types = { open: false, selected: 0 };

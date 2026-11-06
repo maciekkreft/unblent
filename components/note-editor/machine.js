@@ -912,7 +912,10 @@ export const machine = setup({
       "changes is a save of the note's links, one step for Undo. At the left of that line is the note's type, " +
       "Fleeting, Literature or Permanent, which opens a small menu of the three, each with one line saying what it is for; " +
       "the arrow keys (and j and k with Vim keys) choose, Enter or a click sets it, one step for Undo, Escape closes it " +
-      "and gives the keyboard back to the label. Permanent can always be picked: on a note outside the Slip-Box it opens the " +
+      "and gives the keyboard back to the label. With Vim keys on, the label names its key, \\t, in Vim's normal mode, " +
+      "which opens the menu from the text, in the panel's editor and on the stage; closing it or setting a type, through " +
+      "the Add to Slip-Box list too, gives the keyboard back to the text in normal mode with the cursor where it was. A note " +
+      "with no label ignores the key, and so does every other editor. Permanent can always be picked: on a note outside the Slip-Box it opens the " +
       "Add to Slip-Box list, and picking a place there saves the place and the type together, one step for Undo, while Escape " +
       "changes nothing. Changing a type never changes the note's links. A permanent note stays in the Slip-Box: the × of a " +
       "place whose loss would take it, or a permanent note under it, out of the Slip-Box is greyed and says so. A Permanent " +
