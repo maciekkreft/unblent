@@ -67,6 +67,30 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await until(async () => (await keyboardAt(page)) === want);
     };
 
+    // Browser: focus and keys.
+    test("the list closes when Tab or a press takes the keyboard elsewhere, and stays while it moves inside", async () => {
+      const { context, page, problems, picker } = await open(browser);
+      try {
+        const row = picker.locator(".new");
+        const shut = () => until(async () => (await picker.locator(".sheets").count()) === 0);
+        await row.click();
+        await until(async () => (await keyboardAt(page)) === "values");
+        await press(page, "Tab", "choice-point");
+        await press(page, "Tab", "wheel");
+        assert.equal(await picker.locator(".sheets").count(), 1);
+        await page.keyboard.press("Tab");
+        await shut();
+
+        await row.click();
+        await page.locator("journal-entry .cm-content").click();
+        await shut();
+        assert.equal(await keyboardAt(page), "text", "the keyboard stays where the press put it");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: a gesture.
     test("by mouse: the row opens and closes the list, and the Wheel of Life is added and leaves the list", async () => {
       const { context, page, problems, picker } = await open(browser);

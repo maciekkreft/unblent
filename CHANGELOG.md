@@ -4,6 +4,24 @@ All notable changes to Unblent for Mac are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- The Wheel of Life, a new journal sheet. Rate eight areas of your life (Health, Work, Money,
+  Family, Love, Friends, Growth and Fun) with an Actual and a Wanted score from 1 to 10, and
+  see where the gap is biggest. A new wheel starts with Wanted taken from your last one. Done
+  folds it into a card with a small wheel and each area's gap. It works by mouse or by
+  keyboard, with Vim keys if you have them on, works offline, and costs nothing.
+
+### Changed
+
+- Today's journal page has one + Add sheet row in place of a row for each sheet. It opens a
+  list with a line about each sheet and what it comes from, so a day shows only what you add
+  to it. Your values and the Wheel of Life leave the list while they are on the day.
+- A Choice Point or Your values box that takes the keyboard below the fold now scrolls into
+  sight.
+
 ## [0.6.0] — 2026-11-06
 
 ### Added

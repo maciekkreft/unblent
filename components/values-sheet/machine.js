@@ -257,6 +257,24 @@ export function statusOf(context) {
 
 const POINTS = new Set(["hover", "tap", "cursor"]);
 
+// The keyboard goes back to the row under the sheets (4.3, one view instructing another).
+const handBack = ({ context }) => context.send?.("sheet-picker", "focus", {});
+
+// An add that arrived during the load acts now that the day is in. + Add sheet is pressed and
+// its list closed by then, so a lost add would leave the keyboard with nothing.
+const addNow = enqueueActions(({ context, enqueue }) => {
+  if (!context.addWaiting) return;
+  enqueue.assign({ addWaiting: false });
+  enqueue.raise({ type: "add" });
+});
+
+// No load, so no sheet: the keyboard goes back where the user pressed.
+const addRefused = enqueueActions(({ context, enqueue }) => {
+  if (!context.addWaiting) return;
+  enqueue.assign({ addWaiting: false });
+  enqueue(handBack);
+});
+
 // --- Could be --------------------------------------------------------------------------
 // The generator Could be (generators, value-suggestion) writes one value for each of
 // today's values whose value line Jev answered with a red mark. A suggestion is shown only
@@ -514,6 +532,8 @@ export const machine = setup({
     // Counts each add, so the view knows to give the panel the keyboard: a command has no
     // reply, and the view is not who sent it.
     landing: 0,
+    // Whether an add arrived while the day was still loading; it acts once the day is in.
+    addWaiting: false,
     // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
     mint: input.mint,
@@ -627,7 +647,7 @@ export const machine = setup({
     "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     // What held the keyboard went: the row after the sheets is its natural place (4.3, one view
     // instructing another).
-    _handBack: { actions: ({ context }) => context.send?.("sheet-picker", "focus", {}) },
+    _handBack: { actions: handBack },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Moving to another day settles the sheet and asks for the new day's version. The
     // same day saying it can no longer be written saves what was typed while it could.
@@ -642,6 +662,7 @@ export const machine = setup({
           assign(({ context, event }) => ({
             day: event.day,
             dayWritable: typeof event.writable === "boolean" ? event.writable : null,
+            addWaiting: false,
             version: null,
             placed: null,
             early: [],
@@ -706,15 +727,17 @@ export const machine = setup({
                 enqueue.assign({ early: [] });
               }),
               hashSources,
+              addNow,
             ],
           },
           // The fact could not answer: an honest failure rather than no values.
-          { target: "failed" },
+          { target: "failed", actions: addRefused },
         ],
-        onError: "failed",
+        onError: { target: "failed", actions: addRefused },
       },
       on: {
         "values.changed": { actions: assign({ early: ({ context, event }) => [...context.early, event] }) },
+        add: { actions: assign({ addWaiting: true }) },
       },
     },
     ready: {
@@ -848,6 +871,6 @@ export const machine = setup({
         },
       },
     },
-    failed: {},
+    failed: { on: { add: { actions: handBack } } },
   },
 });

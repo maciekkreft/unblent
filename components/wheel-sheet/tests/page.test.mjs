@@ -352,6 +352,35 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
+    test("a wide stage stops the sheet and the card at a form's width, and a narrow one keeps the wheel inside and the squares pressable", async () => {
+      const { context, page, problems, sheet } = await open(browser, { viewport: { width: 1600, height: 900 } });
+      try {
+        await sheet.locator(".card").click();
+        await sheet.locator(".sheet").waitFor();
+        const box = (sel) => sheet.locator(sel).first().boundingBox();
+        const form = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--width-form")));
+        assert.equal((await box(".sheet")).width, form);
+        assert.ok((await box(".sq")).width <= 2 * (await box(".sq")).height, "a square stays near square");
+
+        await sheet.evaluate((el) => (el.style.width = "230px"));
+        const sheetAt = await box(".sheet");
+        const wheelAt = await box(".wheel");
+        assert.ok(wheelAt.x >= sheetAt.x && wheelAt.x + wheelAt.width <= sheetAt.x + sheetAt.width, "the wheel stays inside the sheet");
+        assert.ok((await box(".sq")).width >= 10, "a square can be pressed");
+        assert.ok((await box(".scale")).y > (await box(".score")).y, "the squares stand under the name and score");
+        const buttonsAt = await box(".buttons");
+        assert.ok(buttonsAt.x + buttonsAt.width <= sheetAt.x + sheetAt.width, "Delete and Done stay inside");
+
+        await sheet.locator(".done").click();
+        await sheet.locator(".card").waitFor();
+        assert.ok((await box(".mini")).y + (await box(".mini")).height <= (await box(".sum")).y, "the small wheel stands above the lines");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: rendering and layout.
     test("in the phone preview the wheel stands above the rows, with larger targets, and nothing runs off the page", async () => {
       const phone = await layout(true);
       assert.ok(phone.wheel.y + phone.wheel.height <= phone.rows.y, "above the rows");

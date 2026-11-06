@@ -283,6 +283,24 @@ export function rowKey(e, vimKeys, afterG = false) {
   return { j: { move: "down" }, k: { move: "up" }, G: { move: "last" } }[e.key] ?? null;
 }
 
+// The keyboard goes back to the row under the sheets (4.3, one view instructing another).
+const handBack = ({ context }) => context.send?.("sheet-picker", "focus", {});
+
+// An add that arrived during the load acts now that the wheels are in. + Add sheet is pressed
+// and its list closed by then, so a lost add would leave the keyboard with nothing.
+const addNow = enqueueActions(({ context, enqueue }) => {
+  if (!context.addWaiting) return;
+  enqueue.assign({ addWaiting: false });
+  enqueue.raise({ type: "add" });
+});
+
+// No load, so no sheet: the keyboard goes back where the user pressed.
+const addRefused = enqueueActions(({ context, enqueue }) => {
+  if (!context.addWaiting) return;
+  enqueue.assign({ addWaiting: false });
+  enqueue(handBack);
+});
+
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("wheels", "list", {})),
@@ -324,7 +342,8 @@ export const machine = setup({
       "on to the card next to the sheet or the page around. A wheel is written exactly while the day's own text is, as " +
       "the journal page says: until 2:00 the next night, when an open sheet becomes read only; " +
       "an earlier day is read only, with Close. A narrow page, such as a phone, stacks the " +
-      "wheel above the rows, with larger targets.",
+      "wheel above the rows, with larger targets; narrower still, each area's name and score stand " +
+      "above its squares. On a wide stage the sheet and the card stop at a form's width.",
     kind: "view",
     emits: ["wheel.saved"],
     asks: ["wheels: list", "settings: read"],
@@ -352,6 +371,8 @@ export const machine = setup({
     // Counts each add, so the view knows to give the sheet the keyboard: a command has no
     // reply, and the view is not who sent it.
     landing: 0,
+    // Whether an add arrived while the wheels were still loading; it acts once they are in.
+    addWaiting: false,
     vimKeys: false,
   }),
   // Beside the states, so the preference arrives whatever the sheet is doing; a
@@ -367,7 +388,7 @@ export const machine = setup({
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // What held the keyboard went: the row after the sheets is its natural place (4.3, one view
     // instructing another).
-    _handBack: { actions: ({ context }) => context.send?.("sheet-picker", "focus", {}) },
+    _handBack: { actions: handBack },
     // Moving to another day folds the open sheet, as Done does. Nothing is asked: every
     // day's wheels are already held.
     "day.shown": [
@@ -378,6 +399,7 @@ export const machine = setup({
           assign({
             day: ({ event }) => event.day,
             dayWritable: ({ event }) => (typeof event.writable === "boolean" ? event.writable : null),
+            addWaiting: false,
           }),
         ],
       },
@@ -395,13 +417,14 @@ export const machine = setup({
           {
             guard: ({ event }) => Array.isArray(event.output?.wheels),
             target: "ready",
-            actions: assign({ wheels: ({ event }) => [...event.output.wheels].sort(byId) }),
+            actions: [assign({ wheels: ({ event }) => [...event.output.wheels].sort(byId) }), addNow],
           },
           // The fact could not answer: an honest failure rather than a day with no wheel.
-          { target: "failed" },
+          { target: "failed", actions: addRefused },
         ],
-        onError: "failed",
+        onError: { target: "failed", actions: addRefused },
       },
+      on: { add: { actions: assign({ addWaiting: true }) } },
     },
     ready: {
       initial: "idle",
@@ -444,6 +467,6 @@ export const machine = setup({
         },
       },
     },
-    failed: {},
+    failed: { on: { add: { actions: handBack } } },
   },
 });

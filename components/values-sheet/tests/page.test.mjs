@@ -52,6 +52,29 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: rendering and layout.
+    test("a box given the keyboard below the fold scrolls into sight", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 260 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("values-fold"));
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        await addValues(page);
+        const sight = () =>
+          page.evaluate(() => {
+            const box = document.querySelector("values-sheet").shadowRoot.activeElement?.closest(".box");
+            const at = box?.getBoundingClientRect();
+            return at ? at.top >= 0 && at.bottom <= innerHeight : null;
+          });
+        await until(async () => (await sight()) === true);
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: a reload against real storage.
     test("adding Your values opens a row in the name, Enter moves on, Escape folds to a card a reload keeps", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });

@@ -84,6 +84,47 @@ test("today without the panel opens only by the add command, which adds it folde
   assert.deepEqual(ctx().drafts, [v(1, "Honest")]);
 });
 
+// An add sent while the fact has not answered yet: `answer` is what it then says.
+async function addDuringLoad(answer) {
+  let answerNow;
+  const sent = [];
+  const emitted = [];
+  const actor = createActor(machine, {
+    input: {
+      ask: (target) => (target === "values" ? new Promise((r) => (answerNow = r)) : Promise.resolve({ error: "no-answerer" })),
+      send: (target, name) => sent.push(`${target}: ${name}`),
+      mint: () => "01K6TEST000000000000000M01",
+      now: () => NOW,
+    },
+  });
+  actor.on("values.placed", (e) => emitted.push(e));
+  actor.start();
+  await flush();
+  actor.send({ type: "add" });
+  assert.deepEqual(emitted, [], "the day is not in yet");
+  answerNow(answer);
+  await flush();
+  await flush();
+  return { actor, sent, emitted };
+}
+
+test("an add during the load is not lost: Your values lands on the day once the day is in", async () => {
+  const { actor, sent, emitted } = await addDuringLoad({ day: null, values: [], changedSince: false, placed: false });
+  placedRecorded.push(...emitted);
+  assert.deepEqual(emitted, [{ type: "values.placed", day: TODAY, placed: true }]);
+  assert.equal(actor.getSnapshot().context.landing, 1);
+  assert.equal(actor.getSnapshot().context.open, true);
+  assert.deepEqual(sent, []);
+});
+
+test("an add during a load that fails gives the keyboard back to the row, and so does one after it", async () => {
+  const { actor, sent } = await addDuringLoad({ error: "no-answerer" });
+  assert.ok(actor.getSnapshot().matches("failed"));
+  assert.deepEqual(sent, ["sheet-picker: focus"]);
+  actor.send({ type: "add" });
+  assert.equal(sent.length, 2);
+});
+
 test("the add command with no values written yet opens the sheet, as there is nothing to read", async () => {
   const { actor, ctx } = await start({}, { placed: {} });
   actor.send({ type: "add" });

@@ -116,7 +116,8 @@ export const machine = setup({
       "feature is hidden is not listed, and with nothing to list the row is hidden and takes no " +
       "room. An earlier day, or a day that can no longer be written, has no row. Pressing the row " +
       "opens the list with the keyboard on its first entry; the list closes with Escape or a " +
-      "second press, and the keyboard goes back on the row. The arrow keys, and with Vim keys on " +
+      "second press, and the keyboard goes back on the row, and it closes when Tab or a press takes " +
+      "the keyboard elsewhere. The arrow keys, and with Vim keys on " +
       "j, k, gg and G, move in the list and stop at its ends; Enter or a press picks an entry, " +
       "which closes the list, adds the sheet and gives it the keyboard. With the list closed, j " +
       "and k are left to the journal page, which hands the keyboard to the row from what stands " +

@@ -100,6 +100,62 @@ test("it shows today until the journal page says which day it shows, then follow
   assert.deepEqual(ctx().choicePoints.map((r) => r.id), [B]);
 });
 
+// An add sent while the fact has not answered yet: `answer` is what it then says.
+async function addDuringLoad(answer) {
+  let answerNow;
+  const sent = [];
+  const actor = createActor(machine, {
+    input: {
+      ask: (target) => (target === "choice-points" ? new Promise((r) => (answerNow = r)) : Promise.resolve({ error: "no-answerer" })),
+      send: (target, name) => sent.push(`${target}: ${name}`),
+      mint: () => "01K6TEST000000000000000M01",
+      now: () => NOW,
+    },
+  });
+  actor.start();
+  await new Promise((r) => setTimeout(r, 0));
+  actor.send({ type: "add" });
+  assert.deepEqual(actor.getSnapshot().context.drafts, [], "the day is not in yet");
+  answerNow(answer);
+  await new Promise((r) => setTimeout(r, 0));
+  return { actor, sent };
+}
+
+test("an add during the load is not lost: the new sheet opens with the keyboard once the day is in", async () => {
+  const { actor, sent } = await addDuringLoad({ choicePoints: [] });
+  const { context } = actor.getSnapshot();
+  assert.equal(context.drafts.length, 1);
+  assert.equal(context.landing, 1);
+  assert.deepEqual(sent, []);
+});
+
+test("an add during a load that fails gives the keyboard back to the row, and so does one after it", async () => {
+  const { actor, sent } = await addDuringLoad({ error: "no-answerer" });
+  assert.ok(actor.getSnapshot().matches("failed"));
+  assert.deepEqual(sent, ["sheet-picker: focus"]);
+  actor.send({ type: "add" });
+  assert.equal(sent.length, 2);
+});
+
+test("an add during the load is dropped when the user moves to another day", async () => {
+  let answerNow;
+  const actor = createActor(machine, {
+    input: {
+      ask: (target) => (target === "choice-points" ? new Promise((r) => (answerNow = r)) : Promise.resolve({ error: "no-answerer" })),
+      mint: () => "01K6TEST000000000000000M01",
+      now: () => NOW,
+    },
+  });
+  actor.start();
+  await new Promise((r) => setTimeout(r, 0));
+  actor.send({ type: "add" });
+  actor.send({ type: "day.shown", day: "2026-10-13", writable: true });
+  answerNow({ choicePoints: [] });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(actor.getSnapshot().matches("ready"));
+  assert.deepEqual(actor.getSnapshot().context.drafts, []);
+});
+
 test("changes follow the shown day, a stale version is ignored, and a deleted one goes", async () => {
   const { actor, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "v2" }, { version: 2 })] });
   actor.send({ type: "choice-point.changed", choicePoint: cp(A, TODAY, { situation: "v1" }, { version: 1 }) });

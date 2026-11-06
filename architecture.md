@@ -647,6 +647,8 @@ The architecture document describes the rules; the checks are what make them rea
 - **Journal**: the one book the user writes, one chapter per day, only today's page editable; a day runs from 2:00 to 2:00 the next night. Its days are owned by `journal`, which alone decides which day is today, and `books` presents them as a book.
 - **Choice point**: one worksheet from acceptance and commitment therapy, kept with one journal day; owned by `choice-points`.
 - **Values**: the user's own values, one list per account, kept in a version per day; owned by `values`.
+- **Sheet**: one worksheet shown under a journal day's text, added from the + Add sheet row of that day's page: Your values, a Choice point or a Wheel of Life; `sheet-picker` keeps the list of sheets.
+- **Wheel of Life**: one sheet that rates eight fixed areas of life with an Actual and a Wanted score from 1 to 10, kept with one journal day; owned by `wheels`.
 - **Guest**: an account without a passkey, made for a visitor of a try page at its first use of the server; it spends only on the guest keys, within the limits (7.7).
 - **Admin**: the account registered first with a passkey; the only one that sees the People tab.
 - **Try page**: a page that shares one tool by a link, `/try/<name>`, with someone who has no account (8).

@@ -100,6 +100,44 @@ test("the first wheel starts with both empty", async () => {
   assert.deepEqual(ctx().draft.wanted, NONE);
 });
 
+// An add sent while the fact has not answered yet: `answer` is what it then says.
+async function addDuringLoad(answer) {
+  let answerNow;
+  const sent = [];
+  const actor = createActor(machine, {
+    input: {
+      ask: (target) => (target === "settings" ? Promise.resolve({ error: "no-answerer" }) : new Promise((r) => (answerNow = r))),
+      send: (target, name) => sent.push(`${target}: ${name}`),
+      mint: () => NEW,
+      now: () => NOW,
+    },
+  });
+  actor.start();
+  await flush();
+  actor.send({ type: "add" });
+  assert.equal(actor.getSnapshot().context.draft, null, "the wheels are not in yet");
+  answerNow(answer);
+  await flush();
+  return { actor, sent };
+}
+
+test("an add during the load is not lost: it opens the sheet with the keyboard once the wheels are in", async () => {
+  const { actor, sent } = await addDuringLoad({ wheels: [wheel(OLD, LONG_AGO)] });
+  const { context } = actor.getSnapshot();
+  assert.equal(context.draft.id, NEW);
+  assert.deepEqual(context.draft.wanted, WANTED, "Wanted is carried over from what the load brought");
+  assert.equal(context.landing, 1);
+  assert.deepEqual(sent, []);
+});
+
+test("an add during a load that fails gives the keyboard back to the row, and so does one after it", async () => {
+  const { actor, sent } = await addDuringLoad({ error: "no-answerer" });
+  assert.ok(actor.getSnapshot().matches("failed"));
+  assert.deepEqual(sent, ["sheet-picker: focus"]);
+  actor.send({ type: "add" });
+  assert.deepEqual(sent, ["sheet-picker: focus", "sheet-picker: focus"]);
+});
+
 test("add opens the wheel the day has instead of a second, the one open stays, and a day that is closed takes none", async () => {
   const { actor, ctx } = await start([wheel(A, TODAY)]);
   actor.send({ type: "add" });

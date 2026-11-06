@@ -38,6 +38,29 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: rendering and layout.
+    test("Situation, given the keyboard below the fold, scrolls into sight", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 500 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("choice-points-fold"));
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        await addChoicePoint(page);
+        const sight = () =>
+          page.evaluate(() => {
+            const box = document.querySelector("choice-point-cards").shadowRoot.activeElement?.closest(".box");
+            const at = box?.getBoundingClientRect();
+            return at ? at.top >= 0 && at.bottom <= innerHeight : null;
+          });
+        await until(async () => (await sight()) === true);
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: a reload against real storage.
     test("adding a choice point opens a sheet in Situation, Escape folds it to a card, and a reload keeps it", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });

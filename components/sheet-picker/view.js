@@ -232,6 +232,15 @@ class SheetPicker extends LitElement {
     this.#picks()[onEntry ? listTarget(key.move, at, listed(context).length) : at]?.focus();
   };
 
+  // Tab or a press went elsewhere: a list left open would stand there unrelated to what the user
+  // now does. Read a moment later, because a press on an entry in WebKit first takes focus off it
+  // and onto the section. Another window taking focus is not the user leaving the list.
+  #left = () => {
+    setTimeout(() => {
+      if (this.isConnected && document.hasFocus() && !this.matches(":focus-within")) this.#actor.send({ type: "_close" });
+    });
+  };
+
   render() {
     const context = this.#actor.snapshot?.context;
     if (!context) return nothing;
@@ -239,7 +248,7 @@ class SheetPicker extends LitElement {
     if (!sheets.length) return nothing;
     const open = listOpen(context);
     const cursor = cursorOf(context);
-    return html`<section tabindex="-1" aria-label="Add a sheet" @keydown=${this.#key}>
+    return html`<section tabindex="-1" aria-label="Add a sheet" @keydown=${this.#key} @focusout=${this.#left}>
       <button type="button" class="new" aria-expanded=${open ? "true" : "false"} @click=${() => this.#toggle()}><span class="plus">${icon("plus")}</span>Add sheet</button>
       ${open
         ? html`<div class="sheets">

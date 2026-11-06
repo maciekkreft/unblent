@@ -392,6 +392,24 @@ const POINTS = new Set(["hover", "tap", "cursor"]);
 
 const isDay = (v) => typeof v === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v);
 
+// The keyboard goes back to the row under the sheets (4.3, one view instructing another).
+const handBack = ({ context }) => context.send?.("sheet-picker", "focus", {});
+
+// An add that arrived during the load acts now that the day is in. + Add sheet is pressed and
+// its list closed by then, so a lost add would leave the keyboard with nothing.
+const addNow = enqueueActions(({ context, enqueue }) => {
+  if (!context.addWaiting) return;
+  enqueue.assign({ addWaiting: false });
+  enqueue.raise({ type: "add" });
+});
+
+// No load, so no sheet: the keyboard goes back where the user pressed.
+const addRefused = enqueueActions(({ context, enqueue }) => {
+  if (!context.addWaiting) return;
+  enqueue.assign({ addWaiting: false });
+  enqueue(handBack);
+});
+
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("choice-points", "list", { day: input.day })),
@@ -512,6 +530,8 @@ export const machine = setup({
     // Counts each add, so the view knows to give the new sheet the keyboard: a command has no
     // reply, and the view is not who sent it.
     landing: 0,
+    // Whether an add arrived while the day was still loading; it acts once the day is in.
+    addWaiting: false,
     // What choice-point-checks last said for the shown day: the settings of the four
     // boxes, and per choice point its lines and why the last check failed.
     checks: { settings: null, reports: {} },
@@ -545,7 +565,7 @@ export const machine = setup({
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // What held the keyboard went: the row after the sheets is its natural place (4.3, one view
     // instructing another).
-    _handBack: { actions: ({ context }) => context.send?.("sheet-picker", "focus", {}) },
+    _handBack: { actions: handBack },
     // On a page without the checks fact the reply is no-answerer and no line is marked.
     "xstate.done.actor.checks": {
       guard: ({ context, event }) => event.output?.day === context.day && Array.isArray(event.output.reply?.choicePoints),
@@ -603,6 +623,7 @@ export const machine = setup({
             drafts: [],
             dirty: [],
             choicePoints: [],
+            addWaiting: false,
             checks: { ...context.checks, reports: {} },
           })),
           stopChild("checks"),
@@ -628,16 +649,20 @@ export const machine = setup({
           {
             guard: ({ event }) => Array.isArray(event.output?.choicePoints),
             target: "ready",
-            actions: assign(({ context, event }) => {
-              const choicePoints = [...event.output.choicePoints].sort(byId);
-              return { choicePoints, drafts: reopened(context, choicePoints) };
-            }),
+            actions: [
+              assign(({ context, event }) => {
+                const choicePoints = [...event.output.choicePoints].sort(byId);
+                return { choicePoints, drafts: reopened(context, choicePoints) };
+              }),
+              addNow,
+            ],
           },
           // The fact could not answer: an honest failure rather than an empty day.
-          { target: "failed" },
+          { target: "failed", actions: addRefused },
         ],
-        onError: "failed",
+        onError: { target: "failed", actions: addRefused },
       },
+      on: { add: { actions: assign({ addWaiting: true }) } },
     },
     ready: {
       initial: "idle",
@@ -678,6 +703,6 @@ export const machine = setup({
         },
       },
     },
-    failed: {},
+    failed: { on: { add: { actions: handBack } } },
   },
 });

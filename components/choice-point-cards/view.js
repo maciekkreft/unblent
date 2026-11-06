@@ -630,8 +630,10 @@ class ChoicePointCards extends LitElement {
 
   // A box opened by the add command or from a card takes the keyboard in Vim's insert mode when Vim
   // keys is on, so the first key typed is text.
+  // The editor takes focus without scrolling, and the sheet may stand below the fold.
   #focusBox(box) {
     box.view.focus();
+    box.region.scrollIntoView({ block: "nearest" });
     const cm = box.vimOn ? getCM(box.view) : null;
     if (cm && cm.state?.vim?.insertMode !== true) Vim.handleKey(cm, "i", "user");
   }

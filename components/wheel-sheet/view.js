@@ -131,11 +131,14 @@ class WheelSheet extends LitElement {
       flex-direction: column;
       gap: var(--space-sm);
     }
+    /* A sheet and its card have a fixed shape, so on a wide stage they stop at a form's width:
+       past it a square would stretch into a long bar, and a score would stand far from its name. */
     .card {
       display: flex;
       align-items: center;
       gap: var(--space-md);
       width: 100%;
+      max-width: var(--width-form);
       box-sizing: border-box;
       text-align: left;
       padding: var(--space-sm) var(--space-md);
@@ -182,6 +185,8 @@ class WheelSheet extends LitElement {
       display: flex;
       flex-direction: column;
       gap: var(--space-sm);
+      max-width: var(--width-form);
+      box-sizing: border-box;
       padding: var(--space-md);
       border: var(--border-width) solid var(--color-border-strong);
       border-radius: var(--radius-md);
@@ -304,17 +309,20 @@ class WheelSheet extends LitElement {
       font-size: var(--text-caption);
       font-weight: var(--weight-semibold);
     }
+    /* The key's long line breaks beside the buttons rather than pushing them to a row of their
+       own, so the first change to a Wanted score, which shortens it, barely moves them. */
     .foot {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      flex-wrap: wrap;
       gap: var(--space-sm);
     }
     .legend {
       display: inline-flex;
       align-items: center;
+      min-width: 0;
       gap: var(--space-xs);
+      text-wrap: balance;
     }
     .legend b,
     .legend i {
@@ -333,6 +341,7 @@ class WheelSheet extends LitElement {
       border: var(--space-2xs) solid var(--color-ink);
     }
     .buttons {
+      flex: none;
       display: flex;
       gap: var(--space-sm);
       margin-left: auto;
@@ -368,7 +377,12 @@ class WheelSheet extends LitElement {
       .wheel {
         align-self: center;
         width: calc(var(--space-2xl) * 3 + var(--space-xl) + var(--space-sm));
-        height: calc(var(--space-2xl) * 3 + var(--space-xl) + var(--space-sm));
+        max-width: 100%;
+        height: auto;
+        aspect-ratio: 1;
+      }
+      .foot {
+        flex-wrap: wrap;
       }
       .modes button {
         min-height: var(--space-xl);
@@ -378,6 +392,29 @@ class WheelSheet extends LitElement {
       }
       .sum {
         grid-template-columns: minmax(0, 1fr);
+      }
+    }
+    /* Narrower still (a stage squeezed between both panels, a small phone): the name and score
+       stand above the squares, which otherwise get too thin to press, and the small wheel above
+       its card's lines. */
+    @container (width < 20rem) {
+      .area {
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+      .scale {
+        grid-column: 1 / -1;
+        grid-row: 2;
+      }
+      .score {
+        grid-column: 2;
+        grid-row: 1;
+      }
+      .card {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .mini {
+        align-self: center;
       }
     }
   `;
