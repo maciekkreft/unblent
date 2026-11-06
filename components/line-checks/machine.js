@@ -213,6 +213,54 @@ function marksOf(context, item, answer) {
   return out;
 }
 
+// An evaluator shown as one mark (`combined`, Your values) gets one for the line, by the rule
+// `combinedMark` in components/choice-point-cards/machine.js and `judged` in
+// components/evaluators/machine.js also hold, a copy because components never import each
+// other (11.2). Going against any value is red and names them all, in the evaluator's order;
+// else serving one is green and names the first; else it is uncolored. It speaks with the
+// deciding answer: the first against, the first served, or the least sure, since every one
+// of them had to miss. With no question answered there is no mark, as none would suggest Jev
+// looked.
+const valueName = (q) => (filled(q?.name) ? q.name.trim() : "one of your values");
+
+const expectOf = (q) => {
+  const want = q?.expect;
+  if (want === "yes" || want === "no") return q.kind === "pick" ? null : want;
+  return q?.kind === "pick" && q.options?.some((o) => o.id === want && !o.removing) ? want : null;
+};
+
+function combinedMark(evaluator, answer) {
+  const answered = live(evaluator.questions)
+    .filter((q) => q.on !== false)
+    .map((q) => ({ q, a: answer(q.id) }))
+    .filter((x) => x.a);
+  if (!answered.length) return [];
+  const mark = (tone, { a }, name) => ({ evaluator: evaluator.id, question: a.question, option: a.option, name, icon: "compass", p: a.p, tone });
+  const against = answered.filter(({ q, a }) => q.options?.some((o) => o.id === a.option && o.against));
+  if (against.length) return [mark("wrong", against[0], `Goes against ${against.map(({ q }) => valueName(q)).join(", ")}`)];
+  const served = answered.find(({ q, a }) => expectOf(q) != null && a.option === expectOf(q));
+  if (served) return [mark("right", served, `Serves ${valueName(served.q)}`)];
+  const least = answered.reduce((x, y) => (y.a.p < x.a.p ? y : x));
+  return [mark("plain", least, "Can't tell which of your values this serves")];
+}
+
+// What a line shows at its end, evaluator by evaluator, in the order of its items: only here
+// are all of a combined evaluator's items known together, at the place of its first item.
+function lineMarks(context, items, answers) {
+  const combined = new Set();
+  return items.flatMap((item, n) => {
+    const e = context.evaluators.get(item.evaluator);
+    if (!e?.combined) return answers[n] ? marksOf(context, item, answers[n]) : [];
+    if (combined.has(e.id)) return [];
+    combined.add(e.id);
+    const kept = (id) => {
+      const at = items.findIndex((i) => i.evaluator === e.id && i.question.id === id);
+      return at < 0 ? undefined : answers[at]?.answers.find((a) => a.question === id);
+    };
+    return combinedMark(e, kept);
+  });
+}
+
 const queuedKey = (context, key) => Boolean(context.asking?.keys.includes(key)) || context.jobs.some((j) => j.keys.includes(key));
 
 // A line with every question answered is done; one with a question queued or being asked
@@ -230,7 +278,7 @@ function report(context, source) {
     if (answers.every((a) => !a) && !failed && !pending) continue;
     if (failed && !pending && !error) error = failed;
     const status = missing.length === 0 ? "done" : pending ? "pending" : failed ? "failed" : "done";
-    const marks = status === "done" ? line.items.flatMap((i, n) => (answers[n] ? marksOf(context, i, answers[n]) : [])) : [];
+    const marks = status === "done" ? lineMarks(context, line.items, answers) : [];
     lines.push({ text: line.text, status, marks });
   }
   return { source: { kind: source.kind, id: source.id }, tags: plan.tags, lines, ...(error ? { error } : {}) };
@@ -592,7 +640,13 @@ export const machine = setup({
       "its lines are asked when one of them is next finished. The marks " +
       "announced for a line are one per question: for a pick-one question the chosen " +
       "option's icon and name; for a yes / no question the question's short name, only when " +
-      "the answer is yes, and nothing on no. Lines are asked one at a time, in a queue, one " +
+      "the answer is yes, and nothing on no. An evaluator shown as one mark (`combined`, Your " +
+      "values) instead gets one compass per line, however many values it has, made from the " +
+      "same kept answers, so nothing more is asked: red when any answer goes against a value, " +
+      "naming them all (\"Goes against Honesty, Health\"); otherwise green when a value is " +
+      "served, naming the first (\"Serves Honesty\"); otherwise uncolored (\"Can't tell which " +
+      "of your values this serves\"); and none when no question is answered. Other evaluators " +
+      "on the line keep their own marks, in the order of the tags. Lines are asked one at a time, in a queue, one " +
       "Jev request per line; when Jev is busy the line waits and is asked again. Without a key " +
       "or a decider nothing is asked. A " +
       "failure, such as signed out, no key or rate limited, is announced with the lines so " +

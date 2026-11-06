@@ -506,8 +506,12 @@ test("Your values draws one compass mark after the box's own marks: green, red o
   assert.ok(email[1].sure < 1, "faded: Jev is not sure the move goes against the value");
   assert.equal(sayMarks(email), "Therapy Goal: Behavioral Goal · Your values: Goes against Being a present parent", "no 'you expect' for a values mark");
 
-  const healthWins = marksOf(BOTH, line(ans(V1, AGAINST, "Goes against", 0.9), ans(V2, SERVES, "Serves", 0.9)), evaluators);
-  assert.deepEqual([healthWins[1].tone, healthWins[1].name], ["right", "Serves Health"], "serving any value wins over going against another");
+  const mixed = marksOf(BOTH, line(ans(V1, AGAINST, "Goes against", 0.9), ans(V2, SERVES, "Serves", 0.9)), evaluators);
+  assert.deepEqual([mixed[1].tone, mixed[1].name], ["wrong", "Goes against Being a present parent"], "going against any value wins over serving another");
+
+  const both = marksOf(BOTH, line(ans(V2, AGAINST, "Goes against", 0.6), ans(V1, AGAINST, "Goes against", 0.95)), evaluators);
+  assert.deepEqual([both[1].tone, both[1].name], ["wrong", "Goes against Being a present parent, Health"], "every value gone against, in the values' order");
+  assert.equal(both[1].sure, 1, "the first against decides how sure it looks");
 
   const shoes = marksOf(BOTH, line(ans(V1, UNRELATED, "Unrelated", 0.97), ans(V2, UNRELATED, "Unrelated", 0.55)), evaluators);
   assert.deepEqual([shoes[1].icon, shoes[1].tone, shoes[1].name], ["compass", "plain", "Can't tell which of your values this serves"]);

@@ -229,6 +229,23 @@ test("Your values passes a text that serves any one value", async () => {
   );
 });
 
+test("Your values does not pass a text that goes against any value, even one that serves another", async () => {
+  const values = [
+    { id: V1, name: "Honesty", meaning: "" },
+    { id: V2, name: "Health", meaning: "" },
+  ];
+  const picks = (choice2) => ({ questions }) => answers(...questions.map((q) => ({ id: q.id, p: 0.9, choice: q.id === V1 ? "0000000000000000000000SRVS" : choice2 })));
+  const mixed = start([], { values, decide: picks("0000000000000000000000AGST") });
+  assert.equal((await evaluate(mixed.actor, YOURS, ["Lie for her"])).results[0].passed, false);
+});
+
+test("Your values does not pass a text that serves none", async () => {
+  const values = [{ id: V1, name: "Honesty", meaning: "" }];
+  const decide = ({ questions }) => answers(...questions.map((q) => ({ id: q.id, p: 0.9, choice: "0000000000000000000000NRTD" })));
+  const { actor } = start([], { values, decide });
+  assert.equal((await evaluate(actor, YOURS, ["Buy shoes"])).results[0].passed, false);
+});
+
 test("a busy Jev is waited out and asked again; still busy after every try, busy is the reply", async () => {
   const once = start([row()], { decide: (_, n) => (n === 1 ? { error: "busy" } : answers(yes(0.9), picked(O1))) });
   const reply = await evaluate(once.actor, ID, ["Run"]);

@@ -42,7 +42,7 @@
                 },
                 "passed": {
                   "type": "boolean",
-                  "description": "Every expected answer was given (for a combined evaluator: any was); true when none is expected."
+                  "description": "Every expected answer was given (for a combined evaluator: any was, and no answer is an option marked against); true when none is expected."
                 },
                 "answers": {
                   "type": "array",

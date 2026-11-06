@@ -375,15 +375,18 @@ function answerOf(q, a) {
 }
 
 // One text against the evaluator's questions. It passes when every expected answer was
-// given, or, for an evaluator shown as one mark (combined), when any was, as its mark is
-// green then.
+// given, or, for an evaluator shown as one mark (combined), when any was and no answer goes
+// against, as its mark is green only then: the rule of `combinedMark` in choice-point-cards
+// and in line-checks, whose answers here are told by the option's `against`.
 function judged(evaluator, text, answers) {
   const byId = new Map((Array.isArray(answers) ? answers : []).map((a) => [a?.id, a]));
   const out = [];
   let hits = 0;
   let expects = 0;
+  let against = false;
   for (const q of evaluator.questions) {
     const got = answerOf(q, byId.get(q.id));
+    if (got && q.kind === "pick" && liveOptions(q).some((o) => o.id === byId.get(q.id)?.choice && o.against)) against = true;
     const expected = expectedOf(q);
     const matches = expected !== undefined && got?.answer === expected;
     if (expected !== undefined) {
@@ -392,7 +395,7 @@ function judged(evaluator, text, answers) {
     }
     if (got) out.push({ question: q.text, ...got, ...(expected !== undefined ? { expected, matches } : {}) });
   }
-  const passed = expects === 0 || (evaluator.combined ? hits > 0 : hits === expects);
+  const passed = expects === 0 || (evaluator.combined ? hits > 0 && !against : hits === expects);
   return { text, passed, answers: out };
 }
 
@@ -1125,7 +1128,7 @@ export const machine = setup({
       "`evaluators: evaluate` (\"Checking with an evaluator\") checks up to ten texts with one " +
       "of them, asking Jev (`llm: decide`) about one text at a time and, when Jev is " +
       "busy, waiting 1.5 seconds and asking again up to five times. Each text passes when every " +
-      "expected answer was given, or, for Your values, when any was, as its mark is green then. " +
+      "expected answer was given, or, for Your values, when a value is served and none is gone against, as its mark is green only then. " +
       "An unknown evaluator, or one with nothing to ask, is refused, and an " +
       "error Jev gives, such as no key, is the reply. It costs what any use of Jev costs and " +
       "changes nothing.",

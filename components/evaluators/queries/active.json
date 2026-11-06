@@ -35,7 +35,7 @@
             },
             "combined": {
               "type": "boolean",
-              "description": "A text passes when any question gets its expected answer, rather than every one (Your values: it serves at least one value). False when absent."
+              "description": "A text passes when any question gets its expected answer and none gets an option marked against, rather than every one (Your values: it serves at least one value and goes against none). False when absent."
             },
             "questions": {
               "type": "array",

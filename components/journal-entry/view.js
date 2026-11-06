@@ -201,7 +201,7 @@ const drawMarks = (into, marks) => {
   else
     render(
       html`<span class="marks">${marks.map(
-        (m, i) => html`${i ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}<span class="mark" role="img" aria-label=${m.name}>${(MARK_ICONS[m.icon] ?? MARK_ICONS.check)()}<span class="name" aria-hidden="true">${m.name}</span></span>`,
+        (m, i) => html`${i ? html`<span class="sep" aria-hidden="true">·</span>` : nothing}<span class=${m.tone ? `mark ${m.tone}` : "mark"} role="img" aria-label=${m.name}>${(MARK_ICONS[m.icon] ?? MARK_ICONS.check)()}<span class="name" aria-hidden="true">${m.name}</span></span>`,
       )}</span>`,
       into,
     );
@@ -501,6 +501,22 @@ class JournalEntry extends LitElement {
       display: inline-flex;
       align-items: center;
       gap: var(--space-2xs);
+    }
+    /* The one mark of an evaluator shown as one mark (line-checks): the colors of
+       choice-point-cards' marks, filling the soft tint behind them. */
+    .marks .mark.right,
+    .marks .mark.wrong {
+      margin: 0 calc(-1 * var(--space-xs));
+      padding: 0 var(--space-xs);
+      border-radius: var(--radius-sm);
+    }
+    .marks .mark.right {
+      color: var(--color-success);
+      background: var(--color-success-subtle);
+    }
+    .marks .mark.wrong {
+      color: var(--color-danger);
+      background: var(--color-danger-subtle);
     }
     /* On the phone ([narrow]) a mark shows only its icon, and its name above it on hover,
        out of the line's flow so the text never moves, as in note-editor's dock. */

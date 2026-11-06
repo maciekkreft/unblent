@@ -693,7 +693,7 @@ export function lineMarksOf(checks) {
     const text = line.text.trim().replace(/^#{1,3} /, "");
     if (line.status === "pending") out.set(text, [{ pending: true }]);
     else if (line.status === "failed") out.set(text, [{ failed: true, error: CHECK_ERRORS[checks.error] ?? CHECK_ERRORS.unavailable }]);
-    else if (line.marks.length) out.set(text, line.marks.map((m) => ({ name: m.name, icon: m.icon ?? "check" })));
+    else if (line.marks.length) out.set(text, line.marks.map((m) => ({ name: m.name, icon: m.icon ?? "check", ...(m.tone ? { tone: m.tone } : {}) })));
   }
   return out;
 }
@@ -983,7 +983,9 @@ export const machine = setup({
       "it in the same paragraph or list) is checked by line-checks once the user finishes it " +
       "(moves off it, presses Enter, pastes, or leaves the editor), and its answer shows at " +
       "the line's end as the option's icon and name, several joined in one row: a pulsing dot " +
-      "while Jev is asked, and a warning whose tooltip says why when it could not be." +
+      "while Jev is asked, and a warning whose tooltip says why when it could not be. Your " +
+      "values gets one compass per line, whose name says which values: red when it goes against " +
+      "any, green when it serves one, uncolored when Jev can't tell." +
       " Typing # at the start of a word opens a list of the account's evaluators by their " +
       "short names, each with its description on a line under it, narrowed as the name is " +
       "typed; the arrow keys (or Ctrl+N and Ctrl+P) choose, Enter, Tab, a click or a tap " +

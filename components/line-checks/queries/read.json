@@ -107,7 +107,7 @@
                 },
                 "marks": {
                   "type": "array",
-                  "description": "What is shown at the line's end, one per question of the evaluators named for it, in the order of the tags and then of each evaluator's questions; empty until done. A yes / no question answered no has no mark.",
+                  "description": "What is shown at the line's end, one per question of the evaluators named for it, in the order of the tags and then of each evaluator's questions; empty until done. A yes / no question answered no has no mark. An evaluator shown as one mark (combined) has one mark for the line in place of one per question.",
                   "items": {
                     "type": "object",
                     "description": "Jev's answer to one question about the line, as it is shown.",
@@ -141,6 +141,14 @@
                         "minimum": 0,
                         "maximum": 1,
                         "description": "How likely Jev holds the answer to be."
+                      },
+                      "tone": {
+                        "enum": [
+                          "right",
+                          "wrong",
+                          "plain"
+                        ],
+                        "description": "How the mark is colored: right, wrong or plain. Present only on the one mark an evaluator shown as one mark (combined) gets; left out on every other mark."
                       }
                     },
                     "required": [

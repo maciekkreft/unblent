@@ -188,6 +188,98 @@ test("a yes / no answered no has no mark, and an option without an icon has none
   assert.deepEqual(checked.at(-1).lines[0].marks, [{ evaluator: EV, question: Q1, option: O2, name: "Not in my control", p: 0.9 }]);
 });
 
+// Your values, as evaluators presents it: one pick question per value, Serves expected,
+// Goes against marked as against, its answers shown as one mark.
+const YV = "01ARZ3NDEKTSV4RRFFQ69G5YV1";
+const V1 = "01ARZ3NDEKTSV4RRFFQ69G5VA1";
+const V2 = "01ARZ3NDEKTSV4RRFFQ69G5VA2";
+const V3 = "01ARZ3NDEKTSV4RRFFQ69G5VA3";
+const SERVES = "01ARZ3NDEKTSV4RRFFQ69G5SR1";
+const AGAINST = "01ARZ3NDEKTSV4RRFFQ69G5AG1";
+const UNRELATED = "01ARZ3NDEKTSV4RRFFQ69G5NR1";
+const valueQuestion = (id, name) => ({
+  id,
+  on: true,
+  kind: "pick",
+  text: `How does this relate to ${name}?`,
+  name,
+  yes: "",
+  no: "",
+  expect: SERVES,
+  options: [
+    { id: SERVES, name: "Serves", description: "" },
+    { id: AGAINST, name: "Goes against", description: "", against: true },
+    { id: UNRELATED, name: "Unrelated", description: "" },
+  ],
+});
+const yours = (over = {}) => ({ id: YV, book: BOOK, name: "Your values", on: true, version: 1, combined: true, questions: [valueQuestion(V1, "Honesty"), valueQuestion(V2, "Health"), valueQuestion(V3, "Family")], ...over });
+const picked = (...choices) => ({ answers: choices.map(([id, choice, p = 0.9]) => ({ id, p, choice })), inputTokens: 1, ms: 1 });
+
+// The one mark Your values gets for a line, after Jev answered with `answer`.
+async function oneMark(answer) {
+  const { actor, checked, decides } = await start({ asks: fakeAsk({ evaluators: [yours()] }) });
+  actor.send(note("#your-values\nAn action", ["An action"]));
+  await flush();
+  decides[0].answer(answer);
+  await flush();
+  return checked.at(-1).lines[0].marks;
+}
+
+test("many values get one red mark naming every one gone against, in the evaluator's order", async () => {
+  assert.deepEqual(await oneMark(picked([V1, AGAINST, 0.7], [V2, SERVES], [V3, AGAINST, 0.95])), [
+    { evaluator: YV, question: V1, option: AGAINST, name: "Goes against Honesty, Family", icon: "compass", p: 0.7, tone: "wrong" },
+  ]);
+});
+
+test("with none gone against, one green mark naming the first value served", async () => {
+  assert.deepEqual(await oneMark(picked([V1, UNRELATED], [V2, SERVES, 0.6], [V3, SERVES, 0.95])), [
+    { evaluator: YV, question: V2, option: SERVES, name: "Serves Health", icon: "compass", p: 0.6, tone: "right" },
+  ]);
+});
+
+test("with none served or gone against, one uncolored mark from the least sure answer", async () => {
+  assert.deepEqual(await oneMark(picked([V1, UNRELATED, 0.9], [V2, UNRELATED, 0.55], [V3, UNRELATED, 0.8])), [
+    { evaluator: YV, question: V2, option: UNRELATED, name: "Can't tell which of your values this serves", icon: "compass", p: 0.55, tone: "plain" },
+  ]);
+});
+
+test("no answered question has no mark", async () => {
+  assert.deepEqual(await oneMark({ answers: [], inputTokens: 1, ms: 1 }), []);
+});
+
+test("the mark comes from kept answers: it is one mark per question's own key, and nothing new is asked", async () => {
+  const store = fakeStore();
+  const evaluator = yours();
+  for (const [q, option, name] of [[V1, AGAINST, "Goes against"], [V2, AGAINST, "Goes against"], [V3, UNRELATED, "Unrelated"]]) {
+    const key = keyOf(YV, [askedOf(evaluator).find((a) => a.id === q)], "An action");
+    await store.answerPut({ key, answers: [{ question: q, option, name, p: 0.9 }] });
+  }
+  const { actor, checked, decides } = await start({ store, asks: fakeAsk({ evaluators: [evaluator] }) });
+  actor.send(note("#your-values\nAn action", ["An action"]));
+  await flush();
+  assert.equal(decides.length, 0, "every answer was kept already");
+  assert.deepEqual(checked.at(-1).lines[0].marks.map((m) => m.name), ["Goes against Honesty, Health"]);
+  const report = await read(actor, { kind: "note", id: NOTE, text: "#your-values\nAn action" });
+  assert.deepEqual(report.lines[0].marks.map((m) => m.tone), ["wrong"], "the read's reply is the same, and valid");
+});
+
+test("the questions asked are still one per value, whatever is drawn", async () => {
+  const { actor, decides } = await start({ asks: fakeAsk({ evaluators: [yours()] }) });
+  actor.send(note("#your-values\nAn action", ["An action"]));
+  await flush();
+  assert.deepEqual(decides[0].payload, { state: { text: "An action" }, questions: askedOf(yours()) });
+});
+
+test("a second evaluator on the line keeps its own marks, in the order of the tags", async () => {
+  const { actor, checked, decides } = await start({ asks: fakeAsk({ evaluators: [yours(), control()] }) });
+  actor.send(note("#in-my-control #your-values\nAn action", ["An action"]));
+  await flush();
+  decides[0].answer({ answers: [{ id: Q1, p: 0.9, choice: O1 }, { id: Q2, p: 0.8 }, { id: V1, p: 0.9, choice: SERVES }, { id: V2, p: 0.9, choice: UNRELATED }, { id: V3, p: 0.9, choice: UNRELATED }], inputTokens: 1, ms: 1 });
+  await flush();
+  assert.deepEqual(checked.at(-1).lines[0].marks.map((m) => m.name), ["In my control", "Worry", "Serves Honesty"]);
+  assert.deepEqual(checked.at(-1).lines[0].marks.map((m) => m.tone), [undefined, undefined, "right"]);
+});
+
 test("a tag no evaluator has checks nothing and names no evaluator", async () => {
   const { actor, checked, decides } = await start();
   actor.send(note("#foo\nRent is due", ["Rent is due"]));

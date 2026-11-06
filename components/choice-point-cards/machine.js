@@ -243,11 +243,12 @@ function questionMarks(checker, evaluator, answer) {
 // The value a question of Your values asks about is the question's name.
 export const valueName = (q) => (typeof q?.name === "string" && q.name.trim()) || "one of your values";
 
-// A combined evaluator (Your values) answers with one mark for the line, a compass:
-// green when any question got the answer it expects (the line serves a value), named
-// after the first such value in the evaluator's order; else red when any answer is an
-// option marked as going against, named the same way; else uncoloured, Jev not able to
-// tell. Its sureness is the deciding answer's, and for an uncoloured mark the least sure
+// A combined evaluator (Your values) answers with one mark for the line, a compass: red when
+// any answer is an option marked as going against, naming every such value in the
+// evaluator's order; else green when any question got the answer it expects (the line serves
+// a value), named after the first such value; else uncolored, Jev not able to tell. The same
+// rule is copied in line-checks' `combinedMark` and in evaluators' `judged`, because
+// components never import each other (11.2). Its sureness is the deciding answer's, and for an uncolored mark the least sure
 // answer's, since every one of them had to miss. With no question answered, such as Your
 // values with no values written, there is no mark at all: none would suggest Jev looked.
 function combinedMark(evaluator, answer) {
@@ -258,10 +259,10 @@ function combinedMark(evaluator, answer) {
   if (!answered.length) return [];
   const about = named(evaluator.name) ?? "Your values";
   const mark = (tone, { q, a }, name) => ({ question: q.id, combined: true, about, name, p: a.p, tone, icon: "compass", expected: null, sure: sureOf(a.p) });
+  const against = answered.filter(({ q, a }) => q.options?.some((o) => o.id === a.option && o.against));
+  if (against.length) return [mark("wrong", against[0], `Goes against ${against.map(({ q }) => valueName(q)).join(", ")}`)];
   const served = answered.find(({ q, a }) => expectOf(q) != null && a.option === expectOf(q));
   if (served) return [mark("right", served, `Serves ${valueName(served.q)}`)];
-  const against = answered.find(({ q, a }) => q.options?.some((o) => o.id === a.option && o.against));
-  if (against) return [mark("wrong", against, `Goes against ${valueName(against.q)}`)];
   const least = answered.reduce((x, y) => (y.a.p < x.a.p ? y : x));
   return [mark("plain", least, "Can't tell which of your values this serves")];
 }
@@ -430,19 +431,19 @@ export const machine = setup({
       "has said. On a narrow width the V stands above the boxes. When Settings has an " +
       "evaluator check a box, Jev's marks stand at the right end of each checked line, inside " +
       "the box: a pulsing dot while Jev is checking, then a mark per shown answer, green when " +
-      "it is the answer the evaluator's question expects, red when not, uncoloured when it " +
+      "it is the answer the evaluator's question expects, red when not, uncolored when it " +
       "expects none, solid when " +
       "Jev is sure and faded when it is not; the mark shows the icon the evaluator gives the " +
       "option answered, and a yes / no answer or an option with no icon gets a check, or a " +
       "warning when it is not the expected one. Settings may name a further evaluator for a " +
       "box (Also check with); its marks follow the box's own. Your values, as either one, " +
-      "draws one compass per line instead of a mark per value: green when the move serves " +
-      "any of the values, red when it serves none and goes against one, uncoloured when Jev " +
+      "draws one compass per line instead of a mark per value: red when the move goes against " +
+      "any of the values, otherwise green when it serves one, uncolored when Jev " +
       "can't tell, solid or faded as the answer that decided it, or the least sure answer " +
-      "for an uncoloured one; with no values written there is no compass at all. Its hint " +
-      "names the value, by its question's name: \"Your values: Serves Being a present parent\", \"Your values: Goes against Health\", or " +
-      "\"Your values: Can't tell which of your values this serves\", the first value in the values' order " +
-      "when several fit. An earlier day's marks name that day's values. A line edited since it was " +
+      "for an uncolored one; with no values written there is no compass at all. Its hint " +
+      "names the value, by its question's name: \"Your values: Serves Being a present parent\", \"Your values: Goes against Honesty, Health\", or " +
+      "\"Your values: Can't tell which of your values this serves\": every value gone against, or the first value served, in the values' order. " +
+      "An earlier day's marks name that day's values. A line edited since it was " +
       "checked has no mark until it is checked again. The marks are not text: they do not " +
       "move the cursor or count for Vim. Every mark's hint has one form, what was checked, a " +
       "colon, then the answer: what was checked is the question's short name or else the " +

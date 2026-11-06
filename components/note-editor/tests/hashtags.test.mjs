@@ -45,15 +45,15 @@ async function setUp(context, page) {
 const line = (page, text) => page.locator("#notes-editor .cm-line", { hasText: text });
 const color = (locator) => locator.evaluate((el) => getComputedStyle(el).color);
 // What a token resolves to here, read from an element styled with it.
-const token = (page, name) =>
-  page.evaluate((name) => {
+const token = (page, name, property = "color") =>
+  page.evaluate(([name, property]) => {
     const probe = document.createElement("span");
-    probe.style.color = `var(${name})`;
+    probe.style[property] = `var(${name})`;
     document.body.append(probe);
-    const value = getComputedStyle(probe).color;
+    const value = getComputedStyle(probe)[property];
     probe.remove();
     return value;
-  }, name);
+  }, [name, property]);
 
 for (const engine of ENGINES) {
   describe(`hashtag checks in the note editor in ${engine.name}`, { timeout: 30000 }, () => {
@@ -108,6 +108,60 @@ for (const engine of ENGINES) {
         await page.keyboard.press("ArrowDown");
         const job = line(page, "Whether I get the job").locator(".marks");
         await until(async () => (await job.locator(".mark").count()) && (await named(job)) === "Not in my control");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: rendering and layout (one compass per line, in the colors of the tokens).
+    test("a line under #your-values shows one compass: red, green or uncolored", async () => {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("note-values-mark"));
+        const page = await context.newPage();
+        const problems = watch(page);
+        // Today's journal day, whose values count: it ends at 2:00 the next night (13, Journal).
+        const at = new Date(Date.now() - 2 * 3600e3);
+        const today = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+        const values = [{ id: id("V1"), name: "Honesty", meaning: "" }, { id: id("V2"), name: "Health", meaning: "" }];
+        assert.equal((await context.request.put(`${BASE_URL}/api/values/${today}`, { data: { values, baseVersion: null } })).status(), 200);
+        const body = "#your-values\n- Lie about the gym\n- Tell her the truth\n- Buy shoes";
+        assert.equal((await context.request.put(`${BASE_URL}/api/notes/${NOTE}`, { data: { title: "#your-values", body, baseVersion: null, about: [] } })).status(), 200);
+        await context.route(/\/api\/flags$/, (route) => route.fulfill({ json: { off: [], hidden: [], released: ["choice-points"], shown: ["choice-points"] } }));
+        await page.route("**/api/llm", async (route) => {
+          const res = await route.fetch();
+          const json = await res.json();
+          await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true }, decider: { ...json.decider, ready: true } } });
+        });
+        await page.route("**/api/llm/decide", (route) => {
+          const { state, questions } = route.request().postDataJSON();
+          const name = (q, word) => q.options.find((o) => o.name === word).id;
+          const pick = (q) => (/gym/.test(state.text) ? name(q, "Goes against") : /truth/.test(state.text) && q.instructions.includes("Honesty") ? name(q, "Serves") : name(q, "Unrelated"));
+          route.fulfill({ json: { answers: questions.map((q) => ({ id: q.id, p: 0.9, choice: pick(q) })), inputTokens: 1, ms: 1 } });
+        });
+        await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+        await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row:not(.draft)"));
+        await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row:not(.draft)").click());
+        await page.locator("#notes-editor .cm-content").waitFor();
+        const looks = async (text, name, ink, tint) => {
+          const mark = line(page, text).locator(".marks:not(.pending) .mark");
+          await mark.waitFor();
+          assert.equal(await mark.count(), 1, "one mark, however many values");
+          assert.equal(await mark.getAttribute("aria-label"), name);
+          assert.equal(await color(mark), await token(page, ink));
+          if (tint) assert.equal(await mark.evaluate((el) => getComputedStyle(el).backgroundColor), await token(page, tint, "backgroundColor"));
+        };
+        // Moving off each line in turn finishes it.
+        await line(page, "Lie about the gym").click();
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowUp");
+        await looks("Lie about the gym", "Goes against Honesty, Health", "--color-danger", "--color-danger-subtle");
+        await looks("Tell her the truth", "Serves Honesty", "--color-success", "--color-success-subtle");
+        await looks("Buy shoes", "Can't tell which of your values this serves", "--color-body-mid", null);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

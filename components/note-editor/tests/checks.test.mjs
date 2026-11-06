@@ -86,6 +86,14 @@ test("only a report for the note shown is kept", async () => {
   assert.equal(actor.getSnapshot().context.checks.source.kind, "note");
 });
 
+test("a mark carries its tone only when it has one", () => {
+  const marks = lineMarksOf({
+    tags: [],
+    lines: [{ text: "Lie", status: "done", marks: [{ evaluator: EV, question: Q, name: "Goes against Honesty, Health", icon: "compass", p: 0.9, tone: "wrong" }, { evaluator: EV, question: Q, name: "Kind", p: 0.8 }] }],
+  });
+  assert.deepEqual(marks.get("Lie"), [{ name: "Goes against Honesty, Health", icon: "compass", tone: "wrong" }, { name: "Kind", icon: "check" }]);
+});
+
 test("the marks: icon and name per answer, a check without an icon, a dot while asked, a warning with the reason", () => {
   const marks = lineMarksOf({
     error: "no-key",

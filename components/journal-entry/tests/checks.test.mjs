@@ -69,6 +69,14 @@ test("finished lines ride the next save, or go at once when nothing waits; an ea
   assert.equal(saved.length, count, "an earlier day takes no typing and checks nothing");
 });
 
+test("a mark carries its tone only when it has one", () => {
+  const marks = lineMarksOf({
+    tags: [],
+    lines: [{ text: "Lie", status: "done", marks: [{ evaluator: TODAY, question: SUNDAY, name: "Serves Honesty", icon: "compass", p: 0.9, tone: "right" }, { evaluator: TODAY, question: SUNDAY, name: "Kind", p: 0.8 }] }],
+  });
+  assert.deepEqual(marks.get("Lie"), [{ name: "Serves Honesty", icon: "compass", tone: "right" }, { name: "Kind", icon: "check" }]);
+});
+
 test("a report for another day is not kept", async () => {
   const { actor } = await start(p);
   actor.send({ type: "text.checked", source: { kind: "day", id: SUNDAY }, tags: [], lines: [] });
