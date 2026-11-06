@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "add opens a Wheel of Life on the day shown, when that day can be written: a new one, or the one the day already has.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

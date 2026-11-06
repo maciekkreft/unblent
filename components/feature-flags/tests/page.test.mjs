@@ -12,7 +12,7 @@ const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
 // Only Values and Choice Points is released here, so the admin also sees rows held back and a guest does not.
-const FEATURES = ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts"];
+const FEATURES = ["choice-points", "usage", "slip-box", "reading-aloud", "book-experts", "wheel-of-life"];
 
 const text = (page) => page.evaluate(() => document.querySelector("feature-flags").shadowRoot.textContent.replace(/\s+/g, " ").trim());
 
@@ -64,7 +64,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       try {
         await until(async () => (await tab.getByRole("switch").count()) === FEATURES.length * 2);
         const said = await text(page);
-        for (const line of ["Features", "Release", "Show", "Values and Choice Points", "Slip-Box", "Reading aloud", "Book experts"]) {
+        for (const line of ["Features", "Release", "Show", "Values and Choice Points", "Slip-Box", "Reading aloud", "Book experts", "Wheel of Life"]) {
           assert.ok(said.includes(line), `the tab says "${line}": ${said}`);
         }
         assert.ok(!said.includes("Undo"), `Undo has no row: ${said}`);
