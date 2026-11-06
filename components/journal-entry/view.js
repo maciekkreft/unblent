@@ -6,7 +6,7 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, refreshHashtagPicker, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
-import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, flagShown, knownTags, lineMarksOf, marksOf, markAt, pastKey, wordAround, fingerPassage, addToNote, sourceLink } from "./machine.js";
+import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, flagShown, knownTags, lineMarksOf, marksOf, markAt, pastKey, wordAround, fingerPassage, movedEnd, addToNote, sourceLink } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
@@ -189,13 +189,13 @@ const markField = StateField.define({
   },
   provide: (f) => EditorView.decorations.from(f),
 });
-const markSet = (marks, glowing) =>
+const markSet = (marks, glowing, moving) =>
   Decoration.set(
     marks
       .filter((m) => m.from < m.to)
       .map((m) =>
         Decoration.mark({
-          class: `hl${m.commented ? " commented" : ""}${m.id === glowing ? " glow" : ""}`,
+          class: `hl${m.commented ? " commented" : ""}${m.id === glowing ? " glow" : ""}${m.id === moving ? " moving" : ""}`,
           attributes: { "data-id": m.id },
         }).range(m.from, m.to),
       ),
@@ -207,6 +207,9 @@ const markSet = (marks, glowing) =>
 const HOLD_MS = 400;
 const HOLD_SLOP = 10;
 const COPIED_MS = 1200;
+// What the bubble keeps clear under a passage's end for its handle's ball, which stands out
+// from its line by half its own size (.handle::after): a placement offset (7.4).
+const BALL_CLEAR = 6;
 // Vim's two-press keys count within this long of the first press, as in the reader.
 const CHORD_MS = 1000;
 // A press that means something of its own inside a highlight: following a link.
@@ -541,6 +544,12 @@ class JournalEntry extends LitElement {
     .hl.commented {
       box-shadow: inset 0 calc(-1 * var(--border-width)) 0 var(--color-accent);
     }
+    /* The highlight whose end is being dragged: the drag's own boxes (.passage) show it, so
+       the end it leaves does not stay painted. */
+    .hl.moving {
+      background: none;
+      box-shadow: none;
+    }
     .hl.glow {
       animation: entry-glow calc(3 * var(--duration-slide)) var(--ease);
     }
@@ -580,6 +589,67 @@ class JournalEntry extends LitElement {
       height: var(--ph, 0);
       background: var(--color-accent-selection);
       border-radius: var(--radius-sm);
+    }
+    /* A highlight's handle (12; book-reader's, copied because components never import each
+       other, 11.2): a bar on the line's own height with a ball at its far end, inside a box
+       big enough for a finger. The box is laid over the text and adds nothing to it. It sits
+       above the text and under the bubble. A drag on it is the entry's, so the browser never
+       reads it as a scroll or a selection, though the day around it scrolls. */
+    .handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: calc(var(--space-xl) + var(--space-xs));
+      height: calc(var(--hh, var(--space-lg)) + var(--space-lg));
+      translate: var(--hx, 0) var(--hy, 0);
+      z-index: 1;
+      touch-action: none;
+      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .handle[hidden] {
+      display: none;
+    }
+    .handle::before,
+    .handle::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      margin-inline: auto;
+      background: var(--color-accent);
+    }
+    .handle::before {
+      width: var(--space-2xs);
+      height: var(--hh, var(--space-lg));
+    }
+    .handle::after {
+      width: calc(var(--space-sm) + var(--space-xs));
+      height: calc(var(--space-sm) + var(--space-xs));
+      border-radius: var(--radius-full);
+    }
+    .handle.start::before {
+      bottom: 0;
+    }
+    .handle.start::after {
+      bottom: var(--hh, var(--space-lg));
+      translate: 0 50%;
+    }
+    .handle.end::before {
+      top: 0;
+    }
+    .handle.end::after {
+      top: var(--hh, var(--space-lg));
+      translate: 0 -50%;
+    }
+    /* While a handle moves, placing the bubble again would make it jump. It stays focusable
+       and in place, so a comment box keeps its keyboard. */
+    .bubble.moving {
+      opacity: 0;
+      pointer-events: none;
     }
     /* A highlight's bubble (book-reader's): under the passage's end, placed by --bx/--by. */
     .bubble {
@@ -794,6 +864,7 @@ class JournalEntry extends LitElement {
     this.addEventListener("keydown", this.#onNestedKey);
     // On the host before a touch begins: only a listener that is not passive may refuse a
     // move, and iOS decides that as the touch begins. A touch may end with no pointerup.
+    this.addEventListener("touchstart", this.#touchstart, { passive: false });
     this.addEventListener("touchmove", this.#touchmove, { passive: false });
     this.addEventListener("touchend", this.#touchend);
     this.addEventListener("touchcancel", this.#touchend);
@@ -804,6 +875,7 @@ class JournalEntry extends LitElement {
     super.disconnectedCallback();
     this.#resized.disconnect();
     this.removeEventListener("keydown", this.#onNestedKey);
+    this.removeEventListener("touchstart", this.#touchstart);
     this.removeEventListener("touchmove", this.#touchmove);
     this.removeEventListener("touchend", this.#touchend);
     this.removeEventListener("touchcancel", this.#touchend);
@@ -1051,13 +1123,15 @@ class JournalEntry extends LitElement {
       this.#dayShown = day.id;
       this.#closeBubble(false);
       this.#dropFinger();
+      this.#dropMoving();
     }
-    const key = `${day.id}|${this.#glowing}`;
+    const moving = this.#moving?.id ?? null;
+    const key = `${day.id}|${this.#glowing}|${moving}`;
     const from = this.#marksFrom;
     if (!from || from.highlights !== context.highlights || from.doc !== doc || from.key !== key) {
       this.#marksFrom = { highlights: context.highlights, doc, key };
       this.#marks = editable ? [] : marksOf(context.highlights, day.day, doc);
-      this.#view.dispatch({ effects: setMarks.of(markSet(this.#marks, this.#glowing)) });
+      this.#view.dispatch({ effects: setMarks.of(markSet(this.#marks, this.#glowing, moving)) });
     }
     if (context.reveal && context.reveal.n !== this.#lastReveal) {
       this.#lastReveal = context.reveal.n;
@@ -1084,7 +1158,9 @@ class JournalEntry extends LitElement {
     }
   }
 
+  // A highlight that keeps its bubble, as after a handle's move, keeps its comment box too.
   #openBubble(id, keys = false) {
+    if (id === this.#active && !keys) return;
     this.#saveComment();
     this.#send({ type: "_commentClose" });
     this.#active = id;
@@ -1103,6 +1179,7 @@ class JournalEntry extends LitElement {
     this.#send({ type: "_commentClose" });
     this.#active = null;
     this.requestUpdate();
+    if (this.#moving?.sent) this.#dropMoving();
     if (back && held) this.#view?.focus();
   }
 
@@ -1111,19 +1188,20 @@ class JournalEntry extends LitElement {
     if (box) this.#send({ type: "_commentSave", body: box.value });
   }
 
-  // Under the end of the passage, inside the page. The first time, in view, and with the
-  // keyboard when Enter opened it.
+  // Under the end of the passage, inside the page, clear of the end's handle. The first time,
+  // in view, and with the keyboard when Enter opened it. A bubble in a drag stays where it
+  // was, so it never seems to jump.
   #placeBubble() {
     const bubble = this.renderRoot?.querySelector(".bubble");
     const mark = this.#marks.find((m) => m.id === this.#active);
     const page = this.renderRoot?.querySelector(".page");
-    if (!bubble || !page || !mark || !this.#view) return;
+    if (!bubble || !page || !mark || !this.#view || this.#moving) return;
     const end = this.#view.coordsAtPos(mark.to, -1);
     if (!end) return;
     const box = page.getBoundingClientRect();
     const x = Math.max(0, Math.min(page.clientWidth - bubble.offsetWidth, end.left - box.left - bubble.offsetWidth / 2));
     bubble.style.setProperty("--bx", `${Math.round(x)}px`);
-    bubble.style.setProperty("--by", `${Math.round(end.bottom - box.top)}px`);
+    bubble.style.setProperty("--by", `${Math.round(end.bottom - box.top + BALL_CLEAR)}px`);
     if (this.#bubbleShown === this.#active) return;
     this.#bubbleShown = this.#active;
     bubble.scrollIntoView({ block: "nearest" });
@@ -1251,13 +1329,20 @@ class JournalEntry extends LitElement {
   #finger = null;
   #lastPointer = null;
 
+  // A handle needs no scroll, so a touch on one can be refused where a touch on the text
+  // cannot, which makes iOS's own long presses fail and leaves that touch alive through a pause.
+  // This must be on the host before a touch begins: iOS decides at touchstart.
+  #touchstart = (e) => {
+    if (e.cancelable && e.composedPath()[0]?.classList?.contains("handle")) e.preventDefault();
+  };
   #touchmove = (e) => {
-    if (this.#finger && e.cancelable) e.preventDefault();
+    if ((this.#finger || this.#moving) && e.cancelable) e.preventDefault();
   };
   #touchend = (e) => {
     if (e.touches?.length) return;
     this.#cancelHold();
     if (this.#finger) this.#lift();
+    this.#release();
   };
 
   #cancelHold() {
@@ -1281,7 +1366,7 @@ class JournalEntry extends LitElement {
   #pointerdown = (e) => {
     this.#lastPointer = e.pointerType;
     if (e.pointerType === "mouse" || (e.button != null && e.button !== 0)) return;
-    if (this.#finger) return;
+    if (this.#finger || this.#moving) return;
     this.#cancelHold();
     this.#press = null;
     if (!e.isPrimary) return;
@@ -1445,6 +1530,145 @@ class JournalEntry extends LitElement {
     el.dataset.text = from < to ? this.#view.state.sliceDoc(from, to) : "";
   }
 
+  // --- A highlight's handles (12) -------------------------------------------------------
+  //
+  // The browser's own selection handles are what jumped under a finger (#held), so these are
+  // the entry's, as in book-reader's view.js, drawn on the open bubble's highlight. Every
+  // press, move and lift on one stops here, so nothing under it hears of it, and a mouse's press
+  // is not let start a selection or take the keyboard off a comment box.
+
+  // A handle being dragged, from the press until the mark shows its new ends: the highlight,
+  // which end, the doc as flat text, the [from, to) as it stands and as it was, where the end
+  // is meant to be, how far the press was from it (so grabbing it does not move it), whether
+  // a mouse's selection is to follow it, and whether the move has been sent.
+  #moving = null;
+
+  // The coordinates of an end, or null while CodeMirror has not drawn it.
+  #endAt(end, [from, to]) {
+    return end === "start" ? this.#view.coordsAtPos(from, 1) : this.#view.coordsAtPos(to, -1);
+  }
+
+  // The span the open highlight's handles stand on.
+  get #handleSpan() {
+    if (this.#moving) return this.#moving.span;
+    const mark = this.#marks.find((m) => m.id === this.#active);
+    return mark ? [mark.from, mark.to] : null;
+  }
+
+  // Each handle on its end, in the page's own coordinates, so it scrolls with the text; set as
+  // custom properties (7.4).
+  #placeHandles() {
+    const handles = this.renderRoot?.querySelectorAll(".handle");
+    const page = this.renderRoot?.querySelector(".page");
+    if (!handles?.length || !page || !this.#view) return;
+    const span = this.#handleSpan;
+    const box = page.getBoundingClientRect();
+    for (const el of handles) {
+      const end = el.dataset.end;
+      const at = span && this.#endAt(end, span);
+      el.hidden = !at;
+      if (!at) continue;
+      el.style.setProperty("--hh", `${at.bottom - at.top}px`);
+      el.style.setProperty("--hx", `${at.left - box.left - el.offsetWidth / 2}px`);
+      el.style.setProperty("--hy", `${(end === "start" ? at.bottom - el.offsetHeight : at.top) - box.top}px`);
+    }
+  }
+
+  #grab(e, end) {
+    e.stopPropagation();
+    if ((e.button != null && e.button !== 0) || this.#moving || !this.#view) return;
+    const span = this.#handleSpan;
+    const at = span && this.#endAt(end, span);
+    if (!at) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // A pointer already gone has nothing to capture, and what follows ends the drag.
+    }
+    const y = (at.top + at.bottom) / 2;
+    // A mouse's selection keeps following the highlight, so the browser's copy still copies
+    // it, and draws nothing of its old ends meanwhile.
+    const selected = !this.#view.state.selection.main.empty;
+    if (selected) this.#view.dispatch({ selection: { anchor: span[0] } });
+    this.#moving = { id: this.#active, end, flat: this.#view.state.doc.toString(), span, was: span, x: at.left, y, dx: e.clientX - at.left, dy: e.clientY - y, selected, frame: 0, pointerId: e.pointerId, sent: false };
+    this.#paintPassage(span[0], span[1]);
+    this.requestUpdate();
+  }
+
+  // A move may come many times a frame, and only the last before a frame can be seen.
+  #moveHandle(e) {
+    e.stopPropagation();
+    const m = this.#moving;
+    if (!m || m.sent || e.pointerId !== m.pointerId) return;
+    m.x = e.clientX - m.dx;
+    m.y = e.clientY - m.dy;
+    m.frame ||= requestAnimationFrame(() => this.#stepHandle());
+  }
+
+  #stepHandle() {
+    const m = this.#moving;
+    if (!m) return;
+    cancelAnimationFrame(m.frame);
+    m.frame = 0;
+    if (m.sent) return;
+    const at = this.#view.posAtCoords({ x: m.x, y: m.y }, false);
+    if (at == null) return;
+    const span = movedEnd(m.flat, m.span, m.end, at);
+    if (span[0] === m.span[0] && span[1] === m.span[1]) return;
+    m.span = span;
+    this.#paintPassage(span[0], span[1]);
+    this.#placeHandles();
+  }
+
+  // The end stays where the handle was let go, one step. The drag's own boxes stay until the
+  // mark shows the new ends (#afterComment). A touch iOS ended counts as a release, so what was
+  // painted is kept. Nothing moved is nothing to save.
+  #release() {
+    const m = this.#moving;
+    if (!m || m.sent) return;
+    this.#stepHandle();
+    m.sent = true;
+    if (m.selected) this.#view.dispatch({ selection: { anchor: m.span[0], head: m.span[1] } });
+    if (m.span[0] !== m.was[0] || m.span[1] !== m.was[1]) this.#send({ type: "_move", id: m.id, from: m.span[0], to: m.span[1] });
+    this.requestUpdate();
+  }
+
+  #dropMoving() {
+    if (!this.#moving) return;
+    cancelAnimationFrame(this.#moving.frame);
+    this.#moving = null;
+    this.#paintPassage(0, 0);
+    this.requestUpdate();
+  }
+
+  // The two handles of the open highlight, before the bubble, which is drawn over them where
+  // it has to be.
+  #handles(context) {
+    if (!this.#active || !context.highlights.some((x) => x.id === this.#active)) return nothing;
+    const handle = (end) => html`<span
+      class="handle ${end}"
+      data-end=${end}
+      aria-hidden="true"
+      hidden
+      @pointerdown=${(e) => this.#grab(e, end)}
+      @pointermove=${(e) => this.#moveHandle(e)}
+      @pointerup=${(e) => {
+        e.stopPropagation();
+        this.#release();
+      }}
+      @pointercancel=${(e) => {
+        e.stopPropagation();
+        this.#release();
+      }}
+      @mousedown=${(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      }}
+      @contextmenu=${(e) => e.preventDefault()}
+    ></span>`;
+    return [handle("start"), handle("end")];
+  }
+
   // Along the bubble with h, l or the arrows; Escape back to the text, or from the comment
   // box back to its Comment button, which keeps what was written.
   #bubbleKey = (e) => {
@@ -1484,7 +1708,7 @@ class JournalEntry extends LitElement {
     const add = addToNote(context, h.id);
     const open = context.comment?.id === h.id;
     return html`
-      <div class="bubble" role="group" aria-label="Highlight" @keydown=${this.#bubbleKey} @mousedown=${(e) => e.composedPath()[0]?.localName !== "textarea" && e.preventDefault()}>
+      <div class="bubble ${this.#moving ? "moving" : ""}" role="group" aria-label="Highlight" @keydown=${this.#bubbleKey} @mousedown=${(e) => e.composedPath()[0]?.localName !== "textarea" && e.preventDefault()}>
         <button class="act copy" type="button" @click=${() => this.#copyText(mark.exact, "text", false)}>${this.#said === "text" ? "Copied" : "Copy"}</button>
         <button class="act copy-link" type="button" @click=${() => this.#copyLink(mark)}>${this.#said === "link" ? "Copied" : "Copy link"}</button>
         ${add
@@ -1525,7 +1749,11 @@ class JournalEntry extends LitElement {
       this.#commentBack = false;
       this.renderRoot.querySelector(".bubble .comment")?.focus({ preventScroll: true });
     }
+    // The boxes of a finished drag give way once the mark shows the new ends, in the same
+    // render, so neither end is ever seen to jump back.
+    if (this.#moving?.sent) this.#dropMoving();
     this.#placeBubble();
+    this.#placeHandles();
   }
 
   // What the editor shows: the text being typed on the open day, else the day's text;
@@ -1574,7 +1802,7 @@ class JournalEntry extends LitElement {
             <div class="region ${editable && !conflict ? "open" : conflict ? "" : "past"}"></div>
             <slot @slotchange=${this.#slotted}></slot>
             <div class="passage" aria-hidden="true"></div>
-            ${this.#bubble(context)}
+            ${this.#handles(context)}${this.#bubble(context)}
           </div>
         </div>
         ${this.#said === "passage" ? html`<div class="said" role="status">Copied</div>` : this.#said === "why" ? html`<div class="said" role="status">${this.#why}</div>` : nothing}

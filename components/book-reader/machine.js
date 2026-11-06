@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise, emit, enqueueActions, raise, cancel, and, not, stateIn } from "xstate";
+import { setup, assign, fromPromise, fromCallback, emit, enqueueActions, raise, cancel, and, not, stateIn, spawnChild, stopChild } from "xstate";
 
 // The view component that reads one book (8, kind 4): it owns only UI state — which
 // book and chapter it is showing, that chapter's fragment, a place it still owes the
@@ -341,6 +341,12 @@ export const fingerPassage = (chapter, [from, to], i) => {
   while (at < from && blank(flat[at])) at += 1;
   return passage(chapter, to - 1, wordAround(chapter, at)[0], true);
 };
+
+// Where a highlight's handle (12) leaves the passage [from, to) with the finger over index
+// `i`. The other end stays; this end stops one character short of it, so the two never cross,
+// and an end never rests on a blank, which is never part of a passage.
+export const movedEnd = (chapter, [from, to], end, i) =>
+  end === "start" ? passage(chapter, Math.min(i, to - 1), to - 1, true) : passage(chapter, from, Math.max(i, from), true);
 
 // Measured characters, in reading order, gathered into the lines they sit on: a character
 // joins the line before it when their boxes share more than half their height.
@@ -796,6 +802,13 @@ export const machine = setup({
     // The note open in the Notes panel when the reader starts, since the editor may have
     // announced it (note.opened) before this reader was mounted.
     openNote: fromPromise(({ input }) => input.ask("notes", "open", {})),
+    // The highlight's comment and version, for the comment box.
+    readComment: fromCallback(({ input, sendBack }) => {
+      Promise.resolve(input.ask("notes", "read", { id: input.id })).then(
+        (reply) => sendBack({ type: "_commentRead", id: input.id, note: reply?.note ?? null }),
+        () => sendBack({ type: "_commentRead", id: input.id, note: null }),
+      );
+    }),
     readNotes: fromPromise(async ({ input }) => {
       const replies = await Promise.all(input.ids.map((id) => input.ask("notes", "read", { id })));
       return replies.filter((r) => r && "note" in r).map((r) => r.note);
@@ -841,10 +854,21 @@ export const machine = setup({
       "new passage. On a touch screen a finger never uses the browser's selection: pressing and " +
       "holding for about 0.4 seconds paints the word under it, and without lifting, a drag grows " +
       "the passage by whole words from that word, forward or back only by where the finger is " +
-      "against it, as far as the last character on the page. Lifting shows a Highlight button " +
-      "under the passage's last line, which marks exactly what is painted; a tap elsewhere, a " +
-      "page turn, a new chapter or Escape drops it, a tap there doing nothing else, and holding " +
-      "again starts over. A pause in the drag changes nothing. A quick swipe still turns the page, " +
+      "against it, as far as the last character on the page. A pause in the drag changes nothing. " +
+      "Lifting makes the highlight at once, exactly what is painted, and opens its bubble; Undo " +
+      "takes it back. A mouse selection does the same when the button is released, grown to " +
+      "whole words. While a bubble is open the highlight's two ends show handles drawn by the reader, " +
+      "a bar with a ball, one each on the page shown, so a highlight split across pages shows " +
+      "only the ends on that page. Dragging one with a finger or a mouse moves that end, letter " +
+      "by letter; the bubble fades during the drag, a pause changes nothing, the two ends cannot " +
+      "cross, and an end stops at the last character on the page. Each move is one step, keeps " +
+      "the same note and comment and saves the new place and quote; moving an end over another " +
+      "highlight joins them, as making one over it does, the comments kept one after the other. " +
+      "A press on a handle is never a page turn, a swipe, a link, a new hold or a tap. A tap " +
+      "elsewhere with a finger closes the bubble and its handles, keeps the highlight and does " +
+      "nothing else. The bubble's Comment opens a box for the highlight's comment, which is " +
+      "saved when the box is left, one step; left empty, the highlight stays as it is, and a " +
+      "commented one carries an accent line. A quick swipe still turns the page, " +
       "a tap still turns from the outer thirds, a tap on a link only follows it, a hold on a link " +
       "follows nothing, and a hold on a picture does nothing. After a re-import it finds each highlight's quote " +
       "again and saves its corrected place; a highlight whose quote is no longer in the book " +
@@ -965,6 +989,8 @@ export const machine = setup({
     // first), and the union place and quote the survivor is saved with once their comments
     // are read. Set when a new highlight overlaps others, consumed by the read that follows.
     merge: null,
+    // The open comment box: the highlight's id, its body and the version it was read at.
+    comment: null,
     // A re-anchoring in flight (session 7): the highlights the view found again in the
     // chapter now shown, each with the corrected place, whose notes are read and re-saved
     // so the passage need not be searched for again. Set from _reanchor, cleared once saved.
@@ -1155,7 +1181,9 @@ export const machine = setup({
         // changes nothing (session 3 opens that highlight's bubble); a range clear of
         // them all is a new note, its body the empty comment; a range that overlaps or touches one or more merges them into one (Decision 6). The
         // merge needs the involved comments and versions, so it is planned here and read in
-        // `merging`; the plain cases emit at once.
+        // `merging`; the plain cases emit at once. `open` asks for the bubble of what was made:
+        // a finger and a mouse make at once and offer the rest next, and the keyboard stays
+        // where it is.
         _highlight: {
           guard: ({ context }) => context.highlighting && Boolean(context.book),
           actions: enqueueActions(({ context, event, enqueue }) => {
@@ -1177,9 +1205,11 @@ export const machine = setup({
                 start: range.start,
                 end: range.end,
               };
+              const id = context.mint();
+              if (event.open) enqueue.assign({ reveal: ({ context }) => ({ id, n: (context.reveal?.n ?? 0) + 1 }) });
               enqueue.emit({
                 type: "note.saved",
-                id: context.mint(),
+                id,
                 title: "",
                 body: "",
                 baseVersion: null,
@@ -1198,11 +1228,58 @@ export const machine = setup({
                 ids: involved.map((h) => h.id),
                 place: { chapter: context.chapter, contentVersion: context.book.contentVersion, start: u.start, end: u.end },
                 quote: quoteOf(event.texts, u),
+                open: event.open === true,
               },
             });
             enqueue.raise({ type: "_merge" });
           }),
         },
+        // A handle moved an end (12): the same read and save as a merge, with only this note
+        // when it meets no other, so its id and comment stay and the save carries the new place
+        // and quote. The old ends do not count, or an end could never come back. Adopted at once,
+        // as _reanchor does, so the mark never shows its old ends after the finger lifts.
+        _move: {
+          guard: ({ context, event }) => context.highlighting && Boolean(context.book) && context.highlights.some((h) => h.id === event.id),
+          actions: enqueueActions(({ context, event, enqueue }) => {
+            const self = context.highlights.find((h) => h.id === event.id);
+            const range = snapToWords(event.texts, { start: event.start, end: event.end }, { grow: false });
+            if (!range) return;
+            const was = rangeOf(self.place);
+            if (!before(range.start, was.start) && !before(was.start, range.start) && !before(range.end, was.end) && !before(was.end, range.end)) return;
+            const others = context.highlights.filter((h) => h.id !== self.id && h.place.chapter === self.place.chapter && overlaps(rangeOf(h.place), range));
+            const start = (h) => (h.id === self.id ? range.start : h.place.start);
+            const involved = [self, ...others].sort((a, b) => (before(start(a), start(b)) ? -1 : 1));
+            const u = union([range, ...others.map((h) => rangeOf(h.place))]);
+            const place = { ...self.place, contentVersion: context.book.contentVersion, start: u.start, end: u.end };
+            const quote = quoteOf(event.texts, u);
+            enqueue.assign({
+              merge: { ids: involved.map((h) => h.id), place, quote, open: true },
+              highlights: context.highlights.map((h) => (h.id === self.id ? { ...h, place, quote } : h)),
+            });
+            enqueue.raise({ type: "_merge" });
+          }),
+        },
+        // The comment box (copied from journal-entry, because components never import each
+        // other, 11.2): its text comes from notes, and leaving it saves the highlight's title
+        // and body, one step (12, Undo). A comment left as it was saves nothing.
+        _commentOpen: {
+          actions: [
+            stopChild("comment"),
+            spawnChild("readComment", { id: "comment", input: ({ context, event }) => ({ ask: context.ask, id: event.id }) }),
+          ],
+        },
+        _commentRead: {
+          guard: ({ event }) => event.note != null,
+          actions: assign({ comment: ({ event }) => ({ id: event.id, body: event.note.body ?? "", version: event.note.version }) }),
+        },
+        _commentSave: {
+          guard: ({ context, event }) => context.comment != null && event.body !== context.comment.body,
+          actions: [
+            emit(({ context, event }) => ({ type: "note.saved", id: context.comment.id, title: titleOf(event.body), body: event.body, baseVersion: context.comment.version, left: true })),
+            assign({ comment: ({ context, event }) => ({ ...context.comment, body: event.body }) }),
+          ],
+        },
+        _commentClose: { actions: [stopChild("comment"), assign({ comment: null })] },
         // The planned merge (Decision 6): read the involved notes before saving the survivor.
         // Raised by _highlight so it runs after the assign that stored the plan.
         _merge: { guard: ({ context }) => Boolean(context.merge), target: ".merging" },
@@ -1231,6 +1308,7 @@ export const machine = setup({
           actions: assign({
             highlights: ({ context, event }) => foldHighlight(context.highlights, event, context.book.id),
             holding: ({ context, event }) => foldHolding(context.holding, event),
+            comment: ({ context, event }) => (context.comment?.id === event.id && Number.isInteger(event.version) ? { ...context.comment, version: event.version } : context.comment),
           }),
         },
         "note.deleted": {
@@ -1238,6 +1316,7 @@ export const machine = setup({
           actions: assign({
             highlights: ({ context, event }) => context.highlights.filter((h) => h.id !== event.id),
             holding: ({ context, event }) => foldHolding(context.holding, { id: event.id }),
+            comment: ({ context, event }) => (context.comment?.id === event.id ? null : context.comment),
           }),
         },
         // Add to note on a highlight's bubble: the user's gesture, which notes takes in and
@@ -1471,6 +1550,7 @@ export const machine = setup({
                   );
                   enqueue.emit({ type: "note.saved", id: survivorId, title: titleOf(body), body, baseVersion: survivor.version, about, left: true });
                   for (const id of otherIds) enqueue.emit({ type: "note.discarded", id });
+                  if (context.merge.open) enqueue.assign({ reveal: ({ context }) => ({ id: survivorId, n: (context.reveal?.n ?? 0) + 1 }) });
                 }
                 enqueue.assign({ merge: null });
               }),

@@ -1,4 +1,4 @@
-import { setup, assign, emit, fromPromise, fromCallback, enqueueActions, spawnChild, stopChild } from "xstate";
+import { setup, assign, emit, fromPromise, fromCallback, enqueueActions, raise, spawnChild, stopChild } from "xstate";
 
 // The view that shows the open conversation (architecture.md 3.1): headless of the
 // fact, it owns only its own UI state (the transcript scroll, which thinking records
@@ -10,8 +10,8 @@ import { setup, assign, emit, fromPromise, fromCallback, enqueueActions, spawnCh
 // comments on the last answer:
 // every change is emitted as the whole list in marks.edited (4.3, fifth rule), and
 // `conversations`, which keeps them with the chat, echoes them in conversation.changed.
-// The highlights the same way, in highlights.edited: a selection in an earlier answer, or
-// a comment box on the last one left empty; they carry no comment and never go to the model.
+// The highlights the same way, in highlights.edited: a finger's or a mouse's passage at once,
+// or a comment box from the keyboard left empty; they carry no comment and never go to the model.
 
 // A conversation.changed payload is the whole conversation with a `type` on it; the
 // read reply is the same shape without the `type`. One helper, so both feed the view
@@ -417,7 +417,7 @@ const closing = ({ conversation, draft }) => {
   const saved = list.find((m) => m.id === draft.id);
   if (draft.comment.trim() === "") return { marks: saved ? withoutMark(list, draft.id) : null, highlight: asHighlight(draft) };
   if (saved && saved.comment === draft.comment) return null;
-  return { marks: withMark(list, draft), highlight: null };
+  return { marks: withMark(list, draft), highlight: null, commented: draft.id };
 };
 
 // The ranges a new comment may not overlap: every saved comment but the open one, the
@@ -457,6 +457,12 @@ const keep = (enqueue, context, next, withHighlight = true, left = false) => {
   const made = withHighlight && next.highlight && !(conversation.highlights ?? []).some((h) => h.id === next.highlight.id);
   if (made) {
     const list = [...(conversation.highlights ?? []), next.highlight];
+    conversation = highlightedChat(conversation, list);
+    enqueue.emit({ type: "highlights.edited", conversationId: conversation.id, highlights: list });
+  }
+  // A highlight that took a comment is that comment now, one range and never two.
+  if ((conversation.highlights ?? []).some((h) => h.id === next.commented)) {
+    const list = conversation.highlights.filter((h) => h.id !== next.commented);
     conversation = highlightedChat(conversation, list);
     enqueue.emit({ type: "highlights.edited", conversationId: conversation.id, highlights: list });
   }
@@ -557,6 +563,125 @@ const highlight = enqueueActions(({ context, event, enqueue }) => {
 });
 
 const isHighlight = ({ context, event }) => (context.conversation?.highlights ?? []).some((h) => h.id === event.id);
+
+// A highlight on the last answer: its bubble is the comment box, which holds nothing yet.
+const onLastAnswer = ({ context, event }) => highlightsOf(context.conversation, lastAnswer(context.conversation)?.id).some((h) => h.id === event.id);
+const openHighlight = assign({
+  chosen: null,
+  draft: ({ context, event }) => ({ ...context.conversation.highlights.find((h) => h.id === event.id), comment: "" }),
+});
+
+// Two ranges that overlap or touch, so a passage that merely abuts a highlight is the same
+// passage, as in a book.
+const meets = (a, b) => a.start <= b.end && b.start <= a.end;
+const covering = (ranges) => ({ start: Math.min(...ranges.map((r) => r.start)), end: Math.max(...ranges.map((r) => r.end)) });
+const earliest = (ranges) => ranges.reduce((a, b) => (b.start < a.start ? b : a));
+
+// What a finger's or a mouse's passage makes the moment it ends: a highlight at once, on any
+// finished answer, joining any highlight it meets, the earliest keeping its id. Inside one
+// highlight, or over a comment, nothing new is made and that one opens. Over a comment
+// already sent, which is read only, nothing happens.
+export const liftOf = ({ conversation }, { answerId, start, end }) => {
+  if (!holdsHighlights(conversation, answerId)) return null;
+  const text = answerText(conversation, answerId);
+  const range = trimRange(text, start, end);
+  if (!range || overlaps(sentMarks(conversation, answerId), range.start, range.end)) return null;
+  const comment = lastAnswer(conversation)?.id === answerId ? savedMarks(conversation).find((m) => overlaps([m], range.start, range.end)) : null;
+  if (comment) return { open: comment.id };
+  const hit = highlightsOf(conversation, answerId).filter((h) => meets(h, range));
+  if (hit.length === 1 && hit[0].start <= range.start && range.end <= hit[0].end) return { open: hit[0].id };
+  const u = covering([range, ...hit]);
+  return { id: hit.length ? earliest(hit).id : null, gone: hit.map((h) => h.id), ...u, quote: text.slice(u.start, u.end) };
+};
+
+const lifted = enqueueActions(({ context, event, enqueue }) => {
+  const out = liftOf(context, event);
+  if (!out) return;
+  const { conversation } = context;
+  const last = lastAnswer(conversation)?.id === event.answerId;
+  if (out.open) {
+    const comment = last ? savedMarks(conversation).find((m) => m.id === out.open) : null;
+    const highlighted = (conversation.highlights ?? []).find((h) => h.id === out.open);
+    if (last) enqueue.assign({ draft: comment ? { ...comment, answerId: event.answerId } : { ...highlighted, comment: "" } });
+    else enqueue.assign({ chosen: out.open });
+    return;
+  }
+  const made = { id: out.id ?? context.mint(), answerId: event.answerId, start: out.start, end: out.end, quote: out.quote };
+  storeHighlights(enqueue, context, [...(conversation.highlights ?? []).filter((h) => !out.gone.includes(h.id)), made]);
+  if (last) enqueue.assign({ draft: { ...made, comment: "" } });
+  else enqueue.assign({ chosen: made.id });
+});
+const liftsToBox = ({ context, event }) => {
+  const out = liftOf(context, event);
+  return out != null && lastAnswer(context.conversation)?.id === event.answerId;
+};
+
+// What a handle's move leaves. `start` and `end` are the new ends; the end that moved stops
+// at a comment or, for a comment, at a highlight, since those are kept apart: a comment is
+// numbered and sent, a highlight never is. A highlight moved over another highlight joins it,
+// the earliest keeping its id. A comment already sent is read only and is never moved.
+export const moveOf = ({ conversation, draft }, { id, answerId, start, end }) => {
+  if (!holdsHighlights(conversation, answerId)) return null;
+  const text = answerText(conversation, answerId);
+  const own = highlightsOf(conversation, answerId);
+  const saved = lastAnswer(conversation)?.id === answerId ? savedMarks(conversation) : [];
+  const open = draft?.id === id ? draft : null;
+  const savedSelf = saved.find((m) => m.id === id);
+  const self = open ?? savedSelf ?? own.find((h) => h.id === id);
+  if (!self) return null;
+  const comment = open?.comment.trim() ? open.comment : savedSelf?.comment;
+  const others = (list) => list.filter((m) => m.id !== id);
+  const stops = [...sentMarks(conversation, answerId), ...others(saved), ...(comment ? others(own) : [])];
+  let from = start;
+  let to = end;
+  for (const b of stops) {
+    if (b.end <= self.start) from = Math.max(from, b.end);
+    if (b.start >= self.end) to = Math.min(to, b.start);
+  }
+  const range = trimRange(text, from, to);
+  if (!range || (range.start === self.start && range.end === self.end)) return null;
+  const quote = text.slice(range.start, range.end);
+  if (comment) {
+    return {
+      marks: withMark(saved, { id, ...range, quote, comment }),
+      commented: id,
+      id,
+      draft: open && { ...open, ...range, quote },
+    };
+  }
+  if (!own.some((h) => h.id === id)) return { id, draft: open && { ...open, ...range, quote } };
+  const hit = others(own).filter((h) => meets(h, range));
+  const u = covering([range, ...hit]);
+  const survivor = hit.length ? earliest([{ ...range, id }, ...hit]).id : id;
+  const gone = new Set([id, ...hit.map((h) => h.id)]);
+  const whole = { start: u.start, end: u.end, quote: text.slice(u.start, u.end) };
+  return {
+    highlights: [...conversation.highlights.filter((h) => !gone.has(h.id)), { id: survivor, answerId, ...whole }],
+    id: survivor,
+    draft: open && { ...open, id: survivor, ...whole },
+  };
+};
+
+// One step (12, Undo): a comment's move first ends the stretch of typing still open on it, and
+// says the box was left, so typing again after it is a step of its own too.
+const moved = enqueueActions(({ context, event, enqueue }) => {
+  const out = moveOf(context, event);
+  if (!out) return;
+  let { conversation } = context;
+  const base = { type: "marks.edited", conversationId: conversation.id, answerId: event.answerId, left: true };
+  if (out.marks) {
+    enqueue.emit({ ...base, marks: savedMarks(conversation) });
+    conversation = markedChat(conversation, out.marks);
+    enqueue.emit({ ...base, marks: out.marks });
+  }
+  if (out.highlights || (conversation.highlights ?? []).some((h) => h.id === out.commented)) {
+    const list = out.highlights ?? conversation.highlights.filter((h) => h.id !== out.commented);
+    conversation = highlightedChat(conversation, list);
+    enqueue.emit({ type: "highlights.edited", conversationId: conversation.id, highlights: list });
+  }
+  enqueue.assign({ conversation, chosen: context.chosen === event.id ? out.id : context.chosen });
+  if (out.draft) enqueue.assign({ draft: out.draft });
+});
 
 // What a lookup asked for, in plain words (7.7): each payload field as a readable word and
 // its value, dates as dates, a chapter counted from 1 as people count it (the payloads
@@ -695,7 +820,7 @@ export const followTop = ({ top, height, max, boxTop, boxBottom, margin = 0 }) =
 
 // The movement rules below, from here to `charNear`, are a copy of those in
 // components/book-reader/machine.js (`chapterText`, `step`, `charStep`, `passage`,
-// `wordAround`, `fingerPassage`, `linesOf`, `lineBoxes`, `charNear`) and of the reader's line
+// `wordAround`, `fingerPassage`, `movedEnd`, `linesOf`, `lineBoxes`, `charNear`) and of the reader's line
 // walk, because components never import each other (11.2). Where the reader has a chapter,
 // here is every answer of the chat, so a motion crosses from one answer to the next, and a
 // separator stands between two blocks and between two answers.
@@ -773,6 +898,9 @@ export const wordAround = ({ flat }, i) => {
   while (to < flat.length && !blank(flat[to])) to += 1;
   return [from, to];
 };
+
+export const movedEnd = (text, [from, to], end, i) =>
+  end === "start" ? passage(text, Math.min(i, to - 1), to - 1, true) : passage(text, from, Math.max(i, from), true);
 
 export const fingerPassage = (text, [from, to], i) => {
   const { flat } = text;
@@ -986,8 +1114,24 @@ export const staysIn = (text, start, next) => {
   return seek(text.flat, answer.to, -1, shown) ?? start;
 };
 
-// What a passage can become, the word on its button, or null when `_selected` would refuse
-// it: a Comment on the last answer, a Highlight on an earlier one, nothing over a mark.
+// The [from, to) a stretch of one answer's offsets takes in the text, or null when none of it
+// is drawn: an offset on markdown's own marks has no character there.
+export const endsOf = (text, id, start, end) => {
+  const answer = text.answers.find((a) => a.id === id);
+  if (!answer) return null;
+  let from = null;
+  let to = null;
+  for (let i = answer.from; i < answer.to; i += 1) {
+    const s = text.at[i];
+    if (s < start || s >= end) continue;
+    from ??= i;
+    to = i + 1;
+  }
+  return from == null ? null : [from, to];
+};
+
+// What a keyboard's passage can become, or null when `_selected` would refuse it: a Comment
+// on the last answer, a Highlight on an earlier one, nothing over a mark.
 export const offerOf = (context, { answerId, start, end }) => {
   const event = { answerId, start, end };
   if (lastAnswer(context.conversation)?.id === answerId) return canSelect({ context, event }) ? "Comment" : null;
@@ -1188,10 +1332,22 @@ export const machine = setup({
       "answer the user selects a passage and writes a comment on it, as in Redline: the " +
       "passage is highlighted with a number and the comments are listed under the answer, " +
       "kept with the chat by `conversations` and sent with the next message, after which they " +
-      "show read only. A comment box left empty leaves its passage highlighted instead, and " +
-      "in every earlier answer a selection is a highlight at once; a highlight has no comment " +
-      "and no number, and the highlights are kept with the chat by `conversations` " +
-      "and never sent to the model. A click on one offers Remove. The answer's text never " +
+      "show read only. A mouse's selection or a finger's passage is a highlight the moment it " +
+      "ends, on any finished answer; Undo takes it back. On the last answer the highlight's " +
+      "bubble is the comment box, and writing in it turns the highlight into the numbered " +
+      "comment, one step; left empty it stays a highlight, and a comment emptied again goes " +
+      "back to being one. Only the last answer's comments are sent, so an earlier answer's " +
+      "bubble offers only Remove. A highlight has no comment and no number, and the highlights " +
+      "are kept with the chat by `conversations` and never sent to the model. A click or a tap " +
+      "on one opens its bubble again. While a bubble or a comment box is open the passage's two " +
+      "ends show handles drawn by the thread, a bar with a ball, for a finger and a mouse alike, " +
+      "except on a comment already sent, which is read only. Dragging one moves that end, letter " +
+      "by letter, inside that answer; the box fades during the drag, a pause changes nothing, " +
+      "the two ends cannot cross, and each move is one step. Moved over another highlight, a " +
+      "highlight joins it; an end stops at a comment, and a comment's end stops at a highlight, " +
+      "because a comment is sent and a highlight never is. A press on a handle never scrolls, " +
+      "selects, starts a hold or closes the box; a tap elsewhere closes it and keeps the " +
+      "highlight. The answer's text never " +
       "changes. Removing a comment or a highlight happens at once; the top bar's Undo, and " +
       "the short notice `conversations` asks for, bring it back (12, Undo). " +
       "A mouse selects a passage with the browser's own selection. A finger does not: the " +
@@ -1199,12 +1355,12 @@ export const machine = setup({
       "be selected and the system's Copy is not offered there. Instead, a finger resting on an " +
       "answer for about 400 ms starts a passage at the word under it, tinted, which grows by whole " +
       "words as the finger moves, from a start that stays fixed and only inside that answer, as " +
-      "far as the text on screen. A pause changes nothing. Lifting shows one button under the " +
-      "passage's last line, Comment on the last answer and Highlight on an earlier one, which does " +
-      "the same as a mouse selection; over an existing mark no button shows and the passage goes. " +
-      "A tap elsewhere or Escape drops it. A quick finger drag still scrolls the conversation, " +
-      "since the browser keeps the touch until a hold has started, and a touch the system ends " +
-      "counts as a lift, which keeps what was painted. " +
+      "far as the text on screen. A pause changes nothing. Lifting does the same as a mouse " +
+      "selection, except that the comment box does not take the keys, so a phone's keyboard does " +
+      "not cover the page until the user presses the box. A passage inside a highlight or over " +
+      "an unsent comment opens that one, and a highlight it only partly covers joins it. A quick " +
+      "finger drag still scrolls the conversation, since the browser keeps the touch until a hold " +
+      "has started, and a touch the system ends counts as a lift, which makes what was painted. " +
       "A failed answer says why in plain words under it; when Ollama on the user's Mac did not " +
       "answer, it reads \"Ollama isn't running. Open the Ollama app, or get it at ollama.com.\" " +
       "The conversation can hold the keyboard, with the focus ring on it. With Vim keys on, " +
@@ -1491,11 +1647,23 @@ export const machine = setup({
               store(enqueue, context, withoutMark(savedMarks(context.conversation), event.id));
             }),
           },
-          { guard: ({ context, event }) => context.draft?.id === event.id, target: ".idle", actions: assign({ draft: null }) },
+          {
+            guard: ({ context, event }) => context.draft?.id === event.id,
+            target: ".idle",
+            actions: enqueueActions(({ context, event, enqueue }) => {
+              enqueue.assign({ draft: null });
+              if (isHighlight({ context, event })) storeHighlights(enqueue, context, context.conversation.highlights.filter((h) => h.id !== event.id));
+            }),
+          },
         ],
         // A selection in an earlier answer: a highlight at once. The last answer's
         // selections are taken by the comment states below before they reach here.
         _selected: { guard: canHighlight, actions: highlight },
+        // A finger's or a mouse's passage has ended. What the box holds is saved first, so the
+        // passage is judged against the chat as it then stands.
+        _lifted: { target: ".idle", actions: [closeDraft, assign({ chosen: null }), raise(({ event }) => ({ ...event, type: "_lift" }))] },
+        // A handle has moved an end.
+        _moved: { actions: moved },
         // A click on a highlight opens its bubble.
         _highlightOpened: { guard: isHighlight, actions: assign({ chosen: ({ event }) => event.id }) },
         _highlightClosed: { actions: assign({ chosen: null }) },
@@ -1518,6 +1686,8 @@ export const machine = setup({
             ],
             // A click on a comment's highlight opens it.
             _opened: { guard: isComment, target: "commenting", actions: openComment },
+            _lift: [{ guard: liftsToBox, target: "commenting", actions: lifted }, { actions: lifted }],
+            _highlightOpened: { guard: onLastAnswer, target: "commenting", actions: openHighlight },
           },
         },
         commenting: {
@@ -1531,6 +1701,11 @@ export const machine = setup({
             _opened: [
               { guard: ({ context, event }) => event.id === context.draft?.id },
               { guard: isComment, target: "commenting", reenter: true, actions: [closeDraft, openComment] },
+            ],
+            _highlightOpened: [
+              { guard: ({ context, event }) => event.id === context.draft?.id },
+              { guard: onLastAnswer, target: "commenting", reenter: true, actions: [closeDraft, openHighlight] },
+              { guard: isHighlight, target: "idle", actions: [closeDraft, assign({ chosen: ({ event }) => event.id })] },
             ],
           },
           states: {

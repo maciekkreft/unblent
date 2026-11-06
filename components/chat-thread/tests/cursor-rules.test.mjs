@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { vimAction, followTop, answersText, finishedAnswers, answerAt, indexOfPlace, selectionOf, staysIn, offerOf, highlightAtPlace, step, charStep, passage, wordAround, fingerPassage, linesOf, lineBoxes, charNear, lineStep, charAtY, firstChar, lastChar } from "../machine.js";
+import { vimAction, followTop, answersText, finishedAnswers, answerAt, indexOfPlace, selectionOf, staysIn, offerOf, highlightAtPlace, step, charStep, passage, wordAround, fingerPassage, movedEnd, endsOf, linesOf, lineBoxes, charNear, lineStep, charAtY, firstChar, lastChar } from "../machine.js";
 
 // The cursor's and the finger's decisions on plain text and measured boxes: what each key
 // asks for, where each motion lands, and what a passage may become.
@@ -273,4 +273,23 @@ test("dd finds the highlight holding the cursor, and only inside it", () => {
   assert.equal(highlightAtPlace(chat, "A1", 10), null, "past its end");
   assert.equal(highlightAtPlace(chat, "A1", 2), null, "before its start");
   assert.equal(highlightAtPlace(chat, "A2", 5), null, "in another answer");
+});
+
+test("a handle moves its end letter by letter, never past the other end, and never rests on a blank", () => {
+  const t = text();
+  const from = of(t, "book");
+  const span = [from, from + 4];
+  assert.deepEqual(movedEnd(t, span, "end", of(t, "was") + 1), [from, of(t, "was") + 2]);
+  assert.deepEqual(movedEnd(t, span, "end", 0), [from, from + 1], "the end stops on the start's letter");
+  assert.deepEqual(movedEnd(t, span, "start", t.flat.length - 1), [from + 3, from + 4], "the start stops on the end's letter");
+  assert.deepEqual(movedEnd(t, span, "end", from + 4), span, "the space after it is not taken");
+});
+
+test("a passage's offsets find its letters in the text, also where its edge lies on markdown's own marks", () => {
+  const t = text();
+  const start = FIRST.indexOf("**work**");
+  const [from, to] = endsOf(t, "A1", start, start + "**work**".length);
+  assert.equal(t.flat.slice(from, to), "work");
+  assert.equal(endsOf(t, "nobody", 0, 4), null);
+  assert.equal(endsOf(t, "A1", start, start + 2), null, "only the marks");
 });

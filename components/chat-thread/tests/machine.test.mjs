@@ -828,3 +828,139 @@ test("a spine's colour and height are fixed by its book", () => {
   for (const c of colours) assert.ok(c >= 0 && c < 8);
   assert.ok([0, 1, 2, 3].includes(spineOf(MED, "x".repeat(17)).height));
 });
+
+// --- A passage that ends is a highlight, with handles (12) --------------------------------
+
+test("a lift on the last answer makes the highlight at once and opens its box, which left empty keeps it, unnumbered", async () => {
+  const { actor, emitted, highlighted, state, ctx } = await commenting();
+  actor.send({ type: "_lifted", answerId: ANSWER.id, start: at("book").start - 1, end: at("book").end + 1 });
+  const made = { id: IDS[0], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  assert.deepEqual(highlighted, [{ conversationId: CHAT, highlights: [made] }], "made at once");
+  assert.ok(state().matches({ showing: "commenting" }));
+  assert.equal(ctx().draft.id, made.id, "its box is on offer");
+  actor.send({ type: "_closed" });
+  assert.equal(highlighted.length, 1, "left empty, nothing more");
+  assert.equal(emitted.length, 0);
+  assert.deepEqual(ctx().conversation.highlights, [made]);
+});
+
+test("writing in the box turns the highlight into the numbered comment, and emptying it again gives the highlight back", async () => {
+  const { actor, emitted, highlighted, clock, ctx } = await commenting();
+  actor.send({ type: "_lifted", answerId: ANSWER.id, ...at("book") });
+  actor.send({ type: "_typed", text: "Why?" });
+  clock.increment(200);
+  assert.deepEqual(emitted.at(-1).marks, [{ id: IDS[0], ...at("book"), quote: "book", comment: "Why?" }]);
+  assert.deepEqual(highlighted.at(-1).highlights, [], "one range, never two");
+  assert.equal("highlights" in ctx().conversation, false);
+  actor.send({ type: "_typed", text: "" });
+  clock.increment(200);
+  actor.send({ type: "_closed" });
+  assert.deepEqual(emitted.at(-1).marks, []);
+  assert.deepEqual(highlighted.at(-1).highlights.map((h) => [h.id, h.quote]), [[IDS[0], "book"]]);
+});
+
+test("a lift on an earlier answer makes the highlight and opens its bubble, and never a comment box", async () => {
+  const { actor, state, ctx } = await commenting(twice());
+  actor.send({ type: "_lifted", ...earlier("book") });
+  assert.deepEqual(ctx().conversation.highlights.map((h) => h.quote), ["book"]);
+  assert.equal(ctx().chosen, IDS[0]);
+  assert.ok(state().matches({ showing: "idle" }));
+});
+
+test("a tap on a highlight of the last answer offers its box again; the trash takes the highlight off", async () => {
+  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const { actor, highlighted, state, ctx } = await commenting(answered({ highlights: [kept] }));
+  actor.send({ type: "_highlightOpened", id: kept.id });
+  assert.ok(state().matches({ showing: "commenting" }));
+  assert.equal(ctx().draft.comment, "");
+  actor.send({ type: "_remove", id: kept.id });
+  assert.deepEqual(highlighted.at(-1).highlights, []);
+  assert.ok(state().matches({ showing: "idle" }));
+});
+
+test("a lift inside a highlight opens it, over a comment opens that, over a sent comment does nothing, and over part of a highlight joins it", async () => {
+  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const inside = await commenting(twice({ highlights: [kept] }));
+  inside.actor.send({ type: "_lifted", answerId: ANSWER.id, start: at("book").start + 1, end: at("book").end - 1 });
+  assert.equal(inside.highlighted.length, 0);
+  assert.equal(inside.ctx().chosen, kept.id);
+
+  const comment = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] } }));
+  comment.actor.send({ type: "_lifted", answerId: ANSWER.id, start: at("A book").start, end: at("was").end });
+  assert.equal(comment.highlighted.length, 0);
+  assert.equal(comment.ctx().draft.id, SAVED.id);
+  assert.equal(comment.ctx().draft.comment, "x");
+
+  const sent = { id: IDS[2], ...at("box"), quote: "box", comment: "why?" };
+  const asked = await commenting(twice({ turns: [ASK, ANSWER, { ...ASK2, marks: [sent] }, LATER] }));
+  asked.actor.send({ type: "_lifted", ...earlier("box") });
+  assert.equal(asked.highlighted.length, 0);
+  assert.equal(asked.ctx().chosen, null);
+
+  const partly = await commenting(twice({ highlights: [kept] }));
+  partly.actor.send({ type: "_lifted", answerId: ANSWER.id, start: at("A book").start, end: at("book").end - 1 });
+  assert.deepEqual(partly.highlighted.at(-1).highlights, [{ id: kept.id, answerId: ANSWER.id, start: at("A book").start, end: at("book").end, quote: "A book" }]);
+  assert.equal(partly.ctx().chosen, kept.id);
+});
+
+test("a move saves the highlight's new ends in one list, under the same id", async () => {
+  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const { actor, highlighted, emitted, ctx } = await commenting(twice({ highlights: [kept] }));
+  actor.send({ type: "_highlightOpened", id: kept.id });
+  actor.send({ type: "_moved", id: kept.id, answerId: ANSWER.id, ...at("book"), });
+  assert.equal(highlighted.length, 0, "nothing moved");
+  actor.send({ type: "_moved", id: kept.id, answerId: ANSWER.id, start: at("A book").start, end: at("book").end });
+  assert.equal(highlighted.length, 1, "one step");
+  assert.deepEqual(highlighted[0].highlights, [{ id: kept.id, answerId: ANSWER.id, start: at("A book").start, end: at("book").end, quote: "A book" }]);
+  assert.equal(emitted.length, 0);
+  assert.equal(ctx().chosen, kept.id, "its bubble stays open");
+});
+
+test("a highlight moved over another joins them, the earliest keeping its id, and the box follows", async () => {
+  const one = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const two = { id: IDS[2], answerId: ANSWER.id, ...at("path"), quote: "path" };
+  const { actor, highlighted, ctx } = await commenting(answered({ highlights: [one, two] }));
+  actor.send({ type: "_highlightOpened", id: two.id });
+  actor.send({ type: "_moved", id: two.id, answerId: ANSWER.id, start: at("book").start + 2, end: at("path").end });
+  assert.equal(highlighted.length, 1);
+  assert.deepEqual(highlighted[0].highlights.map((h) => [h.id, h.start, h.end]), [[one.id, at("book").start, at("path").end]]);
+  assert.equal(ctx().draft.id, one.id);
+  assert.equal(ctx().draft.end, at("path").end);
+});
+
+test("an end stops at a comment, a comment's end stops at a highlight, and an end stops at a sent comment", async () => {
+  const hl = { id: IDS[1], answerId: ANSWER.id, ...at("path"), quote: "path" };
+  const { actor, highlighted } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] }, highlights: [hl] }));
+  actor.send({ type: "_highlightOpened", id: hl.id });
+  actor.send({ type: "_moved", id: hl.id, answerId: ANSWER.id, start: at("book").start + 1, end: at("path").end });
+  const text = ANSWER_TEXT;
+  const list = highlighted.at(-1).highlights;
+  assert.equal(list.length, 1);
+  assert.ok(list[0].start >= at("book").end, "the highlight's start stopped after the comment");
+  assert.equal(text.slice(list[0].start, list[0].end), text.slice(at("book").end, at("path").end).trim());
+
+  const other = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] }, highlights: [hl] }));
+  other.actor.send({ type: "_opened", id: SAVED.id });
+  other.actor.send({ type: "_moved", id: SAVED.id, answerId: ANSWER.id, start: at("book").start, end: at("path").end });
+  const last = other.emitted.at(-1).marks[0];
+  assert.ok(last.end <= at("path").start, "the comment's end stopped before the highlight");
+  assert.equal(other.emitted.length, 2, "the open stretch ends, then the move");
+  assert.equal(other.emitted.at(-1).left, true);
+  assert.equal(other.ctx().draft.end, last.end);
+
+  const sent = { id: IDS[2], ...at("box"), quote: "box", comment: "why?" };
+  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const earlierChat = await commenting(twice({ turns: [ASK, ANSWER, { ...ASK2, marks: [sent] }, LATER], highlights: [kept] }));
+  earlierChat.actor.send({ type: "_highlightOpened", id: kept.id });
+  const beyond = at("box").end > at("book").end ? { start: at("book").start, end: at("box").end } : { start: at("box").start, end: at("book").end };
+  earlierChat.actor.send({ type: "_moved", id: kept.id, answerId: ANSWER.id, ...beyond });
+  const moved = earlierChat.highlighted.at(-1).highlights[0];
+  assert.ok(moved.end <= at("box").start || moved.start >= at("box").end, "never over the sent comment");
+});
+
+test("a comment already sent is not moved", async () => {
+  const sent = { id: IDS[2], ...at("box"), quote: "box", comment: "why?" };
+  const { actor, highlighted, emitted } = await commenting(twice({ turns: [ASK, ANSWER, { ...ASK2, marks: [sent] }, LATER] }));
+  actor.send({ type: "_moved", id: sent.id, answerId: ANSWER.id, start: 0, end: at("box").end });
+  assert.equal(highlighted.length + emitted.length, 0);
+});

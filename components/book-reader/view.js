@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote, slipBoxShown, canRead, wordAt, wordAround, fingerPassage, linesOf, charNear, lineBoxes } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote, slipBoxShown, canRead, wordAt, wordAround, fingerPassage, movedEnd, linesOf, charNear, lineBoxes } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -72,6 +72,9 @@ const CLICK_AFTER_MS = 700;
 // The gap the bubble keeps from the mark it sits above (or below, when there is no room
 // above): a placement offset computed in JS, not a length that places a box in CSS (7.4).
 const BUBBLE_GAP = 6;
+// What the bubble keeps clear beyond that for a handle's ball, which stands out from its line
+// by half its own size (.handle::after): also a placement offset (7.4).
+const BALL_CLEAR = 6;
 // The picture viewer's zoom, from the picture fitted to the box up to four times that,
 // and how close in time two taps make a double tap: factors and a time, not lengths (7.4).
 const ZOOM_MAX = 4;
@@ -351,6 +354,66 @@ class BookReader extends LitElement {
       box-decoration-break: clone;
       cursor: pointer;
     }
+    /* The highlight whose end is being dragged: the drag's own boxes (.passage) show it, so
+       the end it leaves does not stay painted. */
+    .strip mark.moving {
+      background: none;
+      box-shadow: none;
+    }
+    /* A highlight's handle (12): a bar on the line's own height with a ball at its far end,
+       inside a box big enough for a finger. The box is laid over the text and adds nothing
+       to it. It sits above the text and under the bubble (same z-index, earlier in .page). A
+       drag on it is the reader's, so the browser never reads it as a scroll or a selection. */
+    .handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: calc(var(--space-xl) + var(--space-xs));
+      height: calc(var(--hh, var(--space-lg)) + var(--space-lg));
+      translate: var(--hx, 0) var(--hy, 0);
+      z-index: 1;
+      touch-action: none;
+      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .handle[hidden] {
+      display: none;
+    }
+    .handle::before,
+    .handle::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      margin-inline: auto;
+      background: var(--color-accent);
+    }
+    .handle::before {
+      width: var(--space-2xs);
+      height: var(--hh, var(--space-lg));
+    }
+    .handle::after {
+      width: calc(var(--space-sm) + var(--space-xs));
+      height: calc(var(--space-sm) + var(--space-xs));
+      border-radius: var(--radius-full);
+    }
+    .handle.start::before {
+      bottom: 0;
+    }
+    .handle.start::after {
+      bottom: var(--hh, var(--space-lg));
+      translate: 0 50%;
+    }
+    .handle.end::before {
+      top: 0;
+    }
+    .handle.end::after {
+      top: var(--hh, var(--space-lg));
+      translate: 0 -50%;
+    }
     /* The highlight in progress (12, "Vim keys"), painted through the CSS Custom Highlight
        API, which never touches the DOM, so the marks and the measure stay as they are: in
        the selection colour, so it reads as not yet made beside a finished highlight. */
@@ -498,6 +561,35 @@ class BookReader extends LitElement {
       overflow: hidden;
       user-select: none;
       -webkit-user-select: none;
+      box-sizing: border-box;
+      max-width: 100%;
+      flex-wrap: wrap;
+    }
+    /* While a handle moves, placing the bubble again would make it jump. It stays focusable
+       and in place, so a comment box keeps its keyboard. */
+    .bubble.moving {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .bubble textarea {
+      flex: 1 0 100%;
+      box-sizing: border-box;
+      min-height: calc(var(--text-sm) * var(--leading-normal) * 3);
+      padding: var(--space-xs);
+      border: var(--border-width) solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--color-canvas);
+      color: var(--color-ink);
+      font: inherit;
+      font-size: var(--text-sm);
+      white-space: pre-wrap;
+      resize: vertical;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .bubble textarea:focus {
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .bubble .act {
       appearance: none;
@@ -921,13 +1013,18 @@ class BookReader extends LitElement {
   #lastTap = null;
   #gestureZoom = 1;
   #wheelTimer = 0;
-  // The last line of a finger's lifted passage (a client rect): the Highlight button sits
-  // under it. Null when no button shows. View UI state (3.1).
-  #pending = null;
-  // A finger's passage, from the hold that starts it until it is made or dropped: the word
-  // it started on, the [from, to) painted, the page's lines as measured at the hold (the
-  // text does not move under a passage), where the finger is, and whether it is still down.
+  // A finger's passage, from the hold that starts it until the lift makes it: the word it
+  // started on, the [from, to) painted, the page's lines as measured at the hold (the text
+  // does not move under a passage), and where the finger is.
   #finger = null;
+  // A handle being dragged, from the press until the mark shows its new ends: the highlight,
+  // which end, the [from, to) as it stands and as it was, the page's lines as measured at the
+  // press, where the end is meant to be, how far the press was from it (so grabbing it does
+  // not move it), and whether the move has been sent.
+  #moving = null;
+  // Whether the open bubble's highlight has been seen, because a new one's note arrives just
+  // after the bubble opens.
+  #activeSeen = false;
   #holdTimer = 0;
   // Until when a click in the text belongs to a finger's press that already did its work.
   #clickGone = 0;
@@ -936,7 +1033,7 @@ class BookReader extends LitElement {
   // nothing more, so a passage could not go on. Refusing the touchstart makes them fail
   // while the pointer events keep coming. The browser then sends no click and moves no
   // focus for that touch, so #pointerup does a tap's work. A control needs its click, so
-  // only a touch on the reading text is refused.
+  // only a touch on the reading text is refused. A handle sits in the text and is refused too.
   #touchstart = (e) => {
     const target = e.composedPath()[0];
     if (e.cancelable && target.closest?.(".viewport") && !target.closest("button, .bubble")) e.preventDefault();
@@ -945,12 +1042,13 @@ class BookReader extends LitElement {
   // waits for a page's touch listeners, and only a non-passive listener may refuse. A touch
   // may still end with no pointerup, and a passage must not stay down then.
   #touchmove = (e) => {
-    if (this.#finger?.down && e.cancelable) e.preventDefault();
+    if ((this.#finger || this.#moving) && e.cancelable) e.preventDefault();
   };
   #touchend = (e) => {
     if (e.touches?.length) return;
     this.#cancelHold();
-    if (this.#finger?.down) this.#lift();
+    if (this.#finger) this.#lift();
+    this.#release();
   };
 
   // The fragment element: a bare div with the click handler for in-text chapter links.
@@ -1030,7 +1128,8 @@ class BookReader extends LitElement {
     clearTimeout(this.#slideTimer);
     this.#focused = false;
     this.#visual = null;
-    this.#dropPending();
+    this.#dropFinger();
+    this.#dropMoving();
     this.#paintCursor();
     cancelAnimationFrame(this.#speechRaf);
     this.#speechRaf = 0;
@@ -1079,7 +1178,7 @@ class BookReader extends LitElement {
   #setFragment(htmlText) {
     // The cursor and a highlight in progress were counted in the old fragment's text.
     this.#forgetCursor();
-    this.#dropPending();
+    this.#dropFinger();
     this.#hush();
     this.#hovered = null;
     this.#figure = null;
@@ -1229,7 +1328,7 @@ class BookReader extends LitElement {
     const p = this.#pointOf(range.startContainer, range.startOffset);
     const q = this.#pointOf(range.endContainer, range.endOffset);
     this.#clearSelection();
-    return this.#sendHighlight(p, q);
+    return this.#sendHighlight(p, q, false, true);
   }
 
   // --- A finger's passage ---------------------------------------------------------------
@@ -1275,12 +1374,11 @@ class BookReader extends LitElement {
     const lines = linesOf(this.#pageChars());
     const at = charNear(lines, d.x0, d.y0);
     if (at == null) return;
-    this.#closeBubble();
-    this.#dropPending();
+    this.#closeBubble(false);
     this.#clearSelection();
     const chapter = this.#chapterText();
     const word = wordAround(chapter, at);
-    this.#finger = { word, span: fingerPassage(chapter, word, at), lines, x: d.x0, y: d.y0, down: true, frame: 0 };
+    this.#finger = { word, span: fingerPassage(chapter, word, at), lines, x: d.x0, y: d.y0, frame: 0 };
     this.#paintFinger();
     this.requestUpdate();
   }
@@ -1314,7 +1412,7 @@ class BookReader extends LitElement {
   #paintFinger() {
     const el = this.renderRoot?.querySelector(".passage");
     if (!el) return;
-    const f = this.#finger;
+    const f = this.#finger ?? this.#moving;
     const origin = el.getBoundingClientRect();
     el.replaceChildren(
       ...(f ? lineBoxes(f.lines, f.span[0], f.span[1]) : []).map((line) => {
@@ -1329,54 +1427,152 @@ class BookReader extends LitElement {
     el.dataset.text = f ? this.#rangeOf(f.span[0], f.span[1], this.#chapterText())?.toString() ?? "" : "";
   }
 
-  // The passage stays as painted, and waits for the Highlight button under its last line
-  // on this page. A cancelled touch ends here too: what it painted is kept.
+  // Lifting makes what is painted, letter for letter, as a keyboard passage is (12, "Vim
+  // keys"), and its bubble opens; Undo takes it back. A cancelled touch ends here too: what it
+  // painted is kept.
   #lift() {
     const f = this.#finger;
     this.#grow();
-    f.down = false;
     this.#drag = null;
     this.#clickGone = Date.now() + CLICK_AFTER_MS;
-    const line = lineBoxes(f.lines, f.span[0], f.span[1]).at(-1);
-    this.#pending = line ? { left: line.left, width: line.right - line.left, top: line.top, bottom: line.bottom } : null;
-    this.requestUpdate();
+    const chapter = this.#chapterText();
+    this.#dropFinger();
+    this.#sendHighlight(pointAt(chapter, f.span[0]), pointAt(chapter, f.span[1]), true, true);
   }
 
-  // The passage and its Highlight button go together: a tap elsewhere, a turn, a new chapter
-  // or Escape leaves the passage, so neither stays behind on a page that no longer shows it.
-  #dropPending() {
+  #dropFinger() {
     if (!this.#finger) return;
     cancelAnimationFrame(this.#finger.frame);
     this.#finger = null;
-    this.#pending = null;
     this.#paintFinger();
     this.requestUpdate();
   }
 
-  // Tapping Highlight makes what is painted, letter for letter, as a keyboard passage is
-  // (12, "Vim keys"); the new mark's own bubble then offers Remove (Norman: forgiveness).
-  #makePending() {
-    const f = this.#finger;
-    if (!f) return;
+  // --- A highlight's handles (12) -------------------------------------------------------
+  //
+  // The browser's own selection handles are what jumped in this box (#held), so these are
+  // the reader's, drawn on the open bubble's highlight. They use the same measure as a finger's
+  // passage. Every press, move and lift on one stops here, so nothing under it hears of it, and
+  // a mouse's press is not let start a selection or take the keyboard off a comment box.
+
+  // The open bubble's highlight as [from, to) of the chapter, or null.
+  #activeSpan() {
+    const h = this.#actor.snapshot?.context.highlights.find((x) => x.id === this.#active);
+    if (!h) return null;
     const chapter = this.#chapterText();
-    this.#dropPending();
-    this.#sendHighlight(pointAt(chapter, f.span[0]), pointAt(chapter, f.span[1]), true);
+    return [indexOf(chapter, h.place.start), indexOf(chapter, h.place.end)];
+  }
+
+  // The rect of an end's own character on the page shown, or null when it is on another.
+  #endRect(end, [from, to]) {
+    const chapter = this.#chapterText();
+    const range = end === "start" ? this.#rangeOf(from, from + 1, chapter) : this.#rangeOf(to - 1, to, chapter);
+    return [...(range?.getClientRects() ?? [])].find((r) => r.width > 0 && this.#columnOf(r) === this.#page) ?? null;
+  }
+
+  // Each handle on its end, set as custom properties (7.4), hidden while its end is not on
+  // the page shown.
+  #placeHandles() {
+    const handles = this.renderRoot.querySelectorAll(".handle");
+    if (!handles.length) return;
+    const span = this.#moving?.span ?? this.#activeSpan();
+    const box = this.renderRoot.querySelector(".page").getBoundingClientRect();
+    for (const el of handles) {
+      const end = el.dataset.end;
+      const rect = span && this.#endRect(end, span);
+      el.hidden = !rect;
+      if (!rect) continue;
+      el.style.setProperty("--hh", `${rect.height}px`);
+      el.style.setProperty("--hx", `${(end === "start" ? rect.left : rect.right) - box.left - el.offsetWidth / 2}px`);
+      el.style.setProperty("--hy", `${(end === "start" ? rect.bottom - el.offsetHeight : rect.top) - box.top}px`);
+    }
+  }
+
+  #grab(e, end) {
+    e.stopPropagation();
+    if ((e.button != null && e.button !== 0) || this.#moving) return;
+    const span = this.#activeSpan();
+    const rect = span && this.#endRect(end, span);
+    if (!rect) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // A pointer already gone has nothing to capture, and what follows ends the drag.
+    }
+    this.#lastPointer = e.pointerType;
+    const x = end === "start" ? rect.left : rect.right;
+    const y = (rect.top + rect.bottom) / 2;
+    this.#moving = { id: this.#active, end, span, was: span, lines: linesOf(this.#pageChars()), x, y, dx: e.clientX - x, dy: e.clientY - y, frame: 0, pointerId: e.pointerId, sent: false };
+    this.#reflectGlow();
+    this.#paintFinger();
+    this.requestUpdate();
+  }
+
+  // A move may come many times a frame, and only the last before a frame can be seen.
+  #moveHandle(e) {
+    e.stopPropagation();
+    const m = this.#moving;
+    if (!m || m.sent || e.pointerId !== m.pointerId) return;
+    m.x = e.clientX - m.dx;
+    m.y = e.clientY - m.dy;
+    m.frame ||= requestAnimationFrame(() => this.#stepHandle());
+  }
+
+  #stepHandle() {
+    const m = this.#moving;
+    if (!m) return;
+    cancelAnimationFrame(m.frame);
+    m.frame = 0;
+    if (m.sent) return;
+    const at = charNear(m.lines, m.x, m.y);
+    if (at == null) return;
+    const span = movedEnd(this.#chapterText(), m.span, m.end, at);
+    if (span[0] === m.span[0] && span[1] === m.span[1]) return;
+    m.span = span;
+    this.#paintFinger();
+    this.#placeHandles();
+  }
+
+  // The end stays where the handle was let go, one step. The drag's own boxes stay until the
+  // mark shows the new ends (updated). A touch iOS ended counts as a release, so what was
+  // painted is kept. Nothing moved is nothing to save.
+  #release() {
+    const m = this.#moving;
+    if (!m || m.sent) return;
+    this.#stepHandle();
+    m.sent = true;
+    this.#clickGone = Date.now() + CLICK_AFTER_MS;
+    if (m.span[0] !== m.was[0] || m.span[1] !== m.was[1]) {
+      const chapter = this.#chapterText();
+      this.#actor.send({ type: "_move", id: m.id, start: pointAt(chapter, m.span[0]), end: pointAt(chapter, m.span[1]), texts: this.#blockTexts() });
+    }
+    this.requestUpdate();
+  }
+
+  #dropMoving() {
+    if (!this.#moving) return;
+    cancelAnimationFrame(this.#moving.frame);
+    this.#moving = null;
+    this.#reflectGlow();
+    this.#paintFinger();
+    this.requestUpdate();
   }
 
   // What the system would do with a finger's long press: a selection where the text can
   // still select (a touch screen with a fine main pointer), a menu (Android), a lifted link.
   #noNative(e) {
+    if (e.composedPath()[0]?.closest?.(".bubble")) return;
     if (this.#lastPointer != null && this.#lastPointer !== "mouse") e.preventDefault();
   }
 
   // Two places as the _highlight message, whichever comes first: the tail the mouse and
   // the keyboard share (12). The keyboard's is `exact`: its passage was painted letter
   // by letter as it was made, so it is not grown to whole words as a drag is.
-  #sendHighlight(p, q, exact = false) {
+  #sendHighlight(p, q, exact = false, open = false) {
     if (!p || !q) return false;
     const [start, end] = p.block > q.block || (p.block === q.block && p.offset > q.offset) ? [q, p] : [p, q];
     if (start.block === end.block && start.offset === end.offset) return false;
-    this.#actor.send({ type: "_highlight", start, end, exact, texts: this.#blockTexts() });
+    this.#actor.send({ type: "_highlight", start, end, exact, open, texts: this.#blockTexts() });
     return true;
   }
 
@@ -1534,7 +1730,7 @@ class BookReader extends LitElement {
 
   #startVisual() {
     this.#closeBubble();
-    this.#dropPending();
+    this.#dropFinger();
     this.#visual = { start: this.#cursor };
     this.#paintCursor();
   }
@@ -2008,19 +2204,35 @@ class BookReader extends LitElement {
   #openBubble(id) {
     if (!id) return;
     clearTimeout(this.#copiedTimer);
+    if (id !== this.#active) {
+      this.#saveComment();
+      this.#actor.send({ type: "_commentClose" });
+    }
     this.#active = id;
+    this.#activeSeen = false;
     this.#copied = false;
-    // One overlay at a time: the highlight's bubble replaces the Highlight button.
-    this.#dropPending();
+    this.#dropFinger();
     this.requestUpdate();
   }
 
-  #closeBubble() {
+  // Closing keeps the highlight and what its comment box holds. `back` hands the keyboard to
+  // the page when the bubble held it.
+  #closeBubble(back = true) {
     if (this.#active == null && !this.#copied) return;
     clearTimeout(this.#copiedTimer);
+    const held = this.renderRoot.querySelector(".bubble")?.matches(":focus-within");
+    this.#saveComment();
+    this.#actor.send({ type: "_commentClose" });
     this.#active = null;
     this.#copied = false;
+    if (this.#moving?.sent) this.#dropMoving();
     this.requestUpdate();
+    if (back && held) this.renderRoot.querySelector(".reader")?.focus({ preventScroll: true });
+  }
+
+  #saveComment() {
+    const box = this.renderRoot?.querySelector(".bubble textarea");
+    if (box) this.#actor.send({ type: "_commentSave", body: box.value });
   }
 
   // Copy the highlighted text, or a link to it (Decision 3): nothing is ever copied
@@ -2072,17 +2284,20 @@ class BookReader extends LitElement {
   #reflectGlow() {
     for (const mark of this.#strip?.querySelectorAll("mark") ?? []) {
       mark.classList.toggle("glow", this.#glowing != null && mark.dataset.id === this.#glowing);
+      mark.classList.toggle("moving", this.#moving != null && mark.dataset.id === this.#moving.id);
     }
   }
 
-  // Place the open bubble above its mark's first line, inside the clipped .page: centred
-  // on that line and clamped within the page, above it or, with no room, below. Positions
-  // are set as custom properties (7.4). A mark gone (the chapter changed, the note
-  // removed) closes the bubble.
+  // Place the open bubble above its mark's first line on the page shown, inside the clipped
+  // .page, clear of the handle's ball there: centred on that line and clamped within the page.
+  // With no room above it goes under the mark's last line, clear of the other handle, and with
+  // room on neither side on the side that has more. Positions are set as custom properties
+  // (7.4). A mark gone (the chapter changed, the note removed) closes the bubble. A bubble in
+  // a drag stays where it was, so it never seems to jump.
   #positionBubble() {
-    const bubble = this.renderRoot.querySelector(".bubble:not(.make)");
+    const bubble = this.renderRoot.querySelector(".bubble");
     const page = this.renderRoot.querySelector(".page");
-    if (!bubble || !page) return;
+    if (!bubble || !page || this.#moving) return;
     const marks = [...this.#strip.querySelectorAll(`mark[data-id="${this.#active}"]`)];
     if (!marks.length) {
       this.#closeBubble();
@@ -2091,37 +2306,22 @@ class BookReader extends LitElement {
     // A highlight split across pages sits beside its part on the page shown, the part
     // clicked or holding the cursor, not beside its first line on a page turned away.
     const lines = marks.flatMap((m) => [...m.getClientRects()]).filter((r) => r.width > 0 || r.height > 0);
-    const line = lines.find((r) => this.#columnOf(r) === this.#page) ?? lines[0] ?? marks[0].getBoundingClientRect();
+    const shown = lines.filter((r) => this.#columnOf(r) === this.#page);
+    const line = shown[0] ?? lines[0] ?? marks[0].getBoundingClientRect();
+    const last = shown.at(-1) ?? line;
     const box = page.getBoundingClientRect();
     const bw = bubble.offsetWidth;
     const bh = bubble.offsetHeight;
     let x = line.left - box.left + line.width / 2 - bw / 2;
     x = Math.max(0, Math.min(Math.max(0, box.width - bw), x));
-    let y = line.top - box.top - bh - BUBBLE_GAP;
-    if (y < 0) y = line.bottom - box.top + BUBBLE_GAP;
+    const clear = BUBBLE_GAP + BALL_CLEAR;
+    const above = line.top - box.top - bh - clear;
+    const below = last.bottom - box.top + clear;
+    const fitsBelow = below + bh <= box.height;
+    let y = above >= 0 || (!fitsBelow && -above < below + bh - box.height) ? above : below;
     y = Math.max(0, Math.min(Math.max(0, box.height - bh), y));
     bubble.style.setProperty("--bx", `${Math.round(x)}px`);
     bubble.style.setProperty("--by", `${Math.round(y)}px`);
-  }
-
-  // Place the Highlight button under the passage's last line, where the finger that made
-  // it, coming from above, does not cover it; above that line when there is no room below.
-  // Clamped in .page like the bubble.
-  #positionMake() {
-    const button = this.renderRoot.querySelector(".bubble.make");
-    const page = this.renderRoot.querySelector(".page");
-    if (!button || !page) return;
-    const line = this.#pending;
-    const box = page.getBoundingClientRect();
-    const bw = button.offsetWidth;
-    const bh = button.offsetHeight;
-    let x = line.left - box.left + line.width / 2 - bw / 2;
-    x = Math.max(0, Math.min(Math.max(0, box.width - bw), x));
-    let y = line.bottom - box.top + BUBBLE_GAP;
-    if (y + bh > box.height) y = line.top - box.top - bh - BUBBLE_GAP;
-    y = Math.max(0, Math.min(Math.max(0, box.height - bh), y));
-    button.style.setProperty("--bx", `${Math.round(x)}px`);
-    button.style.setProperty("--by", `${Math.round(y)}px`);
   }
 
   // The chapter's highlights as one key, so updated() repaints only when the set changes.
@@ -2281,8 +2481,7 @@ class BookReader extends LitElement {
 
   // A turn: the anchor becomes the top of the page turned to.
   #turn(page) {
-    if (this.#finger?.down) return;
-    this.#dropPending();
+    if (this.#finger) return;
     // A page turned ends reading aloud: what is read is the page shown.
     this.#hush();
     this.#anchor = this.#anchorOnPage(Math.max(0, Math.min(this.#pages - 1, page)));
@@ -2314,7 +2513,7 @@ class BookReader extends LitElement {
   #relayout() {
     // The boxes a passage in progress was measured in, and the line its button sits under,
     // are gone with the old layout.
-    this.#dropPending();
+    this.#dropFinger();
     if (!this.#measure()) return;
     this.#keep();
   }
@@ -2355,7 +2554,7 @@ class BookReader extends LitElement {
   // A turn that stays in the chapter shows the neighbouring page; a turn past the edge
   // loads a neighbour chapter, which schedules its own settling afresh.
   #next() {
-    if (this.#finger?.down) return;
+    if (this.#finger) return;
     this.#closeBubble();
     if (this.#page + 1 < this.#pages) {
       this.#endSettle();
@@ -2367,7 +2566,7 @@ class BookReader extends LitElement {
   }
 
   #prev() {
-    if (this.#finger?.down) return;
+    if (this.#finger) return;
     this.#closeBubble();
     if (this.#page > 0) {
       this.#endSettle();
@@ -2420,10 +2619,6 @@ class BookReader extends LitElement {
       e.preventDefault();
       e.stopPropagation();
       this.#closeBubble();
-    } else if (e.key === "Escape" && this.#pending) {
-      e.preventDefault();
-      e.stopPropagation();
-      this.#dropPending();
     } else if (e.key === "Escape" && speechMode(this.#actor.snapshot) !== "idle") {
       e.preventDefault();
       e.stopPropagation();
@@ -2441,8 +2636,8 @@ class BookReader extends LitElement {
   #pointerdown(e) {
     this.#lastPointer = e.pointerType;
     if (e.button != null && e.button !== 0) return;
-    // A second finger during a passage is not a new press.
-    if (this.#finger?.down) return;
+    // A second finger during a passage or a handle's drag is not a new press.
+    if (this.#finger || this.#moving) return;
     this.#cancelHold();
     this.#endVisual(false);
     const img = e.target.closest?.("img");
@@ -2465,7 +2660,7 @@ class BookReader extends LitElement {
     this.#hover(e);
     const d = this.#drag;
     if (!d || e.pointerId !== d.pointerId) return;
-    if (this.#finger?.down) {
+    if (this.#finger) {
       this.#follow(e.clientX, e.clientY);
       return;
     }
@@ -2491,7 +2686,7 @@ class BookReader extends LitElement {
     const d = this.#drag;
     if (!d || e.pointerId !== d.pointerId) return;
     this.#cancelHold();
-    if (this.#finger?.down) {
+    if (this.#finger) {
       this.#lift();
       return;
     }
@@ -2511,12 +2706,14 @@ class BookReader extends LitElement {
     const still = Math.hypot(dx, e.clientY - d.y0) <= HOLD_SLOP;
     const tap = !d.mouse && still && e.timeStamp - d.t0 < HOLD_MS;
     if (tap) this.focus({ preventScroll: true });
-    // A tap that lands anywhere but the Highlight button only drops the passage waiting
-    // there, wherever it lands, so taking back a passage never turns the page or follows a
-    // link (Norman: forgiveness).
-    if (this.#finger && still) {
+    // A finger's tap with a bubble open is about that bubble: on a highlight it opens that
+    // one's, and anywhere else it only closes it, so putting a highlight away never turns the
+    // page or follows a link (Norman: forgiveness).
+    if (tap && this.#active != null) {
       this.#clickGone = Date.now() + CLICK_AFTER_MS;
-      this.#dropPending();
+      const on = e.target.closest?.("mark");
+      if (on) this.#openBubble(on.dataset.id);
+      else this.#closeBubble();
       return;
     }
     // A link is followed by its own click, the one a refused touch does not send. A click
@@ -2558,11 +2755,10 @@ class BookReader extends LitElement {
     else if (d.mouse) this.#cursorFromClick(e.clientX, e.clientY);
   }
 
-  // A touch the system took: as if lifted, so a passage being dragged keeps what it painted
-  // and offers the button.
+  // A touch the system took: as if lifted, so a passage being dragged is made as painted.
   #pointercancel() {
     this.#cancelHold();
-    if (this.#finger?.down) this.#lift();
+    if (this.#finger) this.#lift();
     this.#drag = null;
   }
 
@@ -2577,8 +2773,8 @@ class BookReader extends LitElement {
     const reading = snapshot.matches("reading");
     const clip = this.renderRoot.querySelector(".page");
     // First in .page: Lit clears every node after the page's last part whenever that part
-    // changes, so a strip after it was taken out and put back each time the bubble or the
-    // Highlight button came or went.
+    // changes, so a strip after it was taken out and put back each time the bubble came or
+    // went.
     if (clip && this.#strip.parentNode !== clip) clip.prepend(this.#strip);
     if (!reading) {
       // Nothing to read: drop the fragment so a return starts clean.
@@ -2665,11 +2861,17 @@ class BookReader extends LitElement {
     this.#reflectGlow();
     // The open bubble is placed after the marks are painted. A highlight the fact has
     // removed closes the bubble.
+    // The boxes of a finished drag give way once the mark shows the new ends, in the same
+    // render, so neither end is ever seen to jump back.
+    if (this.#moving?.sent) this.#dropMoving();
     if (this.#active != null) {
-      if (snapshot.context.highlights.some((h) => h.id === this.#active)) this.#positionBubble();
-      else this.#closeBubble();
+      if (snapshot.context.highlights.some((h) => h.id === this.#active)) {
+        this.#activeSeen = true;
+        this.#afterComment(snapshot.context);
+        this.#positionBubble();
+        this.#placeHandles();
+      } else if (this.#activeSeen) this.#closeBubble();
     }
-    if (this.#pending) this.#positionMake();
     // Reading aloud follows the actor, painted after the marks, which move the text nodes.
     this.#syncSpeech(repainted);
     const notice = snapshot.context.notice;
@@ -2680,14 +2882,17 @@ class BookReader extends LitElement {
     }
   }
 
-  // The bubble for the open highlight (session 3): Copy, Copy link, Add to note (while Slip-Box is shown) and Remove. Rendered inside .page so it is placed
-  // against the same box #positionBubble measures; a press on it never turns the page.
+  // The bubble for the open highlight (session 3): Copy, Copy link, Add to note (while Slip-Box is shown), Comment and Remove. Rendered inside .page so it is placed
+  // against the same box #positionBubble measures; a press on it never turns the page. The
+  // Comment and its box are copied from journal-entry's view.js, because components never
+  // import each other (11.2).
   #bubble(snapshot) {
     if (this.#active == null) return nothing;
     const h = snapshot.context.highlights.find((x) => x.id === this.#active);
     if (!h) return nothing;
+    const open = snapshot.context.comment?.id === h.id;
     return html`
-      <div class="bubble" role="group" aria-label="Highlight" @pointerdown=${(e) => e.stopPropagation()}>
+      <div class="bubble ${this.#moving ? "moving" : ""}" role="group" aria-label="Highlight" @pointerdown=${(e) => e.stopPropagation()} @keydown=${(e) => this.#bubbleKey(e)}>
         <button class="act copy" type="button" @click=${() => this.#copy("text", h)}>
           ${this.#copied === "text" ? "Copied" : "Copy"}
         </button>
@@ -2695,9 +2900,77 @@ class BookReader extends LitElement {
           ${this.#copied === "link" ? "Copied" : "Copy link"}
         </button>
         ${this.#addButton(snapshot, h)}
+        <button class="act comment" type="button" aria-expanded=${open} @click=${() => this.#toggleComment(open, h.id)}>Comment</button>
         <button class="act remove" type="button" @click=${() => this.#removeActive()}>Remove</button>
+        ${open
+          ? html`<textarea aria-label="Your comment on this passage" placeholder="Your comment on this passage" .value=${snapshot.context.comment.body} @blur=${() => this.#saveComment()}></textarea>`
+          : nothing}
       </div>
     `;
+  }
+
+  // The two handles of the open highlight (#placeHandles places them). They come before the
+  // bubble, which is drawn over them where it has to be.
+  #handles(snapshot) {
+    if (this.#active == null || !snapshot.context.highlights.some((x) => x.id === this.#active)) return nothing;
+    const handle = (end) => html`<span
+      class="handle ${end}"
+      data-end=${end}
+      aria-hidden="true"
+      hidden
+      @pointerdown=${(e) => this.#grab(e, end)}
+      @pointermove=${(e) => this.#moveHandle(e)}
+      @pointerup=${(e) => {
+        e.stopPropagation();
+        this.#release();
+      }}
+      @pointercancel=${(e) => {
+        e.stopPropagation();
+        this.#release();
+      }}
+      @mousedown=${(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      }}
+      @contextmenu=${(e) => e.preventDefault()}
+    ></span>`;
+    return [handle("start"), handle("end")];
+  }
+
+  #toggleComment(open, id) {
+    if (open) {
+      this.#saveComment();
+      this.#actor.send({ type: "_commentClose" });
+    } else this.#actor.send({ type: "_commentOpen", id });
+  }
+
+  // A letter typed in the comment box is typed text, never the reader's key. Escape leaves
+  // the box, keeping what was written, for its Comment button; the next one closes the bubble.
+  #bubbleKey(e) {
+    if (e.composedPath()[0]?.localName !== "textarea") return;
+    e.stopPropagation();
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    this.#saveComment();
+    this.#actor.send({ type: "_commentClose" });
+    this.#commentBack = true;
+  }
+
+  // Set when the comment box closes by Escape, which hands the keyboard to Comment.
+  #commentBack = false;
+  #boxFor = null;
+
+  // A comment box just opened gets the keyboard; one closed by Escape hands it to Comment.
+  #afterComment(context) {
+    const id = context.comment?.id ?? null;
+    if (id !== this.#boxFor) {
+      this.#boxFor = id;
+      if (id) this.renderRoot.querySelector(".bubble textarea")?.focus({ preventScroll: true });
+    }
+    if (this.#commentBack && !id) {
+      this.#commentBack = false;
+      this.renderRoot.querySelector(".bubble .comment")?.focus({ preventScroll: true });
+    }
   }
 
   // Add to note, only while Slip-Box is shown (addToNote). Greyed with its reason as the
@@ -2729,19 +3002,6 @@ class BookReader extends LitElement {
     }
     this.#actor.send({ type: "_addToNote", id: h.id });
     this.#flashCopied("note");
-  }
-
-  // The Highlight button for a finger's passage. Its press never reaches the page, so it
-  // is never a turn, and is not let move the focus, which would take the keyboard off the
-  // page. The focus is held at mousedown, not pointerdown: WebKit drops the click of a
-  // touch whose pointerdown was cancelled.
-  #makeButton() {
-    if (!this.#pending) return nothing;
-    return html`
-      <div class="bubble make" @pointerdown=${(e) => e.stopPropagation()} @mousedown=${(e) => e.preventDefault()}>
-        <button class="act highlight" type="button" @click=${() => this.#makePending()}>Highlight</button>
-      </div>
-    `;
   }
 
   // The margin speaker and its Stop (placed in #placeAt). A press on either is never a
@@ -3079,7 +3339,7 @@ class BookReader extends LitElement {
           @contextmenu=${(e) => this.#noNative(e)}
           @dragstart=${(e) => this.#noNative(e)}
         >
-          <div class="page" @pointerleave=${() => this.#unhover()}><span class="cursor" aria-hidden="true" hidden></span><div class="passage" aria-hidden="true"></div>${this.#sayButtons(snapshot)}${this.#bubble(snapshot)}${this.#makeButton()}</div>
+          <div class="page" @pointerleave=${() => this.#unhover()}><span class="cursor" aria-hidden="true" hidden></span><div class="passage" aria-hidden="true"></div>${this.#sayButtons(snapshot)}${this.#handles(snapshot)}${this.#bubble(snapshot)}</div>
         </div>
         <div class="footer">
           <span class="chap">${title}</span>

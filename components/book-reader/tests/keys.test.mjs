@@ -203,9 +203,9 @@ for (const engine of ENGINES) {
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       });
       await page.mouse.click(box.x, box.y);
-      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Remove");
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Comment · Remove");
       await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble .copy-link").click());
-      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copied · Remove");
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copied · Comment · Remove");
       assert.equal(await copied(page), LINK);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
@@ -224,16 +224,17 @@ for (const engine of ENGINES) {
         const r = document.querySelector("book-reader").shadowRoot;
         const vp = r.querySelector(".viewport").getBoundingClientRect();
         const lines = [...r.querySelectorAll(".strip mark")].flatMap((m) => [...m.getClientRects()]).filter((q) => q.width > 0 && q.left >= vp.left - 1 && q.right <= vp.right + 1);
-        return lines.length ? { first: lines[0].toJSON(), middle: lines[Math.floor(lines.length / 2)].toJSON() } : null;
+        return lines.length ? { first: lines[0].toJSON(), middle: lines[Math.floor(lines.length / 2)].toJSON(), last: lines.at(-1).toJSON() } : null;
       });
       assert.ok(at, "part of the highlight shows on the second page");
       await page.mouse.click(at.middle.left + at.middle.width / 2, at.middle.top + at.middle.height / 2);
-      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Remove");
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Comment · Remove");
       const b = await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble").getBoundingClientRect().toJSON());
       const line = at.first;
       assert.ok(Math.abs(b.left + b.width / 2 - (line.left + line.width / 2)) <= 2, `the bubble is centred over the part shown (bubble ${b.left}–${b.right}, line ${line.left}–${line.right})`);
-      const gap = b.bottom <= line.top ? line.top - b.bottom : b.top - line.bottom;
-      assert.ok(gap >= 0 && gap <= 12, `the bubble sits next to the part shown (bubble ${b.top}–${b.bottom}, line ${line.top}–${line.bottom})`);
+      // Above the part shown, or with no room there under it, clear of the highlight and its handles.
+      const gap = b.bottom <= line.top ? line.top - b.bottom : b.top - at.last.bottom;
+      assert.ok(gap >= 0 && gap <= 12, `the bubble sits next to the part shown (bubble ${b.top}–${b.bottom}, part ${line.top}–${at.last.bottom})`);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
@@ -245,7 +246,7 @@ for (const engine of ENGINES) {
       // Vim arrives with the settings reply; y acts only once it has.
       await until(async () => {
         await page.keyboard.press("y");
-        return (await bubble(page)).join(" · ") === "Copy · Copied · Remove";
+        return (await bubble(page)).join(" · ") === "Copy · Copied · Comment · Remove";
       });
       assert.equal(await copied(page), LINK);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
@@ -323,10 +324,10 @@ for (const engine of ENGINES) {
       await until(async () => (await marks(page)).join(" ") === "Chapter One");
       await until(async () => {
         await page.keyboard.press("y");
-        return (await bubble(page)).join(" · ") === "Copy · Copied · Remove";
+        return (await bubble(page)).join(" · ") === "Copy · Copied · Comment · Remove";
       });
       await page.keyboard.press("y");
-      await until(async () => (await bubble(page)).join(" · ") === "Copied · Copy link · Remove");
+      await until(async () => (await bubble(page)).join(" · ") === "Copied · Copy link · Comment · Remove");
       assert.equal(await copied(page), "Chapter One");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });

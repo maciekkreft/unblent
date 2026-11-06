@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords, openingOf, shelfOf, spineOf, followTop, isMotion, charStep, step, passage, wordAround, fingerPassage, linesOf, lineBoxes, charNear, lineStep, charAtY, firstChar, lastChar, answersText, finishedAnswers, answerAt, indexOfPlace, selectionOf, staysIn, offerOf, highlightAtPlace } from "./machine.js";
+import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords, openingOf, shelfOf, spineOf, followTop, isMotion, charStep, step, passage, wordAround, fingerPassage, movedEnd, endsOf, linesOf, lineBoxes, charNear, lineStep, charAtY, firstChar, lastChar, answersText, finishedAnswers, answerAt, indexOfPlace, selectionOf, staysIn, offerOf, highlightAtPlace } from "./machine.js";
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
@@ -19,6 +19,9 @@ import load from "./commands/load.json" with { type: "json" };
 // The gap between a passage's last line and the comment box under it, in px; the box is
 // placed in JS, so the value is not a style (7.4 covers styles).
 const POPOVER_GAP = 6;
+// What a box keeps clear under a passage's end for its handle's ball, which stands out from
+// its line by half its own size (.handle::after): a placement offset (7.4).
+const BALL_CLEAR = 6;
 // How long a finger rests before it starts a passage, and how far it may wander meanwhile.
 // As in book-reader's view.js, where the reasons are the same: iOS's own long press takes
 // about half a second and allows ten points of wander, and the thread acts just before it.
@@ -545,6 +548,12 @@ class ChatThread extends LitElement {
     mark.hl {
       cursor: pointer;
     }
+    /* The passage whose end is being dragged: the drag's own boxes (.passage) show it, so the
+       end it leaves does not stay painted. */
+    mark.moving {
+      background: none;
+      box-shadow: none;
+    }
     mark.open {
       box-shadow: inset 0 calc(var(--border-width) * -2) 0 var(--color-accent);
     }
@@ -595,6 +604,62 @@ class ChatThread extends LitElement {
       background: var(--color-accent);
       color: var(--color-accent-text);
       border-radius: var(--radius-sm);
+    }
+    /* A passage's handle (12; book-reader's, copied because components never import each
+       other, 11.2): a bar on the line's own height with a ball at its far end, inside a box big
+       enough for a finger. The box is laid over the text and adds nothing to it. It sits above
+       the text and under a comment box or a bubble. A drag on it is the thread's, so the browser
+       never reads it as a scroll or a selection, though the conversation around it scrolls. */
+    .handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: calc(var(--space-xl) + var(--space-xs));
+      height: calc(var(--hh, var(--space-lg)) + var(--space-lg));
+      translate: var(--hx, 0) var(--hy, 0);
+      z-index: 1;
+      pointer-events: auto;
+      touch-action: none;
+      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .handle[hidden] {
+      display: none;
+    }
+    .handle::before,
+    .handle::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      margin-inline: auto;
+      background: var(--color-accent);
+    }
+    .handle::before {
+      width: var(--space-2xs);
+      height: var(--hh, var(--space-lg));
+    }
+    .handle::after {
+      width: calc(var(--space-sm) + var(--space-xs));
+      height: calc(var(--space-sm) + var(--space-xs));
+      border-radius: var(--radius-full);
+    }
+    .handle.start::before {
+      bottom: 0;
+    }
+    .handle.start::after {
+      bottom: var(--hh, var(--space-lg));
+      translate: 0 50%;
+    }
+    .handle.end::before {
+      top: 0;
+    }
+    .handle.end::after {
+      top: var(--hh, var(--space-lg));
+      translate: 0 -50%;
     }
     /* A touch screen selects no answer: the browser's selection jumps as a finger moves, so
        a finger's passage is the thread's own (#held). The rest of the conversation keeps the
@@ -694,7 +759,7 @@ class ChatThread extends LitElement {
       top: 0;
       left: 0;
       translate: var(--bx, 0) var(--by, 0);
-      z-index: 1;
+      z-index: 2;
       box-sizing: border-box;
       width: calc(var(--space-2xl) * 5);
       max-width: 100%;
@@ -706,6 +771,12 @@ class ChatThread extends LitElement {
       border: var(--border-width) solid var(--color-border-strong);
       border-radius: var(--radius-md);
       box-shadow: var(--shadow-card);
+    }
+    /* While a handle moves, placing the box again would make it jump. It stays focusable and
+       in place, so it keeps its keyboard. */
+    .popover.moving {
+      opacity: 0;
+      pointer-events: none;
     }
     /* One line to start, growing with what is typed (#fit sets --h). */
     .popover textarea {
@@ -741,11 +812,6 @@ class ChatThread extends LitElement {
       align-items: center;
       gap: var(--space-2xs);
       padding: var(--space-2xs) var(--space-xs);
-    }
-    /* What a finger's passage can become: one button, placed like the comment box. */
-    .make .act,
-    .make .act:hover {
-      color: var(--color-ink);
     }
     /* A message sent with comments says so above its text. */
     .turn.user .sent-marks {
@@ -934,6 +1000,7 @@ class ChatThread extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this.addEventListener("keydown", this.#onBoxEscape);
+    this.addEventListener("touchstart", this.#touchstart, { passive: false });
     this.addEventListener("touchmove", this.#touchmove, { passive: false });
     this.addEventListener("touchend", this.#touchend);
     this.addEventListener("touchcancel", this.#touchend);
@@ -944,12 +1011,14 @@ class ChatThread extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this.removeEventListener("keydown", this.#onBoxEscape);
+    this.removeEventListener("touchstart", this.#touchstart);
     this.removeEventListener("touchmove", this.#touchmove);
     this.removeEventListener("touchend", this.#touchend);
     this.removeEventListener("touchcancel", this.#touchend);
     this.#resized.disconnect();
     globalThis.removeEventListener("resize", this.#place);
     this.#cancelHold();
+    this.#dropMoving();
   }
 
   #onScroll(event) {
@@ -971,9 +1040,13 @@ class ChatThread extends LitElement {
     // The drawn runs may have changed with this render.
     this.#runs = new Map();
     this.#afterComment();
-    this.#afterFinger();
+    // A passage's answer can go with the chat.
+    if (this.#finger && !this.renderRoot.querySelector(`[data-answer="${this.#finger.answerId}"]`)) this.#dropFinger();
+    // The boxes of a finished drag give way once the mark shows the new ends, in the same
+    // render, so neither end is ever seen to jump back.
+    if (this.#moving?.sent) this.#dropMoving();
     this.#paint();
-    if (!this.#stick || this.#finger?.down) return;
+    if (!this.#stick || this.#finger || this.#moving) return;
     const el = this.renderRoot.querySelector(".transcript");
     if (el) el.scrollTop = el.scrollHeight;
   }
@@ -996,18 +1069,18 @@ class ChatThread extends LitElement {
 
   // Vim keys on the conversation (12, "Vim keys"): only while the preference is on and
   // never in the comment box, where a letter is typed text. gg and dd are two presses, so a
-  // first g or d waits a moment for the second, as in the lists. Escape takes back a finger's
-  // passage with or without the preference, the way a keyboard on a tablet would.
+  // first g or d waits a moment for the second, as in the lists. Escape closes a comment box or
+  // a bubble that does not hold the keys, as a click or a finger leaves them.
   #gAt = 0;
   #dAt = 0;
   #transcriptKey(event) {
     if (event.isComposing) return;
     const target = event.composedPath()[0];
     if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return;
-    if (event.key === "Escape" && this.#finger && !this.#finger.down) {
+    if (event.key === "Escape" && (this.#actor.snapshot?.matches({ showing: "commenting" }) || this.#actor.snapshot?.context.chosen)) {
       event.preventDefault();
       event.stopPropagation();
-      this.#dropFinger();
+      this.#closeOpen();
       return;
     }
     if (this.#actor.snapshot?.context.vimKeys !== true) return;
@@ -1146,10 +1219,10 @@ class ChatThread extends LitElement {
           @dragstart=${(e) => this.#noNative(e)}
         >
           ${this.#body(snapshot)}
-          <div class="paint" aria-hidden="true"><span class="cursor" hidden></span><div class="passage"></div></div>
+          <div class="paint" aria-hidden="true"><span class="cursor" hidden></span><div class="passage"></div>${this.#handles(snapshot)}</div>
         </div>
       </div>
-      <div class="composer" @pointerdown=${() => this.#dropLifted()}><slot></slot></div>
+      <div class="composer" @pointerdown=${() => this.#closeOpen()}><slot></slot></div>
     `;
   }
 
@@ -1193,6 +1266,7 @@ class ChatThread extends LitElement {
     if (width === this.#width) return;
     this.#width = width;
     this.#dropFinger();
+    this.#dropMoving();
     this.#paint();
   });
   #width = 0;
@@ -1252,10 +1326,13 @@ class ChatThread extends LitElement {
     const draft = snapshot.matches({ showing: "commenting" }) ? context.draft : null;
     const answerId = lastAnswer(context.conversation)?.id;
     const byStart = (a, b) => a.start - b.start;
-    const own = highlightsOf(context.conversation, answerId);
-    const list = [...marks({ conversation: context.conversation, draft }), ...own].sort(byStart);
+    const written = marks({ conversation: context.conversation, draft });
+    // A highlight whose comment box is open is one passage, painted once.
+    const own = highlightsOf(context.conversation, answerId).filter((h) => !written.some((m) => m.id === h.id));
+    const list = [...written, ...own].sort(byStart);
     const comments = savedMarks(context.conversation).map((m) => (m.id === draft?.id ? { ...m, comment: draft.comment } : m)).sort(byStart);
-    const highlights = new Set(own.map((h) => h.id));
+    // Until it holds words the passage in an open box has no number: it is a highlight.
+    const highlights = new Set([...own.map((h) => h.id), ...(draft && draft.comment.trim() === "" && !comments.some((m) => m.id === draft.id) ? [draft.id] : [])]);
     const chosen = highlights.has(context.chosen) ? context.chosen : null;
     return { list, comments, markable: true, selectable: true, draft, highlights, chosen };
   }
@@ -1313,7 +1390,6 @@ class ChatThread extends LitElement {
         ${marking ? this.#comments(marking) : nothing}
         ${marking?.draft ? this.#popover(marking.draft, marking) : nothing}
         ${marking?.chosen ? this.#bubble(marking) : nothing}
-        ${this.#makeButton(turn)}
       </div>
     `;
     this.#marking = null;
@@ -1478,13 +1554,13 @@ class ChatThread extends LitElement {
       if (!p.id) return text;
       // A highlight carries no number; it is the user's own, not a comment.
       if (marking.highlights?.has(p.id)) {
-        const state = p.id === marking.chosen ? " open" : "";
+        const state = `${p.id === marking.chosen || p.id === marking.draft?.id ? " open" : ""}${p.id === this.#moving?.id ? " moving" : ""}`;
         return html`<mark data-id=${p.id} class=${`hl${state}`}>${text}</mark>`;
       }
       const numbered = numberedOf(marking);
       const n = numbered.findIndex((m) => m.id === p.id);
       const end = p.s + p.text.length >= numbered[n].end;
-      const cls = p.id === marking.draft?.id ? "open" : "";
+      const cls = `${p.id === marking.draft?.id ? "open" : ""}${p.id === this.#moving?.id ? " moving" : ""}`;
       return html`<mark data-id=${p.id} class=${cls}>${text}</mark>${end ? html`<sup class="num">${n + 1}</sup>` : nothing}`;
     });
   }
@@ -1518,7 +1594,7 @@ class ChatThread extends LitElement {
     const id = marking.chosen;
     return html`
       <div
-        class="popover bubble"
+        class="popover bubble ${this.#moving ? "moving" : ""}"
         data-for=${id}
         @mousedown=${(e) => e.preventDefault()}
         @keydown=${(e) => {
@@ -1539,7 +1615,7 @@ class ChatThread extends LitElement {
   #popover(draft, marking) {
     const saved = marking.comments.some((m) => m.id === draft.id);
     return html`
-      <div class="popover" @mousedown=${(e) => e.target.localName !== "textarea" && e.preventDefault()}>
+      <div class="popover ${this.#moving ? "moving" : ""}" @mousedown=${(e) => e.target.localName !== "textarea" && e.preventDefault()}>
         <textarea
           rows="1"
           aria-label="Comment"
@@ -1560,8 +1636,8 @@ class ChatThread extends LitElement {
         ></textarea>
         <button
           class="act remove"
-          aria-label="Remove comment"
-          title="Remove comment"
+          aria-label=${saved ? "Remove comment" : "Remove highlight"}
+          title=${saved ? "Remove comment" : "Remove highlight"}
           @click=${() => this.#actor.send({ type: "_remove", id: draft.id })}
         >
           ${icon("trash-simple")}
@@ -1581,27 +1657,37 @@ class ChatThread extends LitElement {
   // One thing differs from the reader, because this view scrolls with a finger and the
   // reader's page does not. The reader refuses the touchstart of a touch on its text, so that
   // iOS's own long presses cannot end the touch. Refusing it here would stop the conversation
-  // from scrolling under a finger, so no touchstart is refused: the browser keeps its scroll,
-  // its clicks and its focus. Only once a hold has started does #touchmove refuse the moves,
-  // which keeps that touch from turning into a scroll. A touch iOS ends anyway counts as a
-  // lift (#touchend, #pointercancel).
+  // from scrolling under a finger, so no touchstart on the text is refused: the browser keeps
+  // its scroll, its clicks and its focus. Only once a hold has started does #touchmove refuse
+  // the moves, which keeps that touch from turning into a scroll. A touch iOS ends anyway counts
+  // as a lift (#touchend, #pointercancel), and the handles finish the job.
   #press = null;
   #holdTimer = 0;
-  // From the hold until it is made or dropped: this answer's own text, so a passage cannot
-  // leave it; the word it started on, the [from, to) painted, the lines as measured, where
-  // the finger is, and whether it is still down.
+  // From the hold until the lift makes it: this answer's own text, so a passage cannot leave
+  // it; the word it started on, the [from, to) painted, the lines as measured, and where the
+  // finger is.
   #finger = null;
+  // Whether the next comment box or bubble stays without the keys, because a finger opened it
+  // and a phone's keyboard would cover the page; and whether it is to be brought into view.
+  #quiet = false;
+  #reveal = false;
 
   // These must be on the host before a touch begins: only a listener that is not passive
-  // may refuse a move, and iOS decides that as the touch begins. A touch may end with no
-  // pointerup, and a passage must not stay down then.
+  // may refuse a touch, and iOS decides that as the touch begins. A handle needs no scroll, so
+  // a touch on one can be refused where a touch on the text cannot, which makes iOS's own long
+  // presses fail and leaves that touch alive through a pause. A touch may end with no pointerup,
+  // and a passage must not stay down then.
+  #touchstart = (e) => {
+    if (e.cancelable && e.composedPath()[0]?.classList?.contains("handle")) e.preventDefault();
+  };
   #touchmove = (e) => {
-    if (this.#finger?.down && e.cancelable) e.preventDefault();
+    if ((this.#finger || this.#moving) && e.cancelable) e.preventDefault();
   };
   #touchend = (e) => {
     if (e.touches?.length) return;
     this.#cancelHold();
-    if (this.#finger?.down) this.#lift();
+    if (this.#finger) this.#lift();
+    this.#release();
   };
 
   #cancelHold() {
@@ -1648,7 +1734,7 @@ class ChatThread extends LitElement {
     this.#actor.send({ type: "_highlightClosed" });
     this.#actor.send({ type: "_closed" });
     const word = wordAround(text, at);
-    this.#finger = { answerId: turn.id, text, word, span: fingerPassage(text, word, at), lines, x: press.x0, y: press.y0, down: true, frame: 0, reveal: false };
+    this.#finger = { answerId: turn.id, text, word, span: fingerPassage(text, word, at), lines, x: press.x0, y: press.y0, frame: 0 };
     this.#paint();
   }
 
@@ -1677,17 +1763,18 @@ class ChatThread extends LitElement {
     return f ? selectionOf(f.text, f.span[0], f.span[1]) : null;
   }
 
-  // The passage stays as painted and waits for its button; a cancelled touch ends here too.
-  // Over a mark it can become nothing, which is what a mouse selection there does, so it goes.
+  // Lifting makes what is painted, as a mouse selection does, and its bubble or comment box
+  // opens, without the keys; a cancelled touch ends here too. Undo takes it back.
   #lift() {
-    const f = this.#finger;
     this.#grow();
-    f.down = false;
-    f.reveal = true;
     this.#press = null;
     const selection = this.#fingerSelection();
-    if (!selection || !offerOf(this.#actor.snapshot.context, selection)) return this.#dropFinger();
-    this.requestUpdate();
+    this.#dropFinger();
+    if (!selection) return;
+    this.#quiet = true;
+    this.#reveal = true;
+    this.#readStick();
+    this.#actor.send({ type: "_lifted", ...selection });
   }
 
   #dropFinger() {
@@ -1698,52 +1785,152 @@ class ChatThread extends LitElement {
     this.requestUpdate();
   }
 
-  #dropLifted() {
-    if (this.#finger && !this.#finger.down) this.#dropFinger();
+  // A press on the chat box, or a finger's tap elsewhere: the open bubble or box closes, and
+  // its highlight stays.
+  #closeOpen() {
+    this.#actor.send({ type: "_highlightClosed" });
+    this.#actor.send({ type: "_closed" });
   }
 
-  // The button under the passage: the machine says what it is. A real button, because a touch
-  // here is never refused, and its click may open the comment box's keyboard on a phone.
-  #makeButton(turn) {
-    const f = this.#finger;
-    if (!f || f.down || f.answerId !== turn.id) return nothing;
-    const selection = this.#fingerSelection();
-    const offer = selection && offerOf(this.#actor.snapshot.context, selection);
-    if (!offer) return nothing;
-    return html`
-      <div class="popover bubble make" @mousedown=${(e) => e.preventDefault()}>
-        <button class="act" type="button" @click=${() => this.#makeFinger()}>${offer}</button>
-      </div>
-    `;
+  // --- A passage's handles (12) ----------------------------------------------------------
+  //
+  // The browser's own selection handles are what jumped under a finger (#held), so these are
+  // the thread's, as in book-reader's view.js, drawn on the passage whose bubble or comment box
+  // is open. A comment already sent never opens either, so it has none. Every press, move and
+  // lift on one stops here, so nothing under it hears of it, and a mouse's press is not let
+  // start a selection or take the keyboard off a comment box.
+
+  // A handle being dragged, from the press until the mark shows its new ends: the passage's
+  // id and answer, which end, the answer's own text, the lines as measured at the press, the
+  // [from, to) as it stands and as it was, where the end is meant to be, how far the press
+  // was from it (so grabbing it does not move it), and whether the move has been sent.
+  #moving = null;
+
+  // The passage with handles, as offsets in its answer, or null.
+  #handled() {
+    const snapshot = this.#actor.snapshot;
+    if (!snapshot?.matches("showing")) return null;
+    const { draft, chosen, conversation } = snapshot.context;
+    if (snapshot.matches({ showing: "commenting" }) && draft) return draft;
+    return chosen ? (conversation?.highlights ?? []).find((h) => h.id === chosen) ?? null : null;
   }
 
-  #makeFinger() {
-    const selection = this.#fingerSelection();
-    this.#dropFinger();
-    if (selection) this.#actor.send({ type: "_selected", ...selection });
+  #answerText(answerId) {
+    const turn = this.#actor.snapshot?.context.conversation?.turns?.find((t) => t.id === answerId);
+    return turn ? answersText([turn], this.markdown) : null;
   }
 
-  // After each render: the button under the passage's last line, in view the first time. A
-  // passage whose answer is gone, or which can no longer become anything, goes.
-  #afterFinger() {
-    const f = this.#finger;
-    if (!f) return;
-    if (!this.renderRoot.querySelector(`[data-answer="${f.answerId}"]`)) return this.#dropFinger();
-    if (f.down) return;
-    const popover = this.renderRoot.querySelector(".make");
-    if (!popover) return this.#dropFinger();
-    const line = lineBoxes(f.lines, f.span[0], f.span[1]).at(-1);
-    if (!line) return;
-    const turn = this.#content(popover.closest(".turn.assistant").getBoundingClientRect());
-    const x = Math.max(0, Math.min(Math.max(0, turn.right - turn.left - popover.offsetWidth), line.left - turn.left));
-    const y = line.bottom - turn.top + POPOVER_GAP;
-    popover.style.setProperty("--bx", `${Math.round(x)}px`);
-    popover.style.setProperty("--by", `${Math.round(y)}px`);
-    if (!f.reveal) return;
-    f.reveal = false;
-    const el = this.renderRoot.querySelector(".transcript");
-    const box = this.#content(popover.getBoundingClientRect());
-    el.scrollTop = followTop({ top: el.scrollTop, height: el.clientHeight, max: el.scrollHeight - el.clientHeight, boxTop: box.top, boxBottom: box.bottom, margin: POPOVER_GAP });
+  // The two handles (#placeHandles places them).
+  #handles(snapshot) {
+    if (!snapshot?.matches("showing") || !this.#handled()) return nothing;
+    const handle = (end) => html`<span
+      class="handle ${end}"
+      data-end=${end}
+      hidden
+      @pointerdown=${(e) => this.#grab(e, end)}
+      @pointermove=${(e) => this.#moveHandle(e)}
+      @pointerup=${(e) => {
+        e.stopPropagation();
+        this.#release();
+      }}
+      @pointercancel=${(e) => {
+        e.stopPropagation();
+        this.#release();
+      }}
+      @mousedown=${(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      }}
+      @contextmenu=${(e) => e.preventDefault()}
+    ></span>`;
+    return [handle("start"), handle("end")];
+  }
+
+  // Each handle on its end, in the transcript's own coordinates, so it scrolls with the text;
+  // set as custom properties (7.4).
+  #placeHandles(layer) {
+    const handles = layer.querySelectorAll(".handle");
+    if (!handles.length) return;
+    const m = this.#moving;
+    const target = this.#handled();
+    const text = m?.text ?? (target && this.#answerText(target.answerId));
+    const span = m?.span ?? (text && target && endsOf(text, target.answerId, target.start, target.end));
+    for (const el of handles) {
+      const end = el.dataset.end;
+      const rect = span && this.#rectOf(text, end === "start" ? span[0] : span[1] - 1);
+      el.hidden = !rect;
+      if (!rect) continue;
+      const box = this.#content(rect);
+      el.style.setProperty("--hh", `${rect.height}px`);
+      el.style.setProperty("--hx", `${(end === "start" ? box.left : box.right) - el.offsetWidth / 2}px`);
+      el.style.setProperty("--hy", `${end === "start" ? box.bottom - el.offsetHeight : box.top}px`);
+    }
+  }
+
+  #grab(e, end) {
+    e.stopPropagation();
+    if ((e.button != null && e.button !== 0) || this.#moving) return;
+    const target = this.#handled();
+    const text = target && this.#answerText(target.answerId);
+    const span = text && endsOf(text, target.answerId, target.start, target.end);
+    const rect = span && this.#rectOf(text, end === "start" ? span[0] : span[1] - 1);
+    if (!rect) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // A pointer already gone has nothing to capture, and what follows ends the drag.
+    }
+    const x = end === "start" ? rect.left : rect.right;
+    const y = (rect.top + rect.bottom) / 2;
+    this.#readStick();
+    this.#moving = { id: target.id, answerId: target.answerId, end, text, lines: linesOf(this.#charsOf(text, 0, text.flat.length)), span, was: span, x, y, dx: e.clientX - x, dy: e.clientY - y, frame: 0, pointerId: e.pointerId, sent: false };
+    this.#paint();
+    this.requestUpdate();
+  }
+
+  // A move may come many times a frame, and only the last before a frame can be seen.
+  #moveHandle(e) {
+    e.stopPropagation();
+    const m = this.#moving;
+    if (!m || m.sent || e.pointerId !== m.pointerId) return;
+    m.x = e.clientX - m.dx;
+    m.y = e.clientY - m.dy;
+    m.frame ||= requestAnimationFrame(() => this.#stepHandle());
+  }
+
+  #stepHandle() {
+    const m = this.#moving;
+    if (!m) return;
+    cancelAnimationFrame(m.frame);
+    m.frame = 0;
+    if (m.sent) return;
+    const here = this.#content({ left: m.x, right: m.x, top: m.y, bottom: m.y });
+    const at = charNear(m.lines, here.left, here.top);
+    if (at == null) return;
+    const span = movedEnd(m.text, m.span, m.end, at);
+    if (span[0] === m.span[0] && span[1] === m.span[1]) return;
+    m.span = span;
+    this.#paint();
+  }
+
+  // The end stays where the handle was let go, one step. A touch iOS ended counts as a
+  // release, so what was painted is kept. Nothing moved is nothing to save.
+  #release() {
+    const m = this.#moving;
+    if (!m || m.sent) return;
+    this.#stepHandle();
+    m.sent = true;
+    const selection = selectionOf(m.text, m.span[0], m.span[1]);
+    if (selection && (m.span[0] !== m.was[0] || m.span[1] !== m.was[1])) this.#actor.send({ type: "_moved", id: m.id, ...selection });
+    this.requestUpdate();
+  }
+
+  #dropMoving() {
+    if (!this.#moving) return;
+    cancelAnimationFrame(this.#moving.frame);
+    this.#moving = null;
+    this.#paint();
+    this.requestUpdate();
   }
 
   // --- The Vim cursor (12, "Vim keys") ---------------------------------------------------
@@ -1928,7 +2115,7 @@ class ChatThread extends LitElement {
     if (!text.flat) return;
     this.#placeCursor(text);
     this.#dropFinger();
-    this.#actor.send({ type: "_highlightClosed" });
+    this.#closeOpen();
     this.#visual = { start: this.#cursor, letter: false };
     this.#paint();
   }
@@ -1974,6 +2161,7 @@ class ChatThread extends LitElement {
     if (!layer) return;
     this.#paintCursor(layer.querySelector(".cursor"));
     this.#paintPassage(layer.querySelector(".passage"));
+    this.#placeHandles(layer);
   }
 
   #paintCursor(el) {
@@ -2003,7 +2191,7 @@ class ChatThread extends LitElement {
   // The passage's lines as boxes: a finger's from the boxes measured at the hold, a keyboard's
   // measured now. The text it names is for tests.
   #paintPassage(el) {
-    const f = this.#finger;
+    const f = this.#finger ?? this.#moving;
     let boxes = [];
     let named = "";
     if (f) {
@@ -2035,7 +2223,7 @@ class ChatThread extends LitElement {
   // press, and is how a pinch begins.
   #pointerdown(e) {
     if (e.pointerType === "mouse" || (e.button != null && e.button !== 0)) return;
-    if (this.#finger?.down) return;
+    if (this.#finger || this.#moving) return;
     this.#cancelHold();
     this.#press = null;
     if (!e.isPrimary) return;
@@ -2049,32 +2237,30 @@ class ChatThread extends LitElement {
   #pointermove(e) {
     const press = this.#press;
     if (!press || e.pointerId !== press.pointerId) return;
-    if (this.#finger?.down) return this.#follow(e.clientX, e.clientY);
+    if (this.#finger) return this.#follow(e.clientX, e.clientY);
     if (this.#holdTimer && Math.hypot(e.clientX - press.x0, e.clientY - press.y0) > HOLD_SLOP) this.#cancelHold();
   }
 
   // The system took the touch, usually for a scroll: nothing waits for a hold any more, and a
-  // passage being dragged keeps what it painted and offers its button.
+  // passage being dragged is made as painted.
   #pointercancel() {
     this.#cancelHold();
-    if (this.#finger?.down) this.#lift();
+    if (this.#finger) this.#lift();
     this.#press = null;
   }
 
-  // A selection in the last answer ends: its comment box opens; in an earlier answer it
-  // becomes a highlight. A click on a comment's passage opens the comment, on a
-  // highlight its bubble; a click anywhere else closes the bubble. A finger's tap does the
-  // same but for the selection, and first takes back a passage waiting for its button, which
-  // is all that tap does.
+  // A selection ends: it becomes a highlight at once. A click on a comment's passage opens the
+  // comment, on a highlight its bubble or box; a click anywhere else closes what is open and
+  // keeps the highlight. A finger's tap does the same but for the selection, without the keys.
   #pointerup(e) {
     const path = e.composedPath();
     if (e.pointerType !== "mouse") {
       const press = this.#press;
       this.#cancelHold();
-      if (this.#finger?.down) return this.#lift();
+      if (this.#finger) return this.#lift();
       this.#press = null;
       if (!press || Math.hypot(e.clientX - press.x0, e.clientY - press.y0) > HOLD_SLOP) return;
-      if (this.#finger) return this.#dropFinger();
+      this.#quiet = true;
     } else {
       if (path.some((el) => el.classList?.contains("popover"))) return;
       if (this.#sendSelection()) return;
@@ -2084,11 +2270,15 @@ class ChatThread extends LitElement {
     if (this.#actor.snapshot?.context.chosen) this.#actor.send({ type: "_highlightClosed" });
     const mark = path.find((el) => el.localName === "mark" && el.closest?.(".markable"));
     if (mark) this.#actor.send({ type: "_opened", id: mark.dataset.id });
+    else {
+      this.#quiet = false;
+      this.#actor.send({ type: "_closed" });
+    }
   }
 
-  // The selection as offsets into one answer, sent as _selected with that answer; false
-  // when there is none in an answer. A selection across answers keeps to the first one.
-  // The machine decides whether it becomes a comment, a highlight, or nothing.
+  // The selection as offsets into one answer, sent as _lifted with that answer; false when
+  // there is none in an answer. A selection across answers keeps to the first one. The machine
+  // decides what it becomes. A mouse has a keyboard at hand, so a box it opens takes the keys.
   #sendSelection() {
     const range = this.#selectionRange();
     if (!range) return false;
@@ -2099,7 +2289,8 @@ class ChatThread extends LitElement {
     if (start == null || end == null || end <= start) return false;
     this.#readStick();
     this.#clearSelection();
-    this.#actor.send({ type: "_selected", answerId: answer.dataset.answer, start, end });
+    this.#quiet = false;
+    this.#actor.send({ type: "_lifted", answerId: answer.dataset.answer, start, end });
     return true;
   }
 
@@ -2166,9 +2357,16 @@ class ChatThread extends LitElement {
     const box = this.renderRoot.querySelector(".popover textarea");
     if (box) {
       this.#fit(box);
-      box.focus({ preventScroll: true });
-      box.setSelectionRange(box.value.length, box.value.length);
+      // Fitted before the box takes the keys, or a phone's keyboard would be up before the box is
+      // placed; a finger's box waits for the finger.
+      if (!this.#quiet) {
+        box.focus({ preventScroll: true });
+        box.setSelectionRange(box.value.length, box.value.length);
+      }
+      this.#positionPopover(draft.id, ".popover:not(.bubble)");
     }
+    this.#quiet = false;
+    this.#revealOpen(".popover:not(.bubble)");
   }
 
   // The comment box as tall as what it holds; set as a custom property (7.4).
@@ -2186,15 +2384,30 @@ class ChatThread extends LitElement {
       this.#bubbleFor = null;
       return;
     }
-    this.#positionPopover(chosen, ".bubble:not(.make)");
+    this.#positionPopover(chosen, ".bubble");
     if (this.#bubbleFor === chosen) return;
     this.#bubbleFor = chosen;
-    this.renderRoot.querySelector(".bubble:not(.make) button")?.focus({ preventScroll: true });
+    if (!this.#quiet) this.renderRoot.querySelector(".bubble button")?.focus({ preventScroll: true });
+    this.#quiet = false;
+    this.#revealOpen(".bubble");
   }
 
-  // Under the passage's last line, aligned with that line's start, clamped inside the
-  // answer; placed with custom properties so no length is a literal style (7.4).
+  // What a finger just opened comes into view, without leaving the place the reader is at.
+  #revealOpen(selector) {
+    if (!this.#reveal) return;
+    this.#reveal = false;
+    const popover = this.renderRoot.querySelector(selector);
+    if (!popover) return;
+    const el = this.renderRoot.querySelector(".transcript");
+    const box = this.#content(popover.getBoundingClientRect());
+    el.scrollTop = followTop({ top: el.scrollTop, height: el.clientHeight, max: el.scrollHeight - el.clientHeight, boxTop: box.top, boxBottom: box.bottom, margin: POPOVER_GAP });
+  }
+
+  // Under the passage's last line, clear of its handle's ball, aligned with that line's start,
+  // clamped inside the answer; placed with custom properties so no length is a literal style
+  // (7.4). A box in a drag stays where it was, so it never seems to jump.
   #positionPopover(id, selector) {
+    if (this.#moving) return;
     const marked = this.renderRoot.querySelectorAll(`[data-answer] mark[data-id="${id}"]`);
     const turn = marked[0]?.closest(".turn.assistant");
     const popover = turn?.querySelector(selector);
@@ -2206,7 +2419,7 @@ class ChatThread extends LitElement {
     const width = popover.offsetWidth;
     let x = line.left - box.left;
     x = Math.max(0, Math.min(Math.max(0, box.width - width), x));
-    const y = line.bottom - box.top + POPOVER_GAP;
+    const y = line.bottom - box.top + POPOVER_GAP + BALL_CLEAR;
     popover.style.setProperty("--bx", `${Math.round(x)}px`);
     popover.style.setProperty("--by", `${Math.round(y)}px`);
   }

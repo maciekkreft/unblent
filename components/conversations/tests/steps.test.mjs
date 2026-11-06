@@ -405,3 +405,54 @@ test("after a reload an Undo still applies, and a deleted chat comes back from t
   assert.equal(again.settled.at(-1).outcome, "applied");
   assert.equal((await read(again.actor, A)).conversation.title, "About books");
 });
+
+test("a highlight that takes a comment is one step with the comment, and Undo gives the highlight back", async () => {
+  const { actor, steps } = await start();
+  const hl = { id: M1, answerId: ANSWER, start: 4, end: 8, quote: "last" };
+  actor.send({ type: "highlights.edited", conversationId: A, highlights: [hl] });
+  await flush();
+  const made = steps.length;
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [mark(M1, "Hm")] });
+  actor.send({ type: "highlights.edited", conversationId: A, highlights: [] });
+  await flush();
+  assert.equal(new Set(steps.slice(made).map((s) => s.id)).size, 1, "one step");
+  assert.equal(steps.at(-1).label, "comment on an answer");
+  assert.equal(steps.at(-1).notice, undefined);
+  assert.deepEqual(steps.at(-1).undo.highlights, [hl]);
+  assert.equal(steps.at(-1).undo.marks, null);
+  assert.equal(steps.at(-1).redo.highlights, null);
+  actor.send(undo(steps.at(-1)));
+  await flush();
+  const { conversation } = await read(actor, A);
+  assert.deepEqual(conversation.highlights, [hl]);
+  assert.equal(conversation.marks, undefined);
+});
+
+test("moving a highlight's end is one step of its own, with no notice, and Undo returns the old ends; a comment's move too", async () => {
+  const { actor, steps } = await start();
+  const hl = { id: H1, answerId: OLD, start: 0, end: 2, quote: "An" };
+  actor.send({ type: "highlights.edited", conversationId: A, highlights: [hl] });
+  await flush();
+  const made = steps.length;
+  actor.send({ type: "highlights.edited", conversationId: A, highlights: [{ ...hl, end: 1, quote: "A" }] });
+  await flush();
+  assert.equal(steps.length, made + 1);
+  assert.equal(steps.at(-1).label, "move a highlight");
+  assert.equal(steps.at(-1).notice, undefined);
+  actor.send(undo(steps.at(-1)));
+  await flush();
+  assert.deepEqual((await read(actor, A)).conversation.highlights, [hl]);
+
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [mark(M1, "Hm")] });
+  await flush();
+  const typed = steps.at(-1).id;
+  const list = [mark(M1, "Hm")];
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: list, left: true });
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [{ ...list[0], end: list[0].end - 1 }], left: true });
+  await flush();
+  assert.notEqual(steps.at(-1).id, typed, "the move is not part of the typing");
+  const moved = steps.at(-1).id;
+  actor.send({ type: "marks.edited", conversationId: A, answerId: ANSWER, marks: [{ ...list[0], end: list[0].end - 1, comment: "Hmm" }] });
+  await flush();
+  assert.notEqual(steps.at(-1).id, moved, "typing after it is another");
+});

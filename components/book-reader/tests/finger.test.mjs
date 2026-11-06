@@ -24,8 +24,12 @@ const PAST_HOLD_MS = 500;
 // Past the longest of iOS's own long presses (three quarters of a second).
 const PAST_NATIVE_PRESS_MS = 1000;
 
+// A lift saves a highlight, and another test's would come back with the pull, so each test
+// has its own account.
+let accounts = 0;
 const seedUser = async (id, file, position) => {
-  const cookie = forgeCookie("reader-finger");
+  accounts += 1;
+  const cookie = forgeCookie(`reader-finger-${accounts}`);
   const put = async (path, type, body) => {
     const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
     assert.equal(res.status, 200, `PUT ${path}`);
@@ -41,7 +45,7 @@ const painted = (page) => page.evaluate(() => document.querySelector("book-reade
 const boxes = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelectorAll(".passage i").length);
 const marks = (page) => page.evaluate(() => [...document.querySelector("book-reader").shadowRoot.querySelectorAll(".strip mark")].map((m) => m.textContent).join(""));
 const footer = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".footer").textContent.replace(/\s+/g, " ").trim());
-const button = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble.make button.highlight")?.getBoundingClientRect().toJSON() ?? null);
+const bubble = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble") != null);
 
 const chapterName = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".footer .chap").textContent.trim());
 // The middle of the first line of the link to the third chapter.
@@ -189,14 +193,13 @@ for (const engine of ENGINES) {
       await hand.move(x, all[5].top + 4);
       const paused = await painted(page);
       await new Promise((r) => setTimeout(r, PAST_NATIVE_PRESS_MS));
-      assert.equal(await button(page), null, "no button during the pause");
+      assert.equal(await marks(page), "", "nothing is made during the pause");
       assert.equal(await painted(page), paused, "the pause keeps what was painted");
       await hand.move(x, all[8].top + 4);
       const grown = await painted(page);
       assert.ok(grown.startsWith(paused) && grown.length > paused.length, "the passage goes on after the pause");
-      assert.equal(await button(page), null, "still no button");
       await hand.up(x, all[8].top + 4);
-      assert.ok(await button(page), "the lift shows the button");
+      await until(async () => (await marks(page)) !== "");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
@@ -208,9 +211,10 @@ for (const engine of ENGINES) {
       await hand.down(x, all[3].top + 4);
       await until(async () => (await painted(page)) !== "");
       await hand.up(x, all[3].top + 4);
-      assert.ok(await button(page), "the button shows");
+      await until(() => bubble(page));
       assert.equal(await refused(page, ".strip p"), true, "the text");
-      assert.equal(await refused(page, ".bubble.make button.highlight"), false, "the Highlight button");
+      assert.equal(await refused(page, ".handle.end"), true, "a handle");
+      assert.equal(await refused(page, ".bubble .remove"), false, "a button of the bubble");
       assert.equal(await refused(page, ".footer"), false, "the footer");
       assert.equal(await refused(page, ".footer button.turn"), false, "a turn button");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
@@ -228,17 +232,23 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test(`a hold on a link and a tap that drops a passage follow nothing, in ${engine.name}`, async () => {
+    test(`a hold on a link and a tap that closes a bubble follow nothing, in ${engine.name}`, async () => {
       const { page, problems, hand } = await open({ position: { chapter: 0, block: 0 }, laidOut: "a[data-chapter]" });
       const link = await linkAt(page);
       await hand.down(link.x, link.y);
       await until(async () => (await painted(page)) !== "");
       await hand.up(link.x, link.y);
-      assert.ok(await button(page), "the hold made a passage");
+      await until(() => bubble(page));
       assert.equal(await chapterName(page), "Chapter One", "the hold followed nothing");
-      await hand.down(link.x, link.y);
-      await hand.up(link.x, link.y);
-      assert.equal(await painted(page), "", "the tap drops the passage");
+      // On the link's first word, which the handles on the word held do not reach.
+      const away = await page.evaluate(() => {
+        const a = [...document.querySelector("book-reader").shadowRoot.querySelectorAll(".strip a[data-chapter]")].find((l) => l.textContent === "the third chapter");
+        const r = a.getClientRects()[0];
+        return { x: r.left + 2, y: r.top + r.height / 2 };
+      });
+      await hand.down(away.x, away.y);
+      await hand.up(away.x, away.y);
+      await until(async () => !(await bubble(page)));
       await new Promise((r) => setTimeout(r, PAST_HOLD_MS));
       assert.equal(await chapterName(page), "Chapter One", "the tap followed nothing");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
@@ -259,25 +269,20 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test(`lifting offers Highlight, which makes exactly what is painted, in ${engine.name}`, async () => {
+    test(`lifting makes exactly what is painted, at once, and opens its bubble, in ${engine.name}`, async () => {
       const { page, problems, hand } = await open();
       const all = await lines(page);
       const x = (all[3].left + all[3].right) / 2;
       await hand.down(x, all[3].top + 4);
       await until(async () => (await painted(page)) !== "");
-      assert.equal(await button(page), null, "no button while the finger is down");
+      assert.equal(await marks(page), "", "nothing is made while the finger is down");
       await hand.move(x, all[8].top + 4);
       const held = await painted(page);
       await hand.up(x, all[8].top + 4);
-      assert.equal(await painted(page), held, "lifting keeps what was painted");
-      const at = await button(page);
-      assert.ok(at, "the Highlight button shows");
-      assert.ok(at.top >= all[8].bottom - 1, `the button (${at.top}) sits under the last line (${all[8].bottom})`);
-      await page.touchscreen.tap(at.x + at.width / 2, at.y + at.height / 2);
       await until(async () => (await marks(page)) !== "");
       const norm = (t) => t.replace(/\s+/g, " ").trim();
       assert.equal(norm(await marks(page)).replace(/ /g, ""), norm(held).replace(/ /g, ""), "the mark is what was painted");
-      assert.equal(await button(page), null, "the button is gone");
+      await until(() => bubble(page));
       assert.equal(await boxes(page), 0, "the paint is gone");
       const selected = await page.evaluate(() => (document.getSelection()?.toString() ?? "") + (document.querySelector("book-reader").shadowRoot.getSelection?.()?.toString() ?? ""));
       assert.equal(selected, "", "nothing is left selected");
@@ -285,38 +290,32 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test(`a tap elsewhere or Escape drops a passage, and a new hold starts over, in ${engine.name}`, async () => {
+    test(`a tap elsewhere closes the bubble, keeps the highlight and turns no page, and a new hold starts over, in ${engine.name}`, async () => {
       const { page, problems, hand } = await open();
       const before = await footer(page);
       const all = await lines(page);
       const x = (all[3].left + all[3].right) / 2;
-      const hold = async (line, at = x) => {
-        await hand.down(at, line.top + 4);
-        await until(async () => (await button(page)) == null && (await painted(page)) !== "");
-      };
-      await hold(all[3]);
-      const first = await painted(page);
+      await hand.down(x, all[3].top + 4);
+      await until(async () => (await painted(page)) !== "");
       await hand.up(x, all[3].top + 4);
-      assert.ok(await button(page), "the button shows");
-      // A tap in the outer third would turn; here it only takes the passage back.
+      await until(() => bubble(page));
+      const first = await marks(page);
+      // A tap in the outer third would turn; here it only closes the bubble.
       const edge = (all[3].right + all[3].left) * 0.92;
       await hand.down(edge, all[10].top + 4);
       await hand.up(edge, all[10].top + 4);
-      assert.equal(await painted(page), "", "a tap elsewhere drops it");
-      assert.equal(await button(page), null);
-      assert.equal(await footer(page), before, "and turns no page");
-
-      await hold(all[3]);
-      await hand.up(x, all[3].top + 4);
+      await until(async () => !(await bubble(page)));
+      assert.equal(await marks(page), first, "the highlight stays");
+      assert.equal(await footer(page), before, "and no page turned");
       // The paragraphs repeat, so its own word is read at the line's start, not its middle.
-      await hold(all[12], all[12].left + 2);
-      assert.notEqual(await painted(page), first, "a new hold starts over at its own word");
-      assert.equal(await boxes(page), 1);
+      await hand.down(all[12].left + 2, all[12].top + 4);
+      await until(async () => (await painted(page)) !== "");
+      assert.equal(await boxes(page), 1, "a new hold starts over at its own word");
       await hand.up(all[12].left + 2, all[12].top + 4);
+      await until(() => bubble(page));
       await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".reader").focus());
       await page.keyboard.press("Escape");
-      assert.equal(await painted(page), "", "Escape drops it");
-      assert.equal(await button(page), null);
+      await until(async () => !(await bubble(page)));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

@@ -75,11 +75,11 @@ for (const engine of ENGINES) {
         return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       });
       await page.mouse.click(box.x, box.y);
-      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Add to note · Remove");
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Add to note · Comment · Remove");
       assert.match(await passages(page), /No passages/i, "the note holds no passage yet");
 
       await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble .add").click());
-      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Added (Already in this note) · Remove");
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Added (Already in this note) · Comment · Remove");
       await until(async () => /Chapter One/.test(await passages(page)));
       // The greyed button still takes a press and says why over the foot, for a finger.
       await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble .add").click());
@@ -88,7 +88,7 @@ for (const engine of ENGINES) {
 
       await page.evaluate(() => document.querySelector("undo-bar").shadowRoot.querySelector("button.undo").click());
       await until(async () => /No passages/i.test(await passages(page)));
-      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Add to note · Remove");
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Add to note · Comment · Remove");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await context.close();
@@ -115,7 +115,7 @@ for (const engine of ENGINES) {
       await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".reader").focus());
       await page.keyboard.press("a");
       await until(async () => /Chapter One/.test(await passages(page)));
-      assert.equal((await bubble(page)).join(" · "), "Copy · Copy link · Added (Already in this note) · Remove");
+      assert.equal((await bubble(page)).join(" · "), "Copy · Copy link · Added (Already in this note) · Comment · Remove");
       await page.keyboard.press("a");
       await until(async () => (await why(page)) === "Already in this note");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);

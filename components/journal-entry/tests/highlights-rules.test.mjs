@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, JOURNAL, marksOf, markAt, pastKey, wordAround, fingerPassage, pointOf, posOf, addToNote, highlightsOf, titleOf, sourceLink } from "../machine.js";
+import { machine, JOURNAL, marksOf, markAt, pastKey, wordAround, fingerPassage, movedEnd, pointOf, posOf, addToNote, highlightsOf, titleOf, sourceLink } from "../machine.js";
 
 // What the entry decides about highlights on an earlier day: where a place is in the text,
 // what a key does there, and what each gesture announces. What a press does on screen is
@@ -300,4 +300,51 @@ test("a link on one journal day to a highlight on another shows that day, since 
   assert.equal(of("passage.selected").length, 1);
   assert.equal(actor.getSnapshot().context.chapter, 1);
   assert.equal(actor.getSnapshot().context.glow.id, NOTE);
+});
+
+test("a handle moves its end, never past the other end, and an end never rests on a blank", () => {
+  const span = [DOC.indexOf("line"), DOC.indexOf("line") + 4];
+  assert.deepEqual(movedEnd(DOC, span, "end", DOC.indexOf("here") + 2), [span[0], DOC.indexOf("here") + 2]);
+  assert.deepEqual(movedEnd(DOC, span, "start", DOC.indexOf("First") + 1), [DOC.indexOf("First") + 1, span[1]]);
+  assert.deepEqual(movedEnd(DOC, span, "end", 0), [span[0], span[0] + 1], "the end stops one letter after the start");
+  assert.deepEqual(movedEnd(DOC, span, "start", DOC.length), [span[1] - 1, span[1]], "the start stops one letter before the end");
+  assert.deepEqual(movedEnd(DOC, span, "end", span[1] + 1), span, "a space after it is not taken");
+  assert.deepEqual(movedEnd(DOC, span, "start", span[0] - 1), span, "a space before it is not taken");
+});
+
+test("a move saves the same note with the new place and quote, its comment kept, one step, and to the same ends nothing", async () => {
+  const note = { ...FIRST, title: "Mine", body: "Mine", version: 2 };
+  const { actor, of } = await start({ notes: [note], read: { [NOTE]: note } });
+  const from = DOC.indexOf("First");
+  actor.send({ type: "_move", id: NOTE, from, to: from + 5 });
+  await new Promise((done) => setTimeout(done));
+  assert.deepEqual(of("note.saved"), [], "nothing moved");
+  actor.send({ type: "_move", id: NOTE, from: from + 1, to: from + 10 });
+  assert.equal(actor.getSnapshot().context.highlights[0].quote.exact, "irst line", "shown at once, before the save comes back");
+  await new Promise((done) => setTimeout(done));
+  const [saved] = of("note.saved");
+  valid(saved);
+  assert.equal(saved.id, NOTE);
+  assert.deepEqual([saved.title, saved.body, saved.baseVersion, saved.left], ["Mine", "Mine", 2, true]);
+  assert.deepEqual(saved.about[0].place.start, { block: 1, offset: 1 });
+  assert.deepEqual(saved.about[0].place.end, { block: 1, offset: 10 });
+  assert.equal(saved.about[0].place.chapter, 1, "the day's number stays");
+  assert.equal(saved.about[0].quote.exact, "irst line");
+  assert.equal(saved.about[0].chapter, "2026-10-11");
+  assert.deepEqual(of("note.discarded"), []);
+  assert.equal(actor.getSnapshot().context.reveal.id, NOTE);
+});
+
+test("a move over another highlight joins them into the earliest, both comments kept", async () => {
+  const one = { ...FIRST, title: "One", body: "One", version: 1 };
+  const two = highlight(OTHER, { block: 1, offset: 11 }, { block: 1, offset: 15 }, "here", { title: "Two", body: "Two", version: 1 });
+  const { actor, of } = await start({ notes: [one, two], read: { [NOTE]: one, [OTHER]: two } });
+  actor.send({ type: "_move", id: OTHER, from: DOC.indexOf("First") + 3, to: DOC.indexOf("here") + 4 });
+  await new Promise((done) => setTimeout(done));
+  const [saved] = of("note.saved");
+  assert.equal(saved.id, NOTE, "the earliest survives");
+  assert.equal(saved.body, "One\n\nTwo");
+  assert.equal(saved.about[0].quote.exact, "First line here");
+  assert.deepEqual(of("note.discarded").map((e) => e.id), [OTHER]);
+  assert.equal(actor.getSnapshot().context.reveal.id, NOTE);
 });

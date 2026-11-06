@@ -103,6 +103,9 @@ const refused = (page) =>
     return event.defaultPrevented;
   });
 
+// A highlight stays on the account and comes back with the pull, so each test has its own.
+let accounts = 0;
+
 for (const engine of ENGINES) {
   describe(`highlights on an earlier day in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
@@ -117,7 +120,8 @@ for (const engine of ENGINES) {
       test(name, async () => {
         const context = await browser.newContext(phone ? { hasTouch: true, viewport: { width: 390, height: 844 } } : {});
         context.setDefaultTimeout(4000);
-        await signedIn(context, forgeCookie("journal-highlights"));
+        accounts += 1;
+        await signedIn(context, forgeCookie(`journal-highlights-${accounts}`));
         try {
           const page = await context.newPage();
           const problems = watch(page);

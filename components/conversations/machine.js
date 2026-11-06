@@ -1138,7 +1138,8 @@ const leave = (context) => {
 // The user's highlights on the answers (highlights.edited carries the chat's whole
 // list). Only finished answers with text keep one; the answer being written has none yet.
 // Each is a step; a comment box left empty becomes a highlight of its passage under the
-// same id, and that is part of the step that took the comment away.
+// same id, and that is part of the step that took the comment away, and a highlight that
+// takes a comment leaves the list under the same id, part of the step that wrote the comment.
 const onHighlightsEdited = (context, event, enqueue, self) => {
   const chat = context.chats.get(event.conversationId);
   if (!chat) return;
@@ -1151,8 +1152,11 @@ const onHighlightsEdited = (context, event, enqueue, self) => {
   enqueue(() => fireSave(context, self, chat.id));
   enqueue.emit(changedPayload(context, chat));
   const added = list.filter((h) => !was.some((w) => w.id === h.id));
-  const joins = added.length === 1 && list.length === was.length + 1 && added[0].id === context.stretch?.mark;
-  answersStep(context, enqueue, chat, before, added.length ? "highlight a passage" : "remove a highlight", null, joins);
+  const gone = was.filter((w) => !list.some((h) => h.id === w.id));
+  const joins = (added.length === 1 && list.length === was.length + 1 && added[0].id === context.stretch?.mark) || (gone.length === 1 && list.length === was.length - 1 && gone[0].id === context.stretch?.mark);
+  // A handle moves a highlight's ends, and a move may join others: never a removal to announce.
+  const moved = list.some((h) => was.some((w) => w.id === h.id && JSON.stringify(w) !== JSON.stringify(h)));
+  answersStep(context, enqueue, chat, before, added.length ? "highlight a passage" : moved ? "move a highlight" : "remove a highlight", null, joins);
 };
 
 // What the user wrote on a chat's answers: the comments on the last one and the
@@ -1773,7 +1777,9 @@ export const machine = setup({
       "highlights on its answers, and a flip of a switch under What the chat may read are each " +
       "a step Undo and Redo reverse (section 12); typing in one comment is one step until the user leaves its box " +
       "(`marks.edited` with `left`), so typing in it again after coming back is another, and a " +
-      "comment box left empty becomes its highlight in the same step. A delete happens at once " +
+      "comment box left empty becomes its highlight in the same step, and a highlight that takes " +
+      "a comment becomes that comment in the same step; moving a highlight's end is a step, and " +
+      "joins any highlight it reaches in that step, with no notice. A delete happens at once " +
       "and asks for the short notice, and so does removing a comment or a highlight; the server keeps the chat, and a restore write brings it " +
       "back. A step is refused when that part of the chat was written since by anything else: " +
       "a generated title, a message that sent the comments, or another device. Sending a " +

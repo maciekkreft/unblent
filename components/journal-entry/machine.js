@@ -537,6 +537,20 @@ export const fingerPassage = (flat, [from, to], i) => {
   return [wordAround(flat, at)[0], to];
 };
 
+// Where a highlight's handle (12) leaves the passage [from, to), the pointer at position
+// `at` of the doc. The other end stays; this end stops one character short of it, so the two
+// never cross, and an end never rests on a blank, which is never part of a passage.
+export const movedEnd = (flat, [from, to], end, at) => {
+  if (end === "start") {
+    let a = Math.min(at, to - 1);
+    while (a < to - 1 && blank(flat[a])) a += 1;
+    return [a, to];
+  }
+  let b = Math.max(at, from + 1);
+  while (b > from + 1 && blank(flat[b - 1])) b -= 1;
+  return [from, b];
+};
+
 // What a key does on an earlier day with Vim keys on. Vim's edits would change the document
 // even in a read-only editor, so they stop here (`block`); Undo and Redo stay the global ones
 // (12, "Vim keys"), which Vim would swallow (`global`); the motions and v are Vim's own; the
@@ -608,6 +622,34 @@ const makeHighlight = enqueueActions(({ context, event, enqueue }) => {
   const involved = [...hit].sort((a, b) => (before(a.place.start, b.place.start) ? -1 : 1));
   const u = covering([range, ...involved.map((h) => rangeOf(h.place))]);
   enqueue.assign({ merge: { ids: involved.map((h) => h.id), place: placeOf(u), quote: quoteOf(texts, u), open: event.open === true } });
+  enqueue.stopChild("merging");
+  enqueue.spawnChild("readNotes", { id: "merging", input: { ask: context.ask, ids: involved.map((h) => h.id) } });
+});
+
+// A handle moved an end: the same read and save as a merge, with only this note when it
+// meets no other, so its id and comment stay and the save carries the new place and quote.
+// The old ends do not count, or an end could never come back. Adopted at once, so the mark
+// never shows its old ends after the finger lifts.
+const moveHighlight = enqueueActions(({ context, event, enqueue }) => {
+  const day = markable(context);
+  const self = day && context.highlights.find((h) => h.id === event.id && h.day === day.day);
+  if (!self) return;
+  const { doc } = parseBody(day.text);
+  const texts = doc.split("\n");
+  const range = snapToWords(texts, { start: pointOf(doc, event.from), end: pointOf(doc, event.to) }, { grow: false });
+  if (!range) return;
+  const was = rangeOf(self.place);
+  if (!before(range.start, was.start) && !before(was.start, range.start) && !before(range.end, was.end) && !before(was.end, range.end)) return;
+  const others = context.highlights.filter((h) => h.id !== self.id && h.day === day.day && overlaps(rangeOf(h.place), range));
+  const start = (h) => (h.id === self.id ? range.start : h.place.start);
+  const involved = [self, ...others].sort((a, b) => (before(start(a), start(b)) ? -1 : 1));
+  const u = covering([range, ...others.map((h) => rangeOf(h.place))]);
+  const place = { ...self.place, start: u.start, end: u.end };
+  const quote = quoteOf(texts, u);
+  enqueue.assign({
+    merge: { ids: involved.map((h) => h.id), place, quote, open: true },
+    highlights: context.highlights.map((h) => (h.id === self.id ? { ...h, place, quote } : h)),
+  });
   enqueue.stopChild("merging");
   enqueue.spawnChild("readNotes", { id: "merging", input: { ask: context.ask, ids: involved.map((h) => h.id) } });
 });
@@ -768,7 +810,15 @@ export const machine = setup({
       "on a selection made without Vim, makes a highlight and leaves the bubble closed; y on a " +
       "passage marked with v copies it and makes no highlight, with Copied shown for a moment. A " +
       "selection that touches another highlight merges with it, comments stacked; one wholly " +
-      "inside a highlight only opens that highlight's bubble. A highlight is painted in the " +
+      "inside a highlight only opens that highlight's bubble. While a bubble is open the " +
+      "highlight's two ends show handles drawn by the entry, a bar with a ball, for a finger and " +
+      "a mouse alike. Dragging one moves that end, letter by letter; the bubble fades during the " +
+      "drag, a pause changes nothing, the two ends cannot cross, and each move is one step that " +
+      "keeps the same note and comment and saves the new place and quote. Moving an end over " +
+      "another highlight merges them the same way, and a mouse's selection follows the moved " +
+      "highlight, so it can still be copied. A press on a handle never scrolls, selects, follows a " +
+      "link, starts a hold or closes the bubble; a tap elsewhere closes the bubble and the handles " +
+      "and keeps the highlight. A highlight is painted in the " +
       "marker color, with an accent line under it once it has a comment, and a press on it, or " +
       "Enter with the cursor inside it, opens its bubble: Copy, Copy link, Add to note while " +
       "Slip-Box is shown, greyed with its reason when it cannot be pressed, Remove with the short " +
@@ -1036,6 +1086,7 @@ export const machine = setup({
     // The note the Notes panel shows, which Add to note adds a passage to.
     "note.opened": { actions: assign({ opened: ({ event }) => event.id, openSeen: true }) },
     _highlight: { actions: makeHighlight },
+    _move: { actions: moveHighlight },
     _merged: { actions: finishMerge },
     // Add to note: the user's gesture, which notes records as one step (4.3, fifth rule; 12).
     _addToNote: {

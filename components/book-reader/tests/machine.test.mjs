@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, NOT_A_COMMAND_MS, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt, textObject, passageText, wordAround, fingerPassage, linesOf, charNear, lineBoxes } from "../machine.js";
+import { machine, NOT_A_COMMAND_MS, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt, textObject, passageText, wordAround, fingerPassage, movedEnd, linesOf, charNear, lineBoxes } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -1216,4 +1216,93 @@ test("a passage's boxes are one per line it touches", () => {
     { left: 0, right: 40, top: 60, bottom: 80 },
   ]);
   assert.deepEqual(lineBoxes(fingerLines, 4, 7), [{ left: 40, right: 70, top: 0, bottom: 20 }]);
+});
+
+// --- A highlight's handles (12) ---------------------------------------------------------
+
+test("a handle moves its end letter by letter, never past the other end, and an end never rests on a blank", () => {
+  const chapter = chapterText(["Hello there world", "Next block"]);
+  const at = (word) => chapter.flat.indexOf(word);
+  const span = [at("there"), at("there") + 5];
+  assert.deepEqual(movedEnd(chapter, span, "end", at("world") + 1), [at("there"), at("world") + 2], "the end takes the letter under the finger");
+  assert.deepEqual(movedEnd(chapter, span, "start", at("Hello") + 2), [at("Hello") + 2, span[1]]);
+  assert.deepEqual(movedEnd(chapter, span, "end", 0), [span[0], span[0] + 1], "the end stops on the start's letter");
+  assert.deepEqual(movedEnd(chapter, span, "start", chapter.flat.length - 1), [span[1] - 1, span[1]], "the start stops on the end's letter");
+  assert.deepEqual(movedEnd(chapter, span, "end", at("world") - 1), span, "on the space after there, there is the end");
+  assert.deepEqual(movedEnd(chapter, span, "start", at("there") - 1), span, "on the space before there, there is the start");
+  assert.deepEqual(movedEnd(chapter, span, "end", at("Next")), [span[0], at("Next") + 1], "an end crosses into the next block");
+});
+
+test("a move saves the same note with the new place and quote, its comment and other links kept, in one save", async () => {
+  const other = { kind: "note", id: "01ARZ3NDEKTSV4RRFFQ69G5X99" };
+  const { actor, saved, discarded } = await openMerge([fullNote("n1", P_HELLO, { title: "Mine", body: "Mine", version: 4, extra: [other] })]);
+  actor.send({ type: "_move", id: "n1", start: { block: 0, offset: 0 }, end: { block: 0, offset: 8 }, texts: HL_TEXTS });
+  assert.deepEqual(ctx(actor).highlights[0].place.end, { block: 0, offset: 8 }, "shown at once, before the save comes back");
+  await flush();
+  assert.equal(saved.length, 1);
+  const [s] = saved;
+  assert.equal(s.id, "n1", "the same note");
+  assert.equal(s.baseVersion, 4);
+  assert.equal(s.body, "Mine");
+  assert.equal(s.title, "Mine");
+  assert.equal(s.left, true, "one finished gesture, one step");
+  assert.deepEqual(s.about[0].place, { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 8 } });
+  assert.equal(s.about[0].quote.exact, "Hello th");
+  assert.ok(s.about.some((l) => l.id === other.id));
+  assert.deepEqual(discarded, []);
+  assert.equal(ctx(actor).reveal.id, "n1", "its bubble stays open");
+});
+
+test("a move can shrink a highlight, since its old ends do not count, and to the same ends saves nothing", async () => {
+  const { actor, saved } = await openMerge([fullNote("n1", P_HELLO, { version: 1 })]);
+  actor.send({ type: "_move", id: "n1", start: P_HELLO.start, end: P_HELLO.end, texts: HL_TEXTS });
+  await flush();
+  assert.deepEqual(saved, [], "nothing moved");
+  actor.send({ type: "_move", id: "n1", start: { block: 0, offset: 1 }, end: { block: 0, offset: 5 }, texts: HL_TEXTS });
+  await flush();
+  assert.deepEqual(saved[0].about[0].place.start, { block: 0, offset: 1 });
+});
+
+test("a move over another highlight joins them into the earliest, both comments kept, none overlapping", async () => {
+  const { actor, saved, discarded } = await openMerge([
+    fullNote("n1", P_HELLO, { title: "First", body: "First", version: 1 }),
+    fullNote("n2", P_WORLD, { title: "Second", body: "Second", version: 1 }),
+  ]);
+  // n2's start dragged back over n1.
+  actor.send({ type: "_move", id: "n2", start: { block: 0, offset: 3 }, end: P_WORLD.end, texts: HL_TEXTS });
+  await flush();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].id, "n1", "the earliest survives");
+  assert.equal(saved[0].body, "First\n\nSecond");
+  assert.deepEqual(saved[0].about[0].place.start, { block: 0, offset: 0 });
+  assert.deepEqual(saved[0].about[0].place.end, P_WORLD.end);
+  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n2" }]);
+  assert.equal(ctx(actor).reveal.id, "n1", "the survivor's bubble opens");
+});
+
+test("a finger's and a mouse's highlight opens its bubble, a keyboard's does not", async () => {
+  const { actor } = await openHL();
+  actor.send({ type: "_highlight", start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 }, exact: true, texts: HL_TEXTS });
+  assert.equal(ctx(actor).reveal, null);
+  actor.send({ type: "_highlight", start: { block: 0, offset: 6 }, end: { block: 0, offset: 11 }, exact: true, open: true, texts: HL_TEXTS });
+  assert.equal(ctx(actor).reveal.id, HL_ID);
+});
+
+test("the comment box saves the title and the body once, one step, and only what changed", async () => {
+  const { actor, saved } = await openMerge([fullNote("n1", P_HELLO, { version: 3 })]);
+  actor.send({ type: "_commentOpen", id: "n1" });
+  await flush();
+  assert.equal(ctx(actor).comment.body, "");
+  actor.send({ type: "_commentSave", body: "" });
+  assert.deepEqual(saved, [], "left empty, the highlight stays as it is");
+  actor.send({ type: "_commentSave", body: "\nWhy this?\nBecause." });
+  assert.equal(saved.length, 1);
+  assert.deepEqual([saved[0].id, saved[0].title, saved[0].body, saved[0].baseVersion, saved[0].left], ["n1", "Why this?", "\nWhy this?\nBecause.", 3, true]);
+  assert.equal("about" in saved[0], false, "the links stay as they are");
+  actor.send({ type: "_commentSave", body: "\nWhy this?\nBecause." });
+  assert.equal(saved.length, 1, "left as it was, nothing more");
+  actor.send({ type: "note.changed", id: "n1", title: "Why this?", version: 4, about: fullNote("n1", P_HELLO).about });
+  assert.equal(ctx(actor).comment.version, 4, "the next save is based on the newer version");
+  actor.send({ type: "_commentClose" });
+  assert.equal(ctx(actor).comment, null);
 });
