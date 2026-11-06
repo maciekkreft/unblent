@@ -2,7 +2,8 @@ import { setup, assign, enqueueActions, fromPromise } from "xstate";
 
 // The view component that shows the Wheels of Life of the journal day on the page (6.4). It
 // owns only UI state — the day shown, every wheel as the fact last announced it, the one
-// sheet open, which score a key or a click sets, and whether a change waits to be saved —
+// sheet open, which score a key or a click sets, which area's questions are open, and whether
+// a change waits to be saved —
 // and points at one fact: it asks wheels: list once, for every day, and follows wheel.changed
 // and wheel.deleted after (4.3, fourth rule), because the shown day's wheels and the wheel
 // Wanted carries over from are both read from that one list. The day comes from day.shown,
@@ -49,7 +50,9 @@ const held = (context, id) => context.wheels.find((w) => w.id === id);
 const same = (a, b) => a.every((v, i) => v === b[i]);
 const allNull = (scores) => scores.every((v) => v === null);
 
-const draftOf = (w) => ({ id: w.id, day: w.day, actual: [...w.actual], wanted: [...w.wanted], rated: false });
+// The answers ride along only to be shown: saved() below leaves them out, so a save keeps what
+// `wheels` holds.
+const draftOf = (w) => ({ id: w.id, day: w.day, actual: [...w.actual], wanted: [...w.wanted], answers: w.answers ?? [], rated: false });
 
 // The wheels of the shown day, oldest first.
 export const dayWheels = (context) => context.wheels.filter((w) => w.day === context.day);
@@ -171,17 +174,12 @@ const press = assign(({ context, event }) => ({
   dirty: true,
 }));
 
-const stepMode = (event) => (event.wanted ? "wanted" : "actual");
-const stepNext = (context, event) => stepped(context.draft[scoresKey(stepMode(event))][context.cursor], event.more);
+const stepNext = (context, event) => stepped(context.draft[scoresKey(context.mode)][context.cursor], event.more);
 
 const stepScore = assign(({ context, event }) => ({
-  draft: setScore(context.draft, stepMode(event), context.cursor, stepNext(context, event)),
-  mode: stepMode(event),
+  draft: setScore(context.draft, context.mode, context.cursor, stepNext(context, event)),
   dirty: true,
 }));
-
-// A key that reaches the end of the scale changes no score, but still switches the choice.
-const stepChoice = assign({ mode: ({ event }) => stepMode(event) });
 
 // The handlers that change a score: the same in both states of rating, except that only
 // idle starts the throttle. A throttle, not a debounce, so the targetless changes while it
@@ -192,14 +190,11 @@ const scoring = (next) => ({
     actions: press,
     ...next,
   },
-  _step: [
-    {
-      guard: ({ context, event }) => rating({ context }) && stepNext(context, event) !== context.draft[scoresKey(stepMode(event))][context.cursor],
-      actions: stepScore,
-      ...next,
-    },
-    { guard: rating, actions: stepChoice },
-  ],
+  _step: {
+    guard: ({ context, event }) => rating({ context }) && stepNext(context, event) !== context.draft[scoresKey(context.mode)][context.cursor],
+    actions: stepScore,
+    ...next,
+  },
 });
 
 // --- What the view draws ---------------------------------------------------------------
@@ -235,21 +230,121 @@ export function wantedLabel(context, wheel) {
   return `Wanted, from your wheel of ${dayName(from.day, context.day)}`;
 }
 
+// --- The questions -----------------------------------------------------------------------
+
+// The fixed keys of one area's answers, as wheel.saved and `wheels: list` hold them.
+export const QUESTIONS = ["one", "ten", "lower", "higher", "closer"];
+
+// What a 1 and a 10 could look like, one pair per area in AREAS' order: a faint start for
+// someone who has not said it yet.
+export const EXAMPLES = [
+  ["I feel unwell most days.", "I have energy for everything I want to do."],
+  ["I dread going in every morning.", "My work feels worth doing, and it suits me."],
+  ["I worry about paying for the basics.", "I cover what I need and rarely think about it."],
+  ["We hardly speak, or we mostly argue.", "We are close and enjoy our time together."],
+  ["I feel alone, even with someone beside me.", "I feel loved, and I show my love freely."],
+  ["I have no one to call.", "I have people I can call at any time."],
+  ["I feel stuck, and nothing new comes in.", "I keep learning, and I can see myself changing."],
+  ["I cannot remember when I last enjoyed myself.", "Something I enjoy fills part of most days."],
+];
+
+// Whether a question means anything at these scores. A question that does not apply keeps its
+// answer stored, and it comes back when the score lets it apply again.
+export function applies(question, actual, wanted) {
+  if (question === "one" || question === "ten") return true;
+  if (actual === null) return false;
+  if (question === "lower") return actual > 1;
+  if (question === "higher") return actual < 10;
+  return wanted !== null && actual < wanted;
+}
+
+export const wording = (question, actual) =>
+  ({
+    one: "What does a 1 look like for you?",
+    ten: "What does a 10 look like for you?",
+    lower: `What makes it a ${actual}, and not lower?`,
+    higher: "What keeps it from being higher?",
+    closer: "What would move it one point closer to Wanted?",
+  })[question];
+
+export const answerOf = (answers, area, question) => {
+  const text = answers?.[area]?.[question];
+  return typeof text === "string" ? text : "";
+};
+
+const hasText = (text) => text.trim() !== "";
+
+// The mark on an area's arrow: an answer to a question that applies now.
+export const hasAnswer = ({ actual, wanted, answers }, area) =>
+  QUESTIONS.some((q) => applies(q, actual[area], wanted[area]) && hasText(answerOf(answers, area, q)));
+
+// Whether an area's scale still says what the wheel before it said, so the note can name that
+// wheel. One that said nothing has nothing to name.
+const scaleFrom = (from, draft, area) => {
+  if (!from) return false;
+  const scale = ["one", "ten"];
+  return (
+    scale.some((q) => hasText(answerOf(from.answers, area, q))) &&
+    scale.every((q) => answerOf(from.answers, area, q) === answerOf(draft.answers, area, q))
+  );
+};
+
+// What the panel shows for the area under the cursor. Where the day can be written every
+// question that applies is listed; an earlier day lists only what was written.
+export function panelOf(context, draft) {
+  const area = context.cursor;
+  const name = AREAS[area];
+  const actual = draft.actual[area];
+  const wanted = draft.wanted[area];
+  const write = writable(context);
+  const item = (question) => ({
+    question,
+    text: wording(question, actual),
+    value: answerOf(draft.answers, area, question),
+    hint: question === "one" ? EXAMPLES[area][0] : question === "ten" ? EXAMPLES[area][1] : "",
+  });
+  const items = (questions) =>
+    questions
+      .filter((q) => applies(q, actual, wanted))
+      .map(item)
+      .filter((x) => write || hasText(x.value));
+  const from = carriedFrom(context, draft.day);
+  const scaleNote = scaleFrom(from, draft, area)
+    ? `From your wheel of ${dayName(from.day, context.day)}. A change here carries to your next wheel.`
+    : "Carries to your next wheel.";
+  const scoreNote = actual === null ? `Give ${name} an Actual score to answer these.` : "For this wheel only.";
+  const groups = [
+    { title: "The scale", note: write ? scaleNote : null, items: items(["one", "ten"]) },
+    { title: "Your score", note: write ? scoreNote : null, items: items(["lower", "higher", "closer"]) },
+  ].filter((g) => write || g.items.length);
+  return {
+    name,
+    score: scoreLine(actual, wanted),
+    label: `Questions about ${name}`,
+    groups,
+    emptyLine: groups.length ? null : `Nothing written about ${name} on this day.`,
+  };
+}
+
+export const panelHint = (context) =>
+  writable(context) ? "Press an area’s arrow to write about it." : "Press an area’s arrow to read what you wrote.";
+
 // --- Keys --------------------------------------------------------------------------------
 
 const plain = (e) => !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing;
 
-// The keys of an open sheet that can be written (12, "Vim keys"): the arrows always, with
-// Shift for Wanted, and with Vim keys on j, k, gg, G, h and l, with Shift+H and Shift+L for
-// Wanted. `afterG` is whether a g was pressed just before, which makes this g the second of
-// gg; "g" alone waits for its second press.
+// The keys of an open sheet that can be written (12, "Vim keys"): the arrows always, and with
+// Vim keys on j, k, gg, G, h and l. A plain left or right changes the score of the chosen tab,
+// and with Shift, or Vim's Shift+H and Shift+L, it chooses the tab and changes no score, so a
+// key never moves the user off the tab they chose. `afterG` is whether a g was pressed just
+// before, which makes this g the second of gg; "g" alone waits for its second press.
 export function sheetKey(e, vimKeys, afterG = false) {
   if (!plain(e)) return null;
   const arrow = {
     ArrowDown: { move: "down" },
     ArrowUp: { move: "up" },
-    ArrowRight: { step: true, more: true, wanted: e.shiftKey },
-    ArrowLeft: { step: true, more: false, wanted: e.shiftKey },
+    ArrowRight: e.shiftKey ? { choose: "wanted" } : { step: true, more: true },
+    ArrowLeft: e.shiftKey ? { choose: "actual" } : { step: true, more: false },
   }[e.key];
   if (arrow || !vimKeys) return arrow ?? null;
   if (e.key === "g") return afterG ? { move: "first" } : { wait: true };
@@ -258,23 +353,36 @@ export function sheetKey(e, vimKeys, afterG = false) {
       j: { move: "down" },
       k: { move: "up" },
       G: { move: "last" },
-      l: { step: true, more: true, wanted: false },
-      h: { step: true, more: false, wanted: false },
-      L: { step: true, more: true, wanted: true },
-      H: { step: true, more: false, wanted: true },
+      l: { step: true, more: true },
+      h: { step: true, more: false },
+      L: { choose: "wanted" },
+      H: { choose: "actual" },
     }[e.key] ?? null
   );
 }
 
-// The area a move lands on, or "leave" past either end, where the key goes on to the next
-// row of the list or, with none, is left to the page around (journal-entry moves on from there).
-export function areaTarget(move, at) {
-  const to = { down: at + 1, up: at - 1, first: 0, last: LAST_AREA }[move];
-  return isArea(to) ? to : "leave";
+// Where a move lands inside an open sheet, or "leave" past either end, where the key goes on
+// to the next row of the list or, with none, is left to the page around (journal-entry moves
+// on from there). `on` is what holds the keyboard: "tabs", "area", "close", or "button" for
+// Delete and Done, which Tab reaches and up or down leave for the area the keys act on. The
+// path runs from the tabs through the areas where the sheet can be written, and on an earlier
+// day, with no tabs, through the areas to Close (12, "Vim keys").
+export function sheetTarget(move, on, cursor, write) {
+  if (move === "first") return 0;
+  if (move === "last") return LAST_AREA;
+  const down = move === "down";
+  if (on === "tabs") return down ? 0 : "leave";
+  if (on === "close") return down ? "leave" : cursor;
+  if (on === "button") return cursor;
+  const to = cursor + (down ? 1 : -1);
+  if (isArea(to)) return to;
+  if (down) return write ? "leave" : "close";
+  return write ? "tabs" : "leave";
 }
 
 // The keys between the cards, and on a sheet only read: the arrows always, and with Vim keys
-// on j, k, gg and G. Enter needs nothing here: a card and Close are buttons.
+// on j, k, gg and G. Enter needs nothing here: a card and Close are buttons, and an area takes
+// it before this.
 export function rowKey(e, vimKeys, afterG = false) {
   if (!plain(e)) return null;
   const arrow = { ArrowDown: { move: "down" }, ArrowUp: { move: "up" } }[e.key];
@@ -316,34 +424,54 @@ export const machine = setup({
     description:
       "Shows the Wheels of Life of the journal day on the page, under the day's text, in a section " +
       "headed Wheel of Life; a day with none, and none being rated, shows nothing and takes no " +
-      "room. Open, a sheet holds an Actual | Wanted choice that decides what a click sets, " +
+      "room. Open, a sheet holds Actual and Wanted tabs that decide what a click or a key sets, " +
       "the wheel, and eight rows of ten squares, one row per area. On the wheel the filled part " +
-      "is Actual and the dark line is Wanted; in the rows the filled squares are Actual and the " +
-      "dark outlined square is Wanted. A small key says so. A new wheel starts with Actual empty " +
-      "and Wanted taken from the previous wheel, as it stood, and the key names that wheel's day " +
-      "until a Wanted score is changed; the first wheel starts with both empty. The add command " +
-      "opens a new wheel on a day that can be written, with the keyboard on the first area, or " +
-      "the wheel the day already has; nothing is saved until a score changes. Clicking the " +
-      "current score clears it. The arrow keys move and set a score, with Shift for Wanted, and " +
-      "with Vim keys on so do j, k, gg, G, h and l, with Shift+H and Shift+L for Wanted; a key " +
-      "that sets a score also switches the Actual | Wanted choice to match. These keys also work " +
-      "with the keyboard on a button of the sheet, and up or down from a button first goes to " +
-      "the area the keys act on. Tab goes from Actual to Wanted, to that area, and to the " +
-      "buttons; the squares take no Tab, so a sheet is not eighty stops long. Done, Escape or " +
-      "Enter on an area folds the sheet into a " +
-      "card with a small wheel and, per area, its Actual, its Wanted and the gap between them; " +
-      "the gap is empty when the scores match or one is missing. Pressing the card opens it " +
-      "again, with Actual chosen. One sheet is open at a time: opening another card folds the " +
-      "first. Delete takes the wheel away with the short notice whose Undo shows it again; a wheel " +
-      "left untouched, with no Actual and Wanted as carried over, is not kept and shows no notice, " +
-      "and one emptied while rating is deleted only when the sheet folds, so a score can be " +
-      "cleared and set again. After a key, a wheel that goes this way puts the keyboard on the + " +
-      "Add sheet row; after a press nothing moves. Past the first area or the last, j and k go " +
-      "on to the card next to the sheet or the page around. A wheel is written exactly while the day's own text is, as " +
-      "the journal page says: until 2:00 the next night, when an open sheet becomes read only; " +
-      "an earlier day is read only, with Close. A narrow page, such as a phone, stacks the " +
-      "wheel above the rows, with larger targets; narrower still, each area's name and score stand " +
-      "above its squares. On a wide stage the sheet and the card stop at a form's width.",
+      "is Actual and the dark line is Wanted, and the part of the area the keys act on is lit; in " +
+      "the rows the filled squares are Actual and the dark outlined square is Wanted. A small key " +
+      "says so. A new wheel starts with Actual empty and Wanted taken from the previous wheel, as " +
+      "it stood, and the key names that wheel's day until a Wanted score is changed; the first " +
+      "wheel starts with both empty. The add command opens a new wheel on a day that can be " +
+      "written, with the keyboard on the first area, or the wheel the day already has; nothing is " +
+      "saved until a score changes. Clicking the current score clears it. " +
+      "Each area's name has an arrow, one button with the name, that opens one panel of questions " +
+      "about that area: The scale (what a 1 and a 10 look like) and Your score (what makes it this " +
+      "number and not lower, what keeps it from being higher, what would move it one point closer " +
+      "to Wanted). The panel starts closed whenever a sheet opens, pressing the open area closes " +
+      "it, and while it is open it follows the area the keys act on. At a score of 1 the not lower " +
+      "question is hidden, at 10 the higher one, and with Actual at or above Wanted, or no Wanted, " +
+      "the closer one; with no Actual the Your score group says to give one first. A hidden answer " +
+      "stays stored and comes back when its question applies again. An area with an answer to a " +
+      "question that applies shows its arrow white on a filled accent circle. Answers are shown " +
+      "as text. An earlier day's panel lists only what was written, and says so when nothing was. " +
+      "The up and down arrows, and with Vim keys on j, k, gg and G, move along the keyboard path: " +
+      "the tabs are its first row, above the first area. On the tabs left and right, or h and l, " +
+      "switch the tab. On an area they change the score of the chosen tab, and from any area " +
+      "Shift+Left or Shift+H chooses Actual and Shift+Right or Shift+L chooses Wanted, changing no " +
+      "score. These keys also work with the keyboard on Delete or Done, and up or down from one " +
+      "first goes to the area the keys act on. Enter on an area opens its panel. Escape closes the " +
+      "panel first, then folds the sheet; Done folds it too. Tab goes from Actual to Wanted, to " +
+      "that area, and to the buttons; the squares and the arrows take no Tab, so a sheet is not " +
+      "eighty stops long. Folded, a sheet is a card with a small wheel and, per area, its Actual, " +
+      "its Wanted and the gap between them; the gap is empty when the scores match or one is " +
+      "missing. Pressing the card opens it again, with Actual chosen. One sheet is open at a time: " +
+      "opening another card folds the first. Delete takes the wheel away with the short notice " +
+      "whose Undo shows it again; a wheel left untouched, with no Actual and Wanted as carried " +
+      "over, is not kept and shows no notice, and one emptied while rating is deleted only when " +
+      "the sheet folds, so a score can be cleared and set again. After a key, a wheel that goes " +
+      "this way puts the keyboard on the + Add sheet row; after a press nothing moves. Past the " +
+      "tabs and past the last area, j and k go on to the card next to the sheet or the page around, " +
+      "and coming back they land on the tabs from above and on the last area from below. A wheel " +
+      "is written exactly while the day's own text is, as the journal page says: until 2:00 the " +
+      "next night, when an open sheet becomes read only; an earlier day is read only, with no tabs " +
+      "and with Close, its areas taking j, k, gg, G and Enter, with Close after the last. The sheet " +
+      "and the card fill the page. On a wide page the wheel and the rows stay at a fixed size on " +
+      "the left, so the squares do not stretch, with the panel on the right, its two groups side " +
+      "by side, or a muted line saying to press an arrow while it is closed, and the card's scores " +
+      "stand in four columns. On a normal page the panel stands below the wheel and the rows, its " +
+      "groups side by side when there is room. A " +
+      "narrow page, such as a phone, stacks the wheel above the rows, with larger targets, and the " +
+      "panel opens directly under its row, which stays in view when moving; narrower still, each " +
+      "area's name and score stand above its squares.",
     kind: "view",
     emits: ["wheel.saved"],
     asks: ["wheels: list", "settings: read"],
@@ -365,9 +493,11 @@ export const machine = setup({
     // opening has saved anything; null when none is open.
     draft: null,
     dirty: false,
-    // Which score a click sets, and the area the keys act on.
+    // Which score a click or a key sets, the area the keys act on, and whether that area's
+    // questions are open. Every opening of a sheet starts with them closed.
     mode: "actual",
     cursor: 0,
+    panel: false,
     // Counts each add, so the view knows to give the sheet the keyboard: a command has no
     // reply, and the view is not who sent it.
     landing: 0,
@@ -436,24 +566,35 @@ export const machine = setup({
           actions: assign(({ context }) => {
             const kept = dayWheels(context).at(-1);
             const carried = carriedFrom(context, context.day);
-            const fresh = () => ({ id: context.mint(), day: context.day, actual: [...NONE], wanted: [...(carried?.wanted ?? NONE)], rated: false });
+            const fresh = () => ({ id: context.mint(), day: context.day, actual: [...NONE], wanted: [...(carried?.wanted ?? NONE)], answers: [], rated: false });
             return {
               draft: context.draft ?? (kept ? draftOf(kept) : fresh()),
               mode: "actual",
               cursor: 0,
+              panel: false,
               landing: context.landing + 1,
             };
           }),
         },
         _open: {
           guard: ({ context, event }) => Boolean(held(context, event.id)) && context.draft?.id !== event.id,
-          actions: [settle, assign(({ context, event }) => ({ draft: draftOf(held(context, event.id)), mode: "actual", cursor: 0 }))],
+          actions: [settle, assign(({ context, event }) => ({ draft: draftOf(held(context, event.id)), mode: "actual", cursor: 0, panel: false }))],
         },
         _mode: {
           guard: ({ context, event }) => rating({ context }) && (event.mode === "actual" || event.mode === "wanted"),
           actions: assign({ mode: ({ event }) => event.mode }),
         },
         _cursor: { guard: ({ event }) => isArea(event.to), actions: assign({ cursor: ({ event }) => event.to }) },
+        _toggle: {
+          guard: ({ context, event }) => Boolean(context.draft) && isArea(event.area),
+          actions: assign(({ context, event }) => (context.panel && context.cursor === event.area ? { panel: false } : { panel: true, cursor: event.area })),
+        },
+        _enter: { guard: ({ context }) => Boolean(context.draft), actions: assign({ panel: true }) },
+        // Escape takes one step back at a time: the panel first, then the sheet.
+        _escape: [
+          { guard: ({ context }) => Boolean(context.draft) && context.panel, actions: assign({ panel: false }) },
+          { guard: ({ context }) => Boolean(context.draft), actions: settle },
+        ],
         _done: { guard: ({ context }) => Boolean(context.draft), actions: settle },
         _delete: { guard: rating, actions: discard },
         "wheel.changed": { actions: follow },

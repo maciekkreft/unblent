@@ -1,7 +1,8 @@
 import { LitElement, html, svg, css, nothing } from "lit";
 import { mount, unmount, ask, send } from "bus";
 import { ulid } from "ulid";
-import { machine, AREAS, writable, dayWheels, summaryOf, scoreLine, wheelLabel, caption, wantedLabel, sheetKey, rowKey, areaTarget } from "./machine.js";
+import { icon } from "icons";
+import { machine, AREAS, writable, dayWheels, summaryOf, scoreLine, wheelLabel, caption, wantedLabel, sheetKey, sheetTarget, rowKey, hasAnswer, panelOf, panelHint } from "./machine.js";
 import saved from "./events/wheel.saved.json" with { type: "json" };
 import add from "./commands/add.json" with { type: "json" };
 
@@ -131,14 +132,11 @@ class WheelSheet extends LitElement {
       flex-direction: column;
       gap: var(--space-sm);
     }
-    /* A sheet and its card have a fixed shape, so on a wide stage they stop at a form's width:
-       past it a square would stretch into a long bar, and a score would stand far from its name. */
     .card {
       display: flex;
       align-items: center;
       gap: var(--space-md);
       width: 100%;
-      max-width: var(--width-form);
       box-sizing: border-box;
       text-align: left;
       padding: var(--space-sm) var(--space-md);
@@ -156,11 +154,13 @@ class WheelSheet extends LitElement {
       width: calc(var(--space-2xl) + var(--space-lg));
       height: calc(var(--space-2xl) + var(--space-lg));
     }
+    /* The columns stop growing, so a score never stands far from its name on a wide card. */
     .sum {
       flex: 1;
       min-width: 0;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(2, minmax(0, calc(var(--space-2xl) * 2 + var(--space-lg))));
+      justify-content: start;
       gap: 0 var(--space-md);
       font-size: var(--text-sm);
     }
@@ -185,7 +185,6 @@ class WheelSheet extends LitElement {
       display: flex;
       flex-direction: column;
       gap: var(--space-sm);
-      max-width: var(--width-form);
       box-sizing: border-box;
       padding: var(--space-md);
       border: var(--border-width) solid var(--color-border-strong);
@@ -216,13 +215,34 @@ class WheelSheet extends LitElement {
       font-size: var(--text-caption);
       color: var(--color-body-mid);
     }
-    .rate {
-      display: flex;
-      gap: var(--space-md);
-      align-items: flex-start;
+    /* One grid for the normal and the wide page. The wheel and the rows stay at a form's width
+       so a square never stretches into a long bar, the third track takes what is left, and the
+       rows and the one panel are placed in it through .rows' display: contents. One panel element
+       serves every layout and every area, so a resize or a move never rebuilds what it holds. */
+    .wbody {
+      display: grid;
+      grid-template-columns:
+        calc(var(--space-2xl) * 2 + var(--space-xl) + var(--space-xs) + var(--space-md))
+        minmax(0, calc(var(--width-form) - var(--space-md) * 3 - var(--border-width) * 2 - var(--space-2xl) * 2 - var(--space-xl) - var(--space-xs)))
+        minmax(0, 1fr);
+      grid-template-rows: auto auto repeat(8, auto) auto;
+    }
+    .modes {
+      grid-column: 1 / 3;
+      grid-row: 1;
+      margin-bottom: var(--space-sm);
+    }
+    .say {
+      grid-column: 1 / 3;
+      grid-row: 2;
+      margin-bottom: var(--space-sm);
+    }
+    .rows {
+      display: contents;
     }
     .wheel {
-      flex: none;
+      grid-column: 1;
+      grid-row: 3 / span 8;
       display: block;
       width: calc(var(--space-2xl) * 2 + var(--space-xl) + var(--space-xs));
       height: calc(var(--space-2xl) * 2 + var(--space-xl) + var(--space-xs));
@@ -250,6 +270,16 @@ class WheelSheet extends LitElement {
     .w-cell.ro.on:hover {
       fill: var(--color-accent);
     }
+    .w-cell.ro.cur,
+    .w-cell.ro.cur:hover {
+      fill: var(--color-surface-active);
+    }
+    .w-cell.on.cur,
+    .w-cell.on.cur:hover,
+    .w-cell.ro.on.cur,
+    .w-cell.ro.on.cur:hover {
+      fill: var(--color-accent-hover);
+    }
     .w-last {
       fill: none;
       stroke: var(--color-ink);
@@ -257,15 +287,10 @@ class WheelSheet extends LitElement {
       stroke-linecap: round;
       pointer-events: none;
     }
-    .rows {
-      flex: 1;
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-    }
     .area {
+      grid-column: 2;
       display: grid;
-      grid-template-columns: calc(var(--space-xl) + var(--space-md) - var(--space-2xs)) minmax(0, 1fr) calc(var(--space-xl) - var(--space-xs));
+      grid-template-columns: calc(var(--space-xl) + var(--space-md) * 2 + var(--space-2xs)) minmax(0, 1fr) calc(var(--space-xl) - var(--space-xs));
       gap: var(--space-xs);
       align-items: center;
       padding: var(--space-2xs) var(--space-xs);
@@ -281,6 +306,41 @@ class WheelSheet extends LitElement {
     }
     .area:focus-visible {
       box-shadow: var(--focus-ring);
+    }
+    .opener {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      text-align: left;
+    }
+    .arrow {
+      flex: none;
+      display: inline-grid;
+      place-items: center;
+      width: var(--space-md);
+      height: var(--space-md);
+      border-radius: var(--radius-full);
+      font-size: calc(var(--space-md) - var(--space-xs));
+      color: var(--color-body-mid);
+    }
+    .arrow svg {
+      display: block;
+    }
+    .opener:hover .arrow {
+      background: var(--color-surface-active);
+      color: var(--color-ink);
+    }
+    .arrow.open svg {
+      transform: rotate(90deg);
+    }
+    .arrow.marked,
+    .opener:hover .arrow.marked {
+      background: var(--color-accent);
+      color: var(--color-accent-text);
     }
     .scale {
       display: grid;
@@ -308,6 +368,67 @@ class WheelSheet extends LitElement {
       text-align: right;
       font-size: var(--text-caption);
       font-weight: var(--weight-semibold);
+    }
+    .qs {
+      grid-column: 1 / -1;
+      grid-row: 11;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-md);
+      min-width: 0;
+      margin-top: var(--space-md);
+      padding-top: var(--space-md);
+      border-top: var(--border-width) solid var(--color-border);
+    }
+    .q-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: var(--space-sm);
+      font-size: var(--text-body);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+    }
+    .q-groups {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-md);
+    }
+    .q-group {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      min-width: 0;
+    }
+    .q-group h4 {
+      margin: 0;
+      font-size: var(--text-caption);
+      font-weight: var(--weight-semibold);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--color-body-mid);
+    }
+    .q {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs);
+    }
+    .q-text {
+      font-size: var(--text-sm);
+      color: var(--color-ink);
+    }
+    .q-read {
+      padding: 0 var(--space-sm);
+      font-size: var(--text-sm);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: var(--color-body);
+    }
+    .q-read.example {
+      color: var(--color-body-mid);
+    }
+    .q-hint {
+      display: none;
     }
     /* The key's long line breaks beside the buttons rather than pushing them to a row of their
        own, so the first change to a Wanted score, which shortens it, barely moves them. */
@@ -366,13 +487,68 @@ class WheelSheet extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-body-mid);
     }
+    /* A panel this wide reads better with its two groups side by side, and needs less scrolling
+       to reach below the wheel. */
+    @container (width >= 40rem) {
+      .q-groups {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: start;
+        gap: var(--space-lg);
+      }
+    }
+    /* A wide page has room for the panel beside the wheel and the rows: from this width each
+       group is wide enough for its boxes. The last row track is flexible so a tall panel does not
+       spread the rows. */
+    @container (width >= 60rem) {
+      .wbody {
+        grid-template-rows: auto auto repeat(8, auto) minmax(0, 1fr);
+      }
+      .qs,
+      .q-hint {
+        grid-column: 3;
+        grid-row: 1 / -1;
+        margin: 0 0 0 var(--space-lg);
+        padding: 0 0 0 var(--space-lg);
+        border-top: 0;
+        border-left: var(--border-width) solid var(--color-border);
+      }
+      .q-hint {
+        display: block;
+      }
+      .sum {
+        grid-template-columns: repeat(4, calc(var(--space-2xl) * 2 + var(--space-lg)));
+        gap: 0 var(--space-lg);
+      }
+    }
     /* A narrow page (a phone, or a narrow stage): the wheel stands above the rows, and the
        targets are large enough for a finger. Below this width, beside the wheel, a square
-       would be too narrow to press. */
+       would be too narrow to press. The panel opens under its row, through its order. */
     @container (width < 28rem) {
-      .rate {
+      .wbody {
+        display: flex;
         flex-direction: column;
-        align-items: stretch;
+        gap: var(--space-sm);
+      }
+      .modes,
+      .say {
+        margin-bottom: 0;
+      }
+      .rows {
+        display: flex;
+        flex-direction: column;
+      }
+      .opener {
+        min-height: var(--space-xl);
+      }
+      .qs {
+        margin: 0;
+        padding: var(--space-sm) var(--space-xs) var(--space-md);
+        border-top: 0;
+        border-bottom: var(--border-width) solid var(--color-border);
+      }
+      .q-title {
+        display: none;
       }
       .wheel {
         align-self: center;
@@ -426,6 +602,11 @@ class WheelSheet extends LitElement {
   #focusNext = null;
   // The last add the keyboard was given for.
   #landed = 0;
+  // What the last render showed of the panel, so a move or an opening can keep things in view,
+  // and whether this change came from the wheel, where a scroll would take away what was pressed.
+  #shownPanel = false;
+  #shownCursor = 0;
+  #fromWheel = false;
   // Whether the keyboard was inside before this render, and whether the last thing the user
   // did here was a press: after a press nothing moves, as a keyboard moved onto text would come
   // up on a phone.
@@ -458,8 +639,23 @@ class WheelSheet extends LitElement {
       this.renderRoot.querySelector(this.#focusNext)?.focus();
       this.#focusNext = null;
     }
+    if (context) this.#keepInView(context);
     // What held the keyboard went (a wheel not kept, a delete, an Undo).
     if (this.#holding && !this.#byPress && !this.matches(":focus-within")) this.#actor.send({ type: "_handBack" });
+  }
+
+  // Moving with the panel open under a row shifts the rows after the focus has scrolled, so the
+  // row is brought back in view here; an opening shows the panel, with the row kept in view if
+  // the panel is too tall for both.
+  #keepInView({ draft, panel, cursor }) {
+    const open = Boolean(draft) && panel;
+    const opened = open && !this.#shownPanel;
+    const moved = open && !opened && cursor !== this.#shownCursor;
+    if (opened) this.renderRoot.querySelector(".qs")?.scrollIntoView({ block: "nearest" });
+    if (opened || (moved && !this.#fromWheel)) this.renderRoot.querySelector(".area.cur")?.scrollIntoView({ block: "nearest" });
+    this.#shownPanel = open;
+    this.#shownCursor = cursor;
+    this.#fromWheel = false;
   }
 
   // Focused by any way, an area is the one the keys act on.
@@ -468,12 +664,22 @@ class WheelSheet extends LitElement {
     this.renderRoot.querySelector(`.area[data-i="${i}"]`)?.focus(options);
   }
 
-  // A card takes the keyboard itself; an open sheet on its first area (its last, coming from
-  // below), or on Close when it can only be read.
+  // Where a move inside the sheet landed (sheetTarget).
+  #focusPlace(place) {
+    if (typeof place === "number") return this.#focusArea(place);
+    this.renderRoot.querySelector(place === "tabs" ? ".modes button.on" : ".close")?.focus();
+  }
+
+  // A card takes the keyboard itself; an open sheet at the end of its path it is entered from:
+  // the first row from above, the last from below, so each way out has its way back.
   #focusRow(row, edge) {
     if (!row.classList.contains("sheet")) return row.focus();
-    if (row.classList.contains("read")) return row.querySelector(".close")?.focus();
-    this.#focusArea(edge === "last" ? AREAS.length - 1 : 0);
+    const read = row.classList.contains("read");
+    if (edge === "last") {
+      this.#actor.send({ type: "_cursor", to: AREAS.length - 1 });
+      return this.#focusPlace(read ? "close" : AREAS.length - 1);
+    }
+    this.#focusPlace(read ? 0 : "tabs");
   }
 
   // journal-entry hands the keyboard by the host: the first row, or the last when it comes from
@@ -500,10 +706,14 @@ class WheelSheet extends LitElement {
       event.preventDefault();
       event.stopPropagation();
     };
-    // Enter on a button is the button's.
-    if (onSheet && (event.key === "Escape" || (event.key === "Enter" && onArea))) {
+    if (onSheet && event.key === "Escape") {
       take();
-      return this.#done();
+      return this.#escape();
+    }
+    // Enter on a button is the button's.
+    if (onSheet && event.key === "Enter" && onArea) {
+      take();
+      return this.#actor.send({ type: "_enter" });
     }
     const write = onSheet && writable(context);
     const afterG = event.key === "g" && Date.now() - this.#gAt < 1000;
@@ -511,19 +721,25 @@ class WheelSheet extends LitElement {
     this.#gAt = key?.wait ? Date.now() : 0;
     if (!key) return;
     if (key.wait) return event.preventDefault();
+    const onTabs = target.parentElement?.classList.contains("modes") === true;
+    // On the tabs left and right switch them, and the keyboard goes with the choice.
+    if (key.choose || (key.step && onTabs)) {
+      take();
+      const mode = key.choose ?? (key.more ? "wanted" : "actual");
+      return this.#send({ type: "_mode", mode }, onTabs ? `.modes button[data-mode="${mode}"]` : null);
+    }
     if (key.step) {
       take();
-      this.#actor.send({ type: "_step", more: key.more, wanted: key.wanted });
+      this.#actor.send({ type: "_step", more: key.more });
       return this.#focusArea(this.#actor.snapshot.context.cursor);
     }
     const { move } = key;
-    if (write) {
-      // From a button of the sheet, up or down first goes to the area the keys act on.
-      const stepping = move === "up" || move === "down";
-      const to = !onArea && stepping ? context.cursor : areaTarget(move, context.cursor);
+    if (onSheet) {
+      const on = onArea ? "area" : onTabs ? "tabs" : target.classList?.contains("close") ? "close" : "button";
+      const to = sheetTarget(move, on, context.cursor, write);
       if (to !== "leave") {
         take();
-        return this.#focusArea(to);
+        return this.#focusPlace(to);
       }
     }
     // Past either end the key is not used here, so it bubbles on to the page around.
@@ -536,6 +752,12 @@ class WheelSheet extends LitElement {
   #press = () => {
     this.#byPress = true;
   };
+
+  // The sheet folds only once the panel is closed; then the keyboard goes to the card.
+  #escape() {
+    const { draft, panel } = this.#actor.snapshot.context;
+    this.#send({ type: "_escape" }, panel ? null : `.card[data-id="${draft.id}"]`);
+  }
 
   #done() {
     const id = this.#actor.snapshot.context.draft?.id;
@@ -550,10 +772,8 @@ class WheelSheet extends LitElement {
     this.#send({ type: "_delete" }, next ? `[data-id="${next.dataset.id}"]` : null);
   }
 
-  // An earlier day's sheet takes no score, so it opens with the keyboard on Close.
   #open(id) {
-    const write = writable(this.#actor.snapshot.context);
-    this.#send({ type: "_open", id }, write ? '.area[data-i="0"]' : ".sheet .close");
+    this.#send({ type: "_open", id }, '.area[data-i="0"]');
   }
 
   // A press sets the score and leaves the keyboard on that area, without scrolling to it: on a
@@ -562,6 +782,17 @@ class WheelSheet extends LitElement {
     this.#actor.send({ type: "_press", area, value });
     this.#focusArea(area, { preventScroll: true });
   };
+
+  #pickOnWheel = (area, value) => {
+    this.#fromWheel = true;
+    this.#pick(area, value);
+  };
+
+  // A press leaves the keyboard on that area, as a press on a square does.
+  #toggle(area) {
+    this.#actor.send({ type: "_toggle", area });
+    this.#focusArea(area, { preventScroll: true });
+  }
 
   #card(w) {
     return html`<button type="button" class="card" data-id=${w.id} aria-label="Wheel of Life, press to open" @click=${() => this.#open(w.id)}>
@@ -574,16 +805,26 @@ class WheelSheet extends LitElement {
     </button>`;
   }
 
+  // The arrow and the name are one button. It takes no Tab, as the squares take none: Enter on
+  // the area does the same. Every area and the panel stand in one list, ordered so that a narrow
+  // page shows the panel under its row (the order) and the grid places them otherwise (the row).
   #area(context, draft, name, i, write) {
+    const current = i === context.cursor;
+    const open = current && context.panel;
+    const answered = hasAnswer(draft, i);
     return html`<div
-      class="area ${write && i === context.cursor ? "cur" : ""}"
+      class="area ${current ? "cur" : ""}"
+      style="order: ${i * 2}; grid-row: ${i + 3}"
       data-i=${i}
       role="group"
       aria-label=${name}
-      tabindex=${write ? (i === context.cursor ? "0" : "-1") : nothing}
+      tabindex=${current ? "0" : "-1"}
       @focus=${() => this.#actor.send({ type: "_cursor", to: i })}
     >
-      <span>${name}</span>
+      <button type="button" class="opener" tabindex="-1" aria-expanded=${open ? "true" : "false"} aria-label="${name} questions${answered ? ", answered" : ""}" @click=${() => this.#toggle(i)}>
+        <span class="arrow ${open ? "open" : ""} ${answered ? "marked" : ""}">${icon("caret-right")}</span>
+        <span>${name}</span>
+      </button>
       <span class="scale">
         ${Array.from(
           { length: 10 },
@@ -602,18 +843,48 @@ class WheelSheet extends LitElement {
     </div>`;
   }
 
+  #question({ text, value, hint }) {
+    return html`<div class="q">
+      <span class="q-text">${text}</span>
+      ${value.trim() ? html`<span class="q-read">${value}</span>` : hint ? html`<span class="q-read example">${hint}</span>` : nothing}
+    </div>`;
+  }
+
+  #panel(context, draft) {
+    const { name, score, label, groups, emptyLine } = panelOf(context, draft);
+    return html`<div class="qs" style="order: ${context.cursor * 2 + 1}" role="group" aria-label=${label}>
+      <div class="q-title"><span>${name}</span><span class="score">${score}</span></div>
+      ${emptyLine ? html`<p class="caption">${emptyLine}</p>` : nothing}
+      ${groups.length
+        ? html`<div class="q-groups">
+            ${groups.map(
+              (g) => html`<div class="q-group">
+                <h4>${g.title}</h4>
+                ${g.note ? html`<p class="caption">${g.note}</p>` : nothing}
+                ${g.items.map((q) => this.#question(q))}
+              </div>`,
+            )}
+          </div>`
+        : nothing}
+    </div>`;
+  }
+
   #sheet(context, draft) {
     const write = writable(context);
     const choice = (mode, label) =>
-      html`<button type="button" class=${context.mode === mode ? "on" : ""} aria-pressed=${context.mode === mode ? "true" : "false"} @click=${() => this.#actor.send({ type: "_mode", mode })}>${label}</button>`;
+      html`<button type="button" class=${context.mode === mode ? "on" : ""} data-mode=${mode} aria-pressed=${context.mode === mode ? "true" : "false"} @click=${() => this.#actor.send({ type: "_mode", mode })}>${label}</button>`;
     return html`<div class="sheet ${write ? "" : "read"}" data-id=${draft.id} role="group" aria-label="Wheel of Life">
-      ${write ? html`<div class="modes" role="group" aria-label="Which score a click sets">${choice("actual", "Actual")}${choice("wanted", "Wanted")}</div>` : nothing}
-      <p class="caption">${caption(context)}</p>
-      <div class="rate">
+      <div class="wbody">
+        ${write ? html`<div class="modes" role="group" aria-label="Which score a click sets">${choice("actual", "Actual")}${choice("wanted", "Wanted")}</div>` : nothing}
+        <p class="caption say">${caption(context)}</p>
         <svg class="wheel" viewBox="0 0 200 200" role="img" aria-label=${wheelLabel(draft)}>
-          ${wheelPaths(draft, write ? { cursor: context.cursor, pick: this.#pick } : {})}
+          ${wheelPaths(draft, { cursor: context.cursor, pick: write ? this.#pickOnWheel : undefined })}
         </svg>
-        <div class="rows">${AREAS.map((name, i) => this.#area(context, draft, name, i, write))}</div>
+        <div class="rows">
+          ${AREAS.map((name, i) => this.#area(context, draft, name, i, write))}
+          ${context.panel ? this.#panel(context, draft) : nothing}
+        </div>
+        ${context.panel ? nothing : html`<p class="caption q-hint">${panelHint(context)}</p>`}
       </div>
       <div class="foot">
         <span class="caption legend"><b></b>Actual<i></i>${wantedLabel(context, draft)}</span>

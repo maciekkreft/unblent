@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, AREAS, writable, carriedFrom, ownScores, pressed, stepped, gapOf, scoreLine, summaryOf, wheelLabel, caption, wantedLabel, dayName, sheetKey, rowKey, areaTarget } from "../machine.js";
+import { machine, AREAS, QUESTIONS, EXAMPLES, writable, carriedFrom, ownScores, pressed, stepped, gapOf, scoreLine, summaryOf, wheelLabel, caption, wantedLabel, dayName, sheetKey, sheetTarget, rowKey, applies, wording, answerOf, hasAnswer, panelOf, panelHint } from "../machine.js";
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../events/wheel.saved.json", import.meta.url), "utf8"));
 const recorded = [];
@@ -269,27 +269,209 @@ test("Delete sends what waits first, then nothing at all; a new wheel left untou
   assert.deepEqual(fresh.emitted, []);
 });
 
-test("the keys set a score and switch the choice to match; the end of the scale changes no score", async () => {
+test("a key changes the score of the chosen tab and never moves the choice; the end of the scale changes nothing", async () => {
   const { actor, ctx, emitted, tick } = await start([wheel(A, TODAY, with1(ACTUAL, 0, 10), with1(WANTED, 0, 1))]);
   actor.send({ type: "_open", id: A });
-  actor.send({ type: "_step", more: true, wanted: true });
-  assert.equal(ctx().mode, "wanted");
+  actor.send({ type: "_step", more: true });
+  assert.equal(ctx().draft.actual[0], 10, "Actual is at the end of the scale");
+  assert.equal(ctx().dirty, false);
+  actor.send({ type: "_mode", mode: "wanted" });
+  assert.equal(ctx().dirty, false, "choosing a tab changes no score");
+  actor.send({ type: "_step", more: true });
   assert.equal(ctx().draft.wanted[0], 2);
-  actor.send({ type: "_step", more: true, wanted: false });
-  assert.equal(ctx().mode, "actual", "the key switches the choice");
+  assert.equal(ctx().mode, "wanted", "the choice stays");
   assert.equal(ctx().draft.actual[0], 10);
+  actor.send({ type: "_mode", mode: "actual" });
   actor.send({ type: "_cursor", to: 1 });
-  actor.send({ type: "_step", more: false, wanted: false });
+  actor.send({ type: "_step", more: false });
   assert.equal(ctx().draft.actual[1], 4);
+  assert.equal(ctx().draft.wanted[1], WANTED[1]);
   await tick();
   assert.equal(emitted.length, 1);
+});
 
-  const end = await start([wheel(A, TODAY, with1(ACTUAL, 0, 10))]);
-  end.actor.send({ type: "_open", id: A });
-  end.actor.send({ type: "_mode", mode: "wanted" });
-  end.actor.send({ type: "_step", more: true, wanted: false });
-  assert.equal(end.ctx().mode, "actual");
-  assert.equal(end.ctx().dirty, false);
+test("the panel starts closed on every opening, and pressing the open area closes it", async () => {
+  const { actor, ctx } = await start([wheel(A, TODAY), wheel(B, TODAY), wheel(OLD, EARLIER)]);
+  actor.send({ type: "_open", id: A });
+  assert.equal(ctx().panel, false);
+  actor.send({ type: "_toggle", area: 3 });
+  assert.deepEqual([ctx().panel, ctx().cursor], [true, 3]);
+  actor.send({ type: "_toggle", area: 5 });
+  assert.deepEqual([ctx().panel, ctx().cursor], [true, 5], "pressing another area moves the panel to it");
+  actor.send({ type: "_toggle", area: 5 });
+  assert.deepEqual([ctx().panel, ctx().cursor], [false, 5]);
+
+  actor.send({ type: "_toggle", area: 1 });
+  actor.send({ type: "_open", id: B });
+  assert.deepEqual([ctx().panel, ctx().cursor], [false, 0], "another card");
+  actor.send({ type: "_toggle", area: 1 });
+  actor.send({ type: "_done" });
+  actor.send({ type: "_open", id: B });
+  assert.equal(ctx().panel, false, "folded and opened again");
+  actor.send({ type: "_toggle", area: 1 });
+  actor.send({ type: "add" });
+  assert.deepEqual([ctx().panel, ctx().cursor], [false, 0], "add");
+  actor.send({ type: "_toggle", area: 1 });
+  actor.send({ type: "_done" });
+  actor.send({ type: "day.shown", day: EARLIER, writable: false });
+  actor.send({ type: "_open", id: OLD });
+  assert.equal(ctx().panel, false, "another day");
+});
+
+test("the open panel follows the area the keys act on and the area a score is pressed in", async () => {
+  const { actor, ctx } = await start([wheel(A, TODAY)]);
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_enter" });
+  assert.deepEqual([ctx().panel, panelOf(ctx(), ctx().draft).name], [true, "Health"]);
+  actor.send({ type: "_cursor", to: 3 });
+  assert.deepEqual([ctx().panel, panelOf(ctx(), ctx().draft).name], [true, "Family"]);
+  actor.send({ type: "_press", area: 5, value: 2 });
+  assert.deepEqual([ctx().panel, panelOf(ctx(), ctx().draft).name], [true, "Friends"]);
+  actor.send({ type: "_enter" });
+  assert.equal(ctx().panel, true, "Enter again changes nothing in this step");
+});
+
+test("Escape closes the panel first, then folds the sheet", async () => {
+  const { actor, ctx, emitted } = await start([wheel(A, TODAY)]);
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_press", area: 0, value: 1 });
+  actor.send({ type: "_enter" });
+  actor.send({ type: "_escape" });
+  assert.deepEqual([ctx().panel, ctx().draft?.id], [false, A]);
+  assert.deepEqual(emitted, [], "closing the panel saves nothing");
+  actor.send({ type: "_escape" });
+  assert.equal(ctx().draft, null);
+  assert.equal(emitted.at(-1).finished, true);
+});
+
+test("an earlier day's areas take the panel and the cursor, and still no score", async () => {
+  const { actor, ctx, emitted } = await start([wheel(A, EARLIER)]);
+  actor.send({ type: "day.shown", day: EARLIER, writable: false });
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_cursor", to: 2 });
+  actor.send({ type: "_enter" });
+  assert.deepEqual([ctx().panel, ctx().cursor], [true, 2]);
+  actor.send({ type: "_step", more: true });
+  assert.deepEqual(ctx().draft.actual, ACTUAL);
+  actor.send({ type: "_escape" });
+  actor.send({ type: "_escape" });
+  assert.equal(ctx().draft, null);
+  assert.deepEqual(emitted, []);
+});
+
+test("a saved wheel's answers stay out of what this view saves, and Delete of a wheel without answers still deletes", async () => {
+  const answers = with1(Array(8).fill({}), 0, { one: "Too tired" });
+  const { actor, ctx, emitted, tick } = await start([{ ...wheel(A, TODAY), answers }]);
+  actor.send({ type: "_open", id: A });
+  assert.equal(panelOf(ctx(), ctx().draft).groups[0].items[0].value, "Too tired");
+  actor.send({ type: "_press", area: 1, value: 1 });
+  await tick();
+  actor.send({ type: "_done" });
+  assert.equal(emitted.length, 2);
+  for (const save of emitted) assert.equal("answers" in save, false);
+
+  const plainWheel = await start([wheel(A, TODAY)]);
+  plainWheel.actor.send({ type: "_open", id: A });
+  plainWheel.actor.send({ type: "_delete" });
+  assert.deepEqual([plainWheel.emitted[0].actual, plainWheel.emitted[0].wanted, plainWheel.emitted[0].finished], [NONE, NONE, true]);
+  assert.equal("answers" in plainWheel.emitted[0], false);
+});
+
+test("which questions apply: the scale always; not lower above 1, higher below 10, closer only below Wanted", () => {
+  const live = (actual, wanted) => QUESTIONS.filter((q) => applies(q, actual, wanted));
+  assert.deepEqual(live(null, 8), ["one", "ten"], "no Actual");
+  assert.deepEqual(live(1, 8), ["one", "ten", "higher", "closer"], "at 1");
+  assert.deepEqual(live(10, 10), ["one", "ten", "lower"], "at 10");
+  assert.deepEqual(live(5, 8), QUESTIONS);
+  assert.deepEqual(live(8, 8), ["one", "ten", "lower", "higher"], "Actual at Wanted");
+  assert.deepEqual(live(9, 8), ["one", "ten", "lower", "higher"], "Actual above Wanted");
+  assert.deepEqual(live(5, null), ["one", "ten", "lower", "higher"], "Wanted empty");
+});
+
+const drafted = (actual, wanted, answers = []) => ({ id: A, day: TODAY, actual: with1(NONE, 0, actual), wanted: with1(NONE, 0, wanted), answers });
+const atFirst = (answer) => with1(Array(8).fill({}), 0, answer);
+
+test("the mark counts only an answer with text to a question that applies, and a hidden answer comes back", () => {
+  assert.equal(hasAnswer(drafted(5, 8), 0), false);
+  assert.equal(hasAnswer(drafted(5, 8, atFirst({ one: "x" })), 0), true, "a scale answer counts");
+  assert.equal(hasAnswer(drafted(null, null, atFirst({ ten: "x" })), 0), true, "with no score too");
+  assert.equal(hasAnswer(drafted(5, 8, atFirst({ one: " \n " })), 0), false, "blank is no answer");
+  assert.equal(hasAnswer(drafted(1, 8, atFirst({ lower: "x" })), 0), false, "not lower is hidden at 1");
+  assert.equal(hasAnswer(drafted(2, 8, atFirst({ lower: "x" })), 0), true, "and back at 2");
+  assert.equal(hasAnswer(drafted(10, 10, atFirst({ higher: "x" })), 0), false, "higher is hidden at 10");
+  assert.equal(hasAnswer(drafted(8, 8, atFirst({ closer: "x" })), 0), false, "closer is hidden at Wanted");
+  assert.equal(hasAnswer(drafted(null, 8, atFirst({ closer: "x", lower: "y", higher: "z" })), 0), false, "the score's questions are hidden with no Actual");
+  assert.equal(hasAnswer(drafted(5, 8, atFirst({ one: "x" })), 1), false, "another area");
+  assert.equal(hasAnswer({ ...drafted(5, 8), answers: undefined }, 0), false);
+  assert.equal(answerOf([{ one: 7 }], 0, "one"), "");
+});
+
+test("the panel's wording, examples and notes", async () => {
+  const { actor, ctx } = await start([wheel(OLD, EARLIER, ACTUAL, WANTED)]);
+  actor.send({ type: "add" });
+  const panelAt = (i) => {
+    actor.send({ type: "_cursor", to: i });
+    return panelOf(ctx(), ctx().draft);
+  };
+  const unrated = panelAt(7);
+  assert.equal(unrated.name, "Fun");
+  assert.equal(unrated.score, "–/6");
+  assert.equal(unrated.label, "Questions about Fun");
+  assert.deepEqual(unrated.groups.map((g) => g.title), ["The scale", "Your score"]);
+  assert.deepEqual(unrated.groups[0].items.map((q) => q.text), ["What does a 1 look like for you?", "What does a 10 look like for you?"]);
+  assert.deepEqual(unrated.groups[0].items.map((q) => q.hint), EXAMPLES[7]);
+  assert.equal(unrated.groups[0].note, "Carries to your next wheel.");
+  assert.equal(unrated.groups[1].note, "Give Fun an Actual score to answer these.");
+  assert.deepEqual(unrated.groups[1].items, []);
+
+  actor.send({ type: "_press", area: 1, value: 6 });
+  const rated = panelOf(ctx(), ctx().draft);
+  assert.equal(rated.groups[1].note, "For this wheel only.");
+  assert.deepEqual(rated.groups[1].items.map((q) => q.text), [
+    "What makes it a 6, and not lower?",
+    "What keeps it from being higher?",
+    "What would move it one point closer to Wanted?",
+  ]);
+  assert.equal(rated.emptyLine, null);
+  assert.equal(EXAMPLES.length, AREAS.length);
+  assert.equal(wording("lower", 3), "What makes it a 3, and not lower?");
+});
+
+test("the scale's note names the wheel it came from only while both answers are as that wheel said them", async () => {
+  const answers = atFirst({ one: "Low", ten: "High" });
+  const { actor, ctx } = await start([{ ...wheel(OLD, LONG_AGO), answers }, { ...wheel(A, TODAY), answers }, { ...wheel(B, TODAY), answers: atFirst({ one: "Low", ten: "Changed" }) }]);
+  const note = () => panelOf(ctx(), ctx().draft).groups[0].note;
+  actor.send({ type: "_open", id: A });
+  assert.equal(note(), "From your wheel of 6 October. A change here carries to your next wheel.");
+  actor.send({ type: "_cursor", to: 1 });
+  assert.equal(note(), "Carries to your next wheel.", "the wheel before said nothing here");
+  actor.send({ type: "_open", id: B });
+  assert.equal(note(), "Carries to your next wheel.");
+});
+
+test("an earlier day's panel lists only what was written, and says so when nothing was", async () => {
+  const answers = with1(atFirst({ one: "Low", ten: "  ", lower: "Because", closer: "Hidden at Wanted" }), 2, { higher: "Only this" });
+  const { actor, ctx } = await start([{ ...wheel(A, EARLIER, with1(ACTUAL, 0, 8), with1(WANTED, 0, 8)), answers }]);
+  actor.send({ type: "day.shown", day: EARLIER, writable: false });
+  actor.send({ type: "_open", id: A });
+  const first = panelOf(ctx(), ctx().draft);
+  assert.deepEqual(first.groups.map((g) => [g.title, g.note, g.items.map((q) => q.value)]), [
+    ["The scale", null, ["Low"]],
+    ["Your score", null, ["Because"]],
+  ]);
+  actor.send({ type: "_cursor", to: 2 });
+  assert.deepEqual(panelOf(ctx(), ctx().draft).groups.map((g) => g.title), ["Your score"], "a group with nothing written goes");
+  actor.send({ type: "_cursor", to: 3 });
+  const none = panelOf(ctx(), ctx().draft);
+  assert.deepEqual(none.groups, []);
+  assert.equal(none.emptyLine, "Nothing written about Family on this day.");
+});
+
+test("the line beside a closed panel says what the arrow does", async () => {
+  const { actor, ctx } = await start([]);
+  assert.equal(panelHint(ctx()), "Press an area’s arrow to write about it.");
+  actor.send({ type: "day.shown", day: EARLIER, writable: false });
+  assert.equal(panelHint(ctx()), "Press an area’s arrow to read what you wrote.");
 });
 
 test("an earlier day is read only: it opens, takes no score and no delete, and closes", async () => {
@@ -298,7 +480,7 @@ test("an earlier day is read only: it opens, takes no score and no delete, and c
   actor.send({ type: "_open", id: A });
   assert.equal(ctx().draft.id, A);
   actor.send({ type: "_press", area: 0, value: 1 });
-  actor.send({ type: "_step", more: true, wanted: false });
+  actor.send({ type: "_step", more: true });
   actor.send({ type: "_mode", mode: "wanted" });
   actor.send({ type: "_delete" });
   await tick();
@@ -393,34 +575,57 @@ test("Vim keys comes from settings and follows settings.changed", async () => {
   assert.equal(ctx().vimKeys, false);
 });
 
-test("the keys of a sheet: arrows always with Shift for Wanted, letters only with Vim keys", () => {
+test("the keys of a sheet: arrows always, with Shift choosing the tab; letters only with Vim keys", () => {
   const key = (k, shiftKey = false) => ({ key: k, shiftKey });
   assert.deepEqual(sheetKey(key("ArrowDown"), false), { move: "down" });
   assert.deepEqual(sheetKey(key("ArrowUp", true), false), { move: "up" });
-  assert.deepEqual(sheetKey(key("ArrowRight"), false), { step: true, more: true, wanted: false });
-  assert.deepEqual(sheetKey(key("ArrowLeft", true), false), { step: true, more: false, wanted: true });
+  assert.deepEqual(sheetKey(key("ArrowRight"), false), { step: true, more: true });
+  assert.deepEqual(sheetKey(key("ArrowLeft"), false), { step: true, more: false });
+  assert.deepEqual(sheetKey(key("ArrowRight", true), false), { choose: "wanted" });
+  assert.deepEqual(sheetKey(key("ArrowLeft", true), false), { choose: "actual" });
   for (const k of ["j", "k", "g", "G", "h", "l", "H", "L"]) assert.equal(sheetKey(key(k), false), null, k);
   assert.deepEqual(sheetKey(key("j"), true), { move: "down" });
   assert.deepEqual(sheetKey(key("k"), true), { move: "up" });
   assert.deepEqual(sheetKey(key("G"), true), { move: "last" });
   assert.deepEqual(sheetKey(key("g"), true), { wait: true });
   assert.deepEqual(sheetKey(key("g"), true, true), { move: "first" });
-  assert.deepEqual(sheetKey(key("l"), true), { step: true, more: true, wanted: false });
-  assert.deepEqual(sheetKey(key("h"), true), { step: true, more: false, wanted: false });
-  assert.deepEqual(sheetKey(key("L", true), true), { step: true, more: true, wanted: true });
-  assert.deepEqual(sheetKey(key("H", true), true), { step: true, more: false, wanted: true });
+  assert.deepEqual(sheetKey(key("l"), true), { step: true, more: true });
+  assert.deepEqual(sheetKey(key("h"), true), { step: true, more: false });
+  assert.deepEqual(sheetKey(key("L", true), true), { choose: "wanted" });
+  assert.deepEqual(sheetKey(key("H", true), true), { choose: "actual" });
   assert.equal(sheetKey({ key: "j", ctrlKey: true }, true), null, "Ctrl+j is the desk's");
   assert.deepEqual(rowKey(key("j"), true), { move: "down" });
   assert.equal(rowKey(key("j"), false), null);
   assert.equal(rowKey(key("l"), true), null);
+  assert.equal(rowKey(key("ArrowLeft"), true), null, "an earlier day takes no score");
 });
 
-test("a move lands on an area, or leaves past either end", () => {
-  assert.equal(areaTarget("down", 0), 1);
-  assert.equal(areaTarget("up", 0), "leave");
-  assert.equal(areaTarget("down", 7), "leave");
-  assert.equal(areaTarget("first", 5), 0);
-  assert.equal(areaTarget("last", 5), 7);
+test("a move along a sheet you can write: the tabs, the areas, and out past either end", () => {
+  const go = (move, on, cursor) => sheetTarget(move, on, cursor, true);
+  assert.equal(go("up", "area", 0), "tabs", "k from the first area lands on the tabs");
+  assert.equal(go("down", "tabs", 0), 0, "and j goes back");
+  assert.equal(go("down", "tabs", 5), 0, "to the first area, whichever the cursor is on");
+  assert.equal(go("up", "tabs", 0), "leave", "past the tabs");
+  assert.equal(go("down", "area", 0), 1);
+  assert.equal(go("up", "area", 3), 2);
+  assert.equal(go("down", "area", 7), "leave", "past the last area");
+  for (const on of ["tabs", "area", "button"]) {
+    assert.equal(go("first", on, 5), 0, on);
+    assert.equal(go("last", on, 5), 7, on);
+  }
+  assert.equal(go("down", "button", 4), 4, "from Delete or Done, first to the area the keys act on");
+  assert.equal(go("up", "button", 4), 4);
+});
+
+test("a move along an earlier day's sheet: the areas, then Close, with no tabs", () => {
+  const go = (move, on, cursor) => sheetTarget(move, on, cursor, false);
+  assert.equal(go("up", "area", 0), "leave", "no tabs to land on");
+  assert.equal(go("down", "area", 6), 7);
+  assert.equal(go("down", "area", 7), "close");
+  assert.equal(go("up", "close", 7), 7, "and back");
+  assert.equal(go("down", "close", 7), "leave");
+  assert.equal(go("first", "close", 7), 0);
+  assert.equal(go("last", "area", 0), 7);
 });
 
 test("the scores step and clear", () => {
