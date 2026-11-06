@@ -814,8 +814,9 @@ export const machine = setup({
       "against it, as far as the last character on the page. Lifting shows a Highlight button " +
       "under the passage's last line, which marks exactly what is painted; a tap elsewhere, a " +
       "page turn, a new chapter or Escape drops it, a tap there doing nothing else, and holding " +
-      "again starts over. A quick swipe still turns the page, a tap still turns from the outer " +
-      "thirds, and a hold on a picture does nothing. After a re-import it finds each highlight's quote " +
+      "again starts over. A pause in the drag changes nothing. A quick swipe still turns the page, " +
+      "a tap still turns from the outer thirds, a tap on a link only follows it, a hold on a link " +
+      "follows nothing, and a hold on a picture does nothing. After a re-import it finds each highlight's quote " +
       "again and saves its corrected place; a highlight whose quote is no longer in the book " +
       "stays a note with its quote and its comment. With the \"Vim keys\" preference on and the reader focused, a " +
       "one-character cursor shows, starting at the top of the page and kept while the reader " +

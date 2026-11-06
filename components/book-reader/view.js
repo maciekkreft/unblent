@@ -65,8 +65,9 @@ const EDGE = 0.3; // the fraction of the width, each side, that a tap turns from
 // resting finger is never steadier than that, and the reader acts just before iOS would.
 const HOLD_MS = 400;
 const HOLD_SLOP = 10;
-// How long after a finger's press ends its click is not about the text: iOS may send the
-// click of a long press as it lifts, and of a tap up to a third of a second later.
+// How long after a press ends its click is not about the text. A touch in the text whose
+// touchstart was refused sends no click; a pen's press, or a touch the browser would not let
+// be refused, may send one as it lifts, or up to a third of a second later.
 const CLICK_AFTER_MS = 700;
 // The gap the bubble keeps from the mark it sits above (or below, when there is no room
 // above): a placement offset computed in JS, not a length that places a box in CSS (7.4).
@@ -930,9 +931,19 @@ class BookReader extends LitElement {
   #holdTimer = 0;
   // Until when a click in the text belongs to a finger's press that already did its work.
   #clickGone = 0;
-  // Both must be on the host before a touch begins: iOS decides at touchstart whether it
-  // waits for a page's touchmove, and only a non-passive listener may refuse the move. A
-  // touch may end with no pointerup, and a passage must not stay down then.
+  // iOS's own long presses (text interaction, loupe, link preview, lifting a drag) end a
+  // touch whose finger rests, even in the middle of a drag, and that finger then sends
+  // nothing more, so a passage could not go on. Refusing the touchstart makes them fail
+  // while the pointer events keep coming. The browser then sends no click and moves no
+  // focus for that touch, so #pointerup does a tap's work. A control needs its click, so
+  // only a touch on the reading text is refused.
+  #touchstart = (e) => {
+    const target = e.composedPath()[0];
+    if (e.cancelable && target.closest?.(".viewport") && !target.closest("button, .bubble")) e.preventDefault();
+  };
+  // These must be on the host before a touch begins: iOS decides at touchstart whether it
+  // waits for a page's touch listeners, and only a non-passive listener may refuse. A touch
+  // may still end with no pointerup, and a passage must not stay down then.
   #touchmove = (e) => {
     if (this.#finger?.down && e.cancelable) e.preventDefault();
   };
@@ -996,12 +1007,14 @@ class BookReader extends LitElement {
     // The web font changes the text's measure once it loads, so a chapter measured
     // before it lands would paginate wrongly; re-measure when it is ready.
     document.fonts?.ready.then(() => this.#relayout());
+    this.addEventListener("touchstart", this.#touchstart, { passive: false });
     this.addEventListener("touchmove", this.#touchmove, { passive: false });
     this.addEventListener("touchend", this.#touchend);
     this.addEventListener("touchcancel", this.#touchend);
   }
 
   disconnectedCallback() {
+    this.removeEventListener("touchstart", this.#touchstart);
     this.removeEventListener("touchmove", this.#touchmove);
     this.removeEventListener("touchend", this.#touchend);
     this.removeEventListener("touchcancel", this.#touchend);
@@ -2441,6 +2454,7 @@ class BookReader extends LitElement {
       picture: Boolean(img && this.#isPicture(img)),
       x0: e.clientX,
       y0: e.clientY,
+      t0: e.timeStamp,
       width: e.currentTarget.getBoundingClientRect().width,
       dragging: false,
       abandoned: false,
@@ -2492,12 +2506,27 @@ class BookReader extends LitElement {
     // it is what the abandoned mouse drag left behind, and the native selection was the
     // live feedback. Nothing is copied; the drag never turns the page.
     if (this.highlights && d.mouse && this.#makeHighlight()) return;
+    // A resting finger trembles, so a finger's tap is told by distance, and from a hold by
+    // time. The browser moves the focus for a click, and a refused touch has none.
+    const still = Math.hypot(dx, e.clientY - d.y0) <= HOLD_SLOP;
+    const tap = !d.mouse && still && e.timeStamp - d.t0 < HOLD_MS;
+    if (tap) this.focus({ preventScroll: true });
     // A tap that lands anywhere but the Highlight button only drops the passage waiting
     // there, wherever it lands, so taking back a passage never turns the page or follows a
-    // link (Norman: forgiveness). A resting finger trembles, so this is told by distance.
-    if (this.#finger && Math.hypot(dx, e.clientY - d.y0) <= HOLD_SLOP) {
+    // link (Norman: forgiveness).
+    if (this.#finger && still) {
       this.#clickGone = Date.now() + CLICK_AFTER_MS;
       this.#dropPending();
+      return;
+    }
+    // A link is followed by its own click, the one a refused touch does not send. A click
+    // the browser sends after it anyway must not follow the link a second time.
+    const link = tap && e.target.closest?.("a[href]");
+    if (link) {
+      this.#closeBubble();
+      this.#clickGone = 0;
+      link.click();
+      this.#clickGone = Date.now() + CLICK_AFTER_MS;
       return;
     }
     if (d.dragging || d.abandoned) return; // a drag that is neither a swipe nor a clean tap

@@ -21,6 +21,8 @@ const BOOK_ID = "01K00000000000000000000SMP";
 const PLATE_ID = "01K00000000000000000000PTE";
 // Past the reader's hold time, so a hold it should have started has shown by then.
 const PAST_HOLD_MS = 500;
+// Past the longest of iOS's own long presses (three quarters of a second).
+const PAST_NATIVE_PRESS_MS = 1000;
 
 const seedUser = async (id, file, position) => {
   const cookie = forgeCookie("reader-finger");
@@ -40,6 +42,23 @@ const boxes = (page) => page.evaluate(() => document.querySelector("book-reader"
 const marks = (page) => page.evaluate(() => [...document.querySelector("book-reader").shadowRoot.querySelectorAll(".strip mark")].map((m) => m.textContent).join(""));
 const footer = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".footer").textContent.replace(/\s+/g, " ").trim());
 const button = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble.make button.highlight")?.getBoundingClientRect().toJSON() ?? null);
+
+const chapterName = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".footer .chap").textContent.trim());
+// The middle of the first line of the link to the third chapter.
+const linkAt = (page) =>
+  page.evaluate(() => {
+    const links = [...document.querySelector("book-reader").shadowRoot.querySelectorAll(".strip a[data-chapter]")];
+    const r = links.find((a) => a.textContent === "the third chapter").getClientRects()[0];
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+// Whether the reader refuses a touch that starts on this element. A plain event, because an
+// engine without a touch screen may have no TouchEvent to construct.
+const refused = (page, selector) =>
+  page.evaluate((selector) => {
+    const event = new Event("touchstart", { bubbles: true, composed: true, cancelable: true });
+    document.querySelector("book-reader").shadowRoot.querySelector(selector).dispatchEvent(event);
+    return event.defaultPrevented;
+  }, selector);
 
 // A finger, as pointer events on what lies under it: Playwright's touchscreen has only tap().
 // Each move waits two frames, because the reader follows a finger once a frame.
@@ -87,7 +106,7 @@ for (const engine of ENGINES) {
     }, { timeout: 15000 });
 
     // A phone, on a page of Chapter Two that holds many paragraphs.
-    const open = async ({ book = BOOK_ID, file = SAMPLE, position = { chapter: 1, block: 30 }, ready = "p", settings = null } = {}) => {
+    const open = async ({ book = BOOK_ID, file = SAMPLE, position = { chapter: 1, block: 30 }, ready = "p", laidOut = "p:nth-child(2)", settings = null } = {}) => {
       const problems = [];
       context = await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 844 } });
       context.setDefaultTimeout(4000);
@@ -97,7 +116,7 @@ for (const engine of ENGINES) {
       if (settings) await page.addInitScript((v) => localStorage.setItem("settings", v), settings);
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await page.waitForFunction((ready) => document.querySelector("book-reader")?.shadowRoot?.querySelector(`.strip ${ready}`), ready);
-      await page.waitForFunction(() => /Page \d+ of \d+/.test(document.querySelector("book-reader").shadowRoot.querySelector(".footer").textContent) && document.querySelector("book-reader").shadowRoot.querySelector(".strip p:nth-child(2)"));
+      await page.waitForFunction((laidOut) => /Page \d+ of \d+/.test(document.querySelector("book-reader").shadowRoot.querySelector(".footer").textContent) && document.querySelector("book-reader").shadowRoot.querySelector(`.strip ${laidOut}`), laidOut);
       return { page, problems, hand: finger(page) };
     };
 
@@ -157,6 +176,85 @@ for (const engine of ENGINES) {
       assert.ok(above.endsWith(word) && above.length > word.length, `above the start it runs back to the word: "${above.slice(-30)}"`);
       await hand.up(x, (all[1].top + all[1].bottom) / 2);
       assert.equal(await footer(page), before, "no page turned");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // Browser: a gesture.
+    test(`a pause in the drag changes nothing until the lift, in ${engine.name}`, async () => {
+      const { page, problems, hand } = await open();
+      const all = await lines(page);
+      const x = (all[3].left + all[3].right) / 2;
+      await hand.down(x, all[3].top + 4);
+      await until(async () => (await painted(page)) !== "");
+      await hand.move(x, all[5].top + 4);
+      const paused = await painted(page);
+      await new Promise((r) => setTimeout(r, PAST_NATIVE_PRESS_MS));
+      assert.equal(await button(page), null, "no button during the pause");
+      assert.equal(await painted(page), paused, "the pause keeps what was painted");
+      await hand.move(x, all[8].top + 4);
+      const grown = await painted(page);
+      assert.ok(grown.startsWith(paused) && grown.length > paused.length, "the passage goes on after the pause");
+      assert.equal(await button(page), null, "still no button");
+      await hand.up(x, all[8].top + 4);
+      assert.ok(await button(page), "the lift shows the button");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // Browser: a gesture.
+    test(`only a touch on the reading text is refused, in ${engine.name}`, async () => {
+      const { page, problems, hand } = await open();
+      const all = await lines(page);
+      const x = (all[3].left + all[3].right) / 2;
+      await hand.down(x, all[3].top + 4);
+      await until(async () => (await painted(page)) !== "");
+      await hand.up(x, all[3].top + 4);
+      assert.ok(await button(page), "the button shows");
+      assert.equal(await refused(page, ".strip p"), true, "the text");
+      assert.equal(await refused(page, ".bubble.make button.highlight"), false, "the Highlight button");
+      assert.equal(await refused(page, ".footer"), false, "the footer");
+      assert.equal(await refused(page, ".footer button.turn"), false, "a turn button");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // A refused touch sends no click, so the reader's own tap must do the work of one.
+    // Browser: a gesture.
+    test(`a finger's tap follows a link in the text, once, in ${engine.name}`, async () => {
+      const { page, problems, hand } = await open({ position: { chapter: 0, block: 0 }, laidOut: "a[data-chapter]" });
+      const link = await linkAt(page);
+      await hand.down(link.x, link.y);
+      await hand.up(link.x, link.y);
+      await until(async () => (await chapterName(page)) === "Chapter Three");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // Browser: a gesture.
+    test(`a hold on a link and a tap that drops a passage follow nothing, in ${engine.name}`, async () => {
+      const { page, problems, hand } = await open({ position: { chapter: 0, block: 0 }, laidOut: "a[data-chapter]" });
+      const link = await linkAt(page);
+      await hand.down(link.x, link.y);
+      await until(async () => (await painted(page)) !== "");
+      await hand.up(link.x, link.y);
+      assert.ok(await button(page), "the hold made a passage");
+      assert.equal(await chapterName(page), "Chapter One", "the hold followed nothing");
+      await hand.down(link.x, link.y);
+      await hand.up(link.x, link.y);
+      assert.equal(await painted(page), "", "the tap drops the passage");
+      await new Promise((r) => setTimeout(r, PAST_HOLD_MS));
+      assert.equal(await chapterName(page), "Chapter One", "the tap followed nothing");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // Browser: focus and keys.
+    test(`a finger's tap in the text takes the keyboard, in ${engine.name}`, async () => {
+      const { page, problems, hand } = await open();
+      const focused = () => page.evaluate(() => document.querySelector("book-reader").shadowRoot.activeElement?.className ?? "");
+      await page.evaluate(() => document.querySelector("book-reader").shadowRoot.activeElement?.blur());
+      assert.equal(await focused(), "");
+      const all = await lines(page);
+      const x = (all[3].left + all[3].right) / 2;
+      await hand.down(x, all[3].top + 4);
+      await hand.up(x, all[3].top + 4);
+      assert.equal(await focused(), "reader");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
