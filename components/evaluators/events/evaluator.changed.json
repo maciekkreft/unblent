@@ -164,7 +164,7 @@
         },
         "combined": {
           "type": "boolean",
-          "description": "Its answers about a line are shown as one mark: green when any question got its expected answer; otherwise red when any question got an option marked against; otherwise grey. False when absent: a mark per shown answer."
+          "description": "Its answers about a line are shown as one mark: red when any question got an option marked against; otherwise green when any question got its expected answer; otherwise uncolored. False when absent: a mark per shown answer."
         }
       },
       "required": [
