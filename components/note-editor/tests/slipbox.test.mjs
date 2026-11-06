@@ -56,23 +56,94 @@ async function onSlipBox(engine, body, setup = null, seed = null) {
   }
 }
 
+// The "Vim keys" preference, as the settings fact stores it.
+const VIM_KEYS = () => localStorage.setItem("settings:product", JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: false, vimKeys: true }));
+
+// With Vim keys on, a note open in the panel that was taken out of the Slip-Box, so
+// Permanent has to ask for a place; `body` drives it with what the keyboard tests read.
+const onLooseNote = (engine, body) =>
+  onSlipBox(
+    engine,
+    async (page) => {
+      const tools = {
+        label: () => inPanel(page, `return root.querySelector(".home-type")?.textContent.trim() ?? null`),
+        marked: () => inPanel(page, `return root.querySelector('.type-row[aria-selected="true"] .tag')?.textContent.trim() ?? null`),
+        menu: () => inPanel(page, `return root.activeElement?.classList.contains("type-menu") ?? false`),
+        list: () => inPanel(page, `return root.activeElement?.classList.contains("slip-list") ?? false`),
+        text: () => inPanel(page, `return root.querySelector(".cm-content").textContent`),
+        // Back in the text, not on the label; a Vim x then proves where the cursor is.
+        backInText: () => until(() => inPanel(page, `return root.activeElement?.classList.contains("cm-content") ?? false`)),
+        pressT: async () => {
+          await page.keyboard.press("\\");
+          await page.keyboard.press("t");
+        },
+      };
+      await until(() => page.evaluate(() => Boolean(document.querySelector("note-editor[stage]")?.shadowRoot?.querySelector(".cm-content"))));
+      await until(() =>
+        page.evaluate(() => {
+          const row = [...(document.querySelector("note-list")?.shadowRoot?.querySelectorAll("li") ?? [])].find((r) => r.querySelector(".name")?.textContent.trim() === "Loose note");
+          row?.click();
+          return Boolean(row);
+        }),
+      );
+      await until(async () => (await tools.label())?.endsWith("Fleeting"));
+      await until(() => inPanel(page, `const x = root.querySelector(".home .x:not(:disabled)"); x?.click(); return Boolean(x)`));
+      await until(() => inPanel(page, `return !root.querySelector(".home .x")`));
+      await body(page, tools);
+    },
+    async (cookie) => {
+      const res = await fetch(`${BASE_URL}/api/notes/${LOOSE}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` },
+        body: JSON.stringify({ title: "Loose note", body: "Loose note", baseVersion: null, about: [{ kind: "note", id: SLIPBOX }] }),
+      });
+      assert.equal(res.status, 200);
+    },
+    VIM_KEYS,
+  );
+
 for (const engine of ENGINES) {
-  // Browser: a reload against real storage (the fold is kept in this browser). The page
-  // loads once with a fold already stored, because two loads of the product page do not
-  // fit the 5s budget (11); what the press writes is then read from the same storage.
-  test(`a folded footer section stays folded after a reload in ${engine.name}`, () =>
-    onSlipBox(
-      engine,
-      async (page) => {
-        const stageFold = () => page.evaluate(() => document.querySelector("note-editor[stage]").shadowRoot.querySelector(".fold")?.getAttribute("aria-expanded") ?? null);
-        await until(async () => (await stageFold()) === "false");
-        await page.evaluate(() => document.querySelector("note-editor[stage]").shadowRoot.querySelector(".fold").click());
-        await until(async () => (await stageFold()) === "true");
-        assert.equal(await page.evaluate(() => localStorage.getItem("note-editor.folded")), "[]");
-      },
-      null,
-      () => localStorage.setItem("note-editor.folded", JSON.stringify(["passages"])),
-    ));
+  // Browser: a reload against real storage (the fold is kept in this browser). On the
+  // book-stage stem page, the lightest that holds flags and the stage's editor, because two
+  // loads of the product page do not fit the 5s budget (11).
+  test(`a folded footer section stays folded after a reload in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    context.setDefaultTimeout(4000);
+    try {
+      await signedIn(context, forgeCookie("editor-fold"));
+      await showAll(context);
+      await context.addInitScript((id) => {
+        if (localStorage.getItem("book-stage.tabs")) return;
+        localStorage.setItem("book-stage.tabs", JSON.stringify([id]));
+        localStorage.setItem("book-stage.tabs.notes", JSON.stringify([id]));
+      }, SLIPBOX);
+      const page = await context.newPage();
+      const problems = watch(page, [], { ignore: [/due to access control checks|Load request cancelled/] });
+      // The Slip-Box's tab, kept across the reload; after a load the book is in front.
+      const pickSlipBox = () =>
+        until(() =>
+          page.evaluate(() => {
+            const tab = [...(document.querySelector("dock-desk")?.shadowRoot?.querySelectorAll(".stage .own [role=tab]") ?? [])].find((t) => t.textContent.trim() === "Slip-Box");
+            tab?.click();
+            return Boolean(tab);
+          }),
+        );
+      const stageFold = () => page.evaluate(() => document.querySelector("note-editor[stage]").shadowRoot.querySelector(".fold")?.getAttribute("aria-expanded") ?? null);
+      await page.goto(`${BASE_URL}/workshop/design/book-stage`, { waitUntil: "domcontentloaded" });
+      await pickSlipBox();
+      await until(async () => (await stageFold()) === "true");
+      await page.evaluate(() => document.querySelector("note-editor[stage]").shadowRoot.querySelector(".fold").click());
+      await until(async () => (await stageFold()) === "false");
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await pickSlipBox();
+      await until(async () => (await stageFold()) === "false");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
 
   // Browser: rendering and layout (the Add to Slip-Box list inside the narrow Notes drawer
   // of the phone).
@@ -151,91 +222,83 @@ for (const engine of ENGINES) {
       assert.equal(await label(), "Literature");
     }));
 
-  // Browser: focus and keys (\t from the text, every move through the menu and its way back,
-  // and the keyboard returning to the text with the cursor where it was).
-  test(`\\t opens the type menu from the text and the keyboard returns there in ${engine.name}`, () =>
+  // Browser: focus and keys (\t moves through the menu and sets a type, and the keyboard
+  // returns to the text with the cursor where it was).
+  test(`\\t moves through the type menu and Enter returns to the text in ${engine.name}`, () =>
+    onLooseNote(engine, async (page, { label, marked, menu, text, backInText, pressT }) => {
+      // The Slip-Box itself has no type label, so the key does nothing in its editor.
+      await page.evaluate(() => document.querySelector("note-editor[stage]").shadowRoot.querySelector(".cm-content").focus());
+      await pressT();
+      assert.equal(await page.evaluate(() => Boolean(document.querySelector("note-editor[stage]").shadowRoot.querySelector(".type-menu"))), false);
+      // The label names the key; the menu opens on the note's own type.
+      assert.equal(await label(), "\\t Fleeting");
+      await inPanel(page, `root.querySelector(".cm-content").focus()`);
+      await pressT();
+      await until(menu);
+      assert.equal(await marked(), "Fleeting");
+      await page.keyboard.press("j");
+      assert.equal(await marked(), "Literature");
+      await page.keyboard.press("k");
+      assert.equal(await marked(), "Fleeting");
+      // Enter sets the type, and Vim keys still work at the cursor: normal mode, not typing.
+      await page.keyboard.press("j");
+      await page.keyboard.press("Enter");
+      await until(async () => (await label()) === "\\t Literature");
+      await backInText();
+      await page.keyboard.press("x");
+      await until(async () => (await text()) === "oose note");
+    }));
+
+  // Browser: focus and keys (Escape leaves the menu for the text, changing nothing).
+  test(`Escape from the \\t type menu returns to the text with the cursor where it was in ${engine.name}`, () =>
+    onLooseNote(engine, async (page, { label, menu, text, backInText, pressT }) => {
+      await inPanel(page, `root.querySelector(".cm-content").focus()`);
+      await page.keyboard.press("l");
+      await page.keyboard.press("l");
+      await pressT();
+      await until(menu);
+      await page.keyboard.press("Escape");
+      await backInText();
+      assert.equal(await label(), "\\t Fleeting");
+      await page.keyboard.press("x");
+      await until(async () => (await text()) === "Lose note");
+    }));
+
+  // Browser: focus and keys (from \t through the Add to Slip-Box list, and back to the text
+  // from both of its ways out).
+  test(`\\t on Permanent goes through the Add to Slip-Box list and returns to the text in ${engine.name}`, () =>
+    onLooseNote(engine, async (page, { label, menu, list, text, backInText, pressT }) => {
+      await inPanel(page, `root.querySelector(".cm-content").focus()`);
+      await page.keyboard.press("l");
+      // The menu opens on Fleeting, two rows above Permanent.
+      const toPermanent = async () => {
+        await pressT();
+        await until(menu);
+        await page.keyboard.press("j");
+        await page.keyboard.press("j");
+        await page.keyboard.press("Enter");
+        await until(list);
+      };
+      // Permanent outside the Slip-Box goes on to the list; Escape there returns to the text.
+      await toPermanent();
+      await page.keyboard.press("Escape");
+      await backInText();
+      assert.equal(await label(), "\\t Fleeting");
+      // Picking a place sets both, and returns to the text too.
+      await toPermanent();
+      await page.keyboard.press("Enter");
+      await until(async () => (await label()) === "\\t Permanent");
+      await backInText();
+      await page.keyboard.press("x");
+      await until(async () => (await text()) === "Lose note");
+    }));
+
+  // Browser: focus and keys (the journal's editor shares Vim's page-wide keys but does not
+  // listen for this one).
+  test(`\\t does nothing in the journal's editor in ${engine.name}`, () =>
     onSlipBox(
       engine,
       async (page) => {
-        const label = () => inPanel(page, `return root.querySelector(".home-type")?.textContent.trim() ?? null`);
-        const marked = () => inPanel(page, `return root.querySelector('.type-row[aria-selected="true"] .tag')?.textContent.trim() ?? null`);
-        const menu = () => inPanel(page, `return root.activeElement?.classList.contains("type-menu") ?? false`);
-        const list = () => inPanel(page, `return root.activeElement?.classList.contains("slip-list") ?? false`);
-        const text = () => inPanel(page, `return root.querySelector(".cm-content").textContent`);
-        // Back in the text, not on the label; a Vim x then proves where the cursor is.
-        const backInText = () => until(() => inPanel(page, `return root.activeElement?.classList.contains("cm-content") ?? false`));
-        const pressT = async () => {
-          await page.keyboard.press("\\");
-          await page.keyboard.press("t");
-        };
-        const openLoose = () =>
-          until(() =>
-            page.evaluate(() => {
-              const row = [...(document.querySelector("note-list")?.shadowRoot?.querySelectorAll("li") ?? [])].find((r) => r.querySelector(".name")?.textContent.trim() === "Loose note");
-              row?.click();
-              return Boolean(row);
-            }),
-          );
-
-        // The Slip-Box itself has no type label, so the key does nothing in its editor.
-        await until(() => page.evaluate(() => Boolean(document.querySelector("note-editor[stage]")?.shadowRoot?.querySelector(".cm-content"))));
-        await page.evaluate(() => document.querySelector("note-editor[stage]").shadowRoot.querySelector(".cm-content").focus());
-        await pressT();
-        assert.equal(await page.evaluate(() => Boolean(document.querySelector("note-editor[stage]").shadowRoot.querySelector(".type-menu"))), false);
-
-        // The label names the key; the menu opens on the note's own type.
-        await openLoose();
-        await until(async () => (await label())?.endsWith("Fleeting"));
-        // Taken out of the Slip-Box, so Permanent has to ask for a place below.
-        await until(() => inPanel(page, `const x = root.querySelector(".home .x:not(:disabled)"); x?.click(); return Boolean(x)`));
-        await until(() => inPanel(page, `return !root.querySelector(".home .x")`));
-        assert.equal(await label(), "\\t Fleeting");
-        await inPanel(page, `root.querySelector(".cm-content").focus()`);
-        await page.keyboard.press("l");
-        await page.keyboard.press("l");
-        await pressT();
-        await until(menu);
-        assert.equal(await marked(), "Fleeting");
-        await page.keyboard.press("j");
-        assert.equal(await marked(), "Literature");
-        await page.keyboard.press("k");
-        assert.equal(await marked(), "Fleeting");
-        // Escape changes nothing, and the cursor has not moved.
-        await page.keyboard.press("Escape");
-        await backInText();
-        assert.equal(await label(), "\\t Fleeting");
-        await page.keyboard.press("x");
-        await until(async () => (await text()) === "Lose note");
-        // Enter sets the type, and Vim keys still work at the cursor: normal mode, not typing.
-        await pressT();
-        await until(menu);
-        await page.keyboard.press("j");
-        await page.keyboard.press("Enter");
-        await until(async () => (await label()) === "\\t Literature");
-        await backInText();
-        await page.keyboard.press("x");
-        await until(async () => (await text()) === "Loe note");
-        // Permanent outside the Slip-Box goes on to the list; Escape there returns to the text.
-        await pressT();
-        await until(menu);
-        await page.keyboard.press("j");
-        await page.keyboard.press("Enter");
-        await until(list);
-        await page.keyboard.press("Escape");
-        await backInText();
-        assert.equal(await label(), "\\t Literature");
-        // Picking a place sets both, and returns to the text too.
-        await pressT();
-        await until(menu);
-        await page.keyboard.press("j");
-        await page.keyboard.press("Enter");
-        await until(list);
-        await page.keyboard.press("Enter");
-        await until(async () => (await label()) === "\\t Permanent");
-        await backInText();
-        await page.keyboard.press("x");
-        await until(async () => (await text()) === "Lo note");
-        // The journal's editor shares Vim's page-wide keys but does not listen for this one.
         await until(() =>
           page.evaluate(() => {
             const tile = [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile")].find((t) => t.querySelector(".title")?.textContent.trim() === "Journal");
@@ -245,20 +308,14 @@ for (const engine of ENGINES) {
         );
         await until(() => page.evaluate(() => Boolean(document.querySelector("journal-entry")?.shadowRoot?.querySelector(".cm-content"))));
         await page.evaluate(() => document.querySelector("journal-entry").shadowRoot.querySelector(".cm-content").focus());
-        await pressT();
+        await page.keyboard.press("\\");
+        await page.keyboard.press("t");
         await page.keyboard.press("Escape");
         assert.equal(await page.evaluate(() => document.activeElement?.tagName.toLowerCase()), "journal-entry");
         assert.equal(await page.evaluate(() => [...document.querySelectorAll("note-editor")].some((e) => e.shadowRoot.querySelector(".type-menu"))), false);
       },
-      async (cookie) => {
-        const res = await fetch(`${BASE_URL}/api/notes/${LOOSE}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` },
-          body: JSON.stringify({ title: "Loose note", body: "Loose note", baseVersion: null, about: [{ kind: "note", id: SLIPBOX }] }),
-        });
-        assert.equal(res.status, 200);
-      },
-      () => localStorage.setItem("settings:product", JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: false, vimKeys: true })),
+      null,
+      VIM_KEYS,
     ));
 
   // Browser: a gesture (a press on a greyed type shows why, since a phone has no tooltip,
@@ -280,7 +337,8 @@ for (const engine of ENGINES) {
         await until(async () => (await label()) === "Permanent");
         await inPanel(page, `root.querySelector(".home-type").click()`);
         await until(async () => (await line(0)) !== null);
-        assert.equal(await inPanel(page, `return root.querySelector(".type-row").title`), REASON);
+        // The note under it arrives from the first pull a moment after the note itself.
+        await until(async () => (await inPanel(page, `return root.querySelector(".type-row").title`)) === REASON);
         assert.notEqual(await line(0), REASON);
         await inPanel(page, `root.querySelector(".type-row").click()`);
         await until(async () => (await line(0)) === REASON);
