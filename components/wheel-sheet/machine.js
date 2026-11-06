@@ -319,18 +319,21 @@ export const machine = setup({
       "first. Delete takes the wheel away with the short notice whose Undo shows it again; a wheel " +
       "left untouched, with no Actual and Wanted as carried over, is not kept and shows no notice, " +
       "and one emptied while rating is deleted only when the sheet folds, so a score can be " +
-      "cleared and set again. Past the first area or the last, j and k go on to the card next to " +
-      "the sheet or the page around. A wheel is written exactly while the day's own text is, as " +
+      "cleared and set again. After a key, a wheel that goes this way puts the keyboard on the + " +
+      "Add sheet row; after a press nothing moves. Past the first area or the last, j and k go " +
+      "on to the card next to the sheet or the page around. A wheel is written exactly while the day's own text is, as " +
       "the journal page says: until 2:00 the next night, when an open sheet becomes read only; " +
       "an earlier day is read only, with Close. A narrow page, such as a phone, stacks the " +
       "wheel above the rows, with larger targets.",
     kind: "view",
     emits: ["wheel.saved"],
     asks: ["wheels: list", "settings: read"],
+    sends: ["sheet-picker: focus"],
     attributes: [],
   },
   context: ({ input }) => ({
     ask: input.ask,
+    send: input.send,
     mint: input.mint,
     now: input.now,
     throttleMs: input.throttleMs ?? 400,
@@ -362,6 +365,9 @@ export const machine = setup({
   initial: "loading",
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    // What held the keyboard went: the row after the sheets is its natural place (4.3, one view
+    // instructing another).
+    _handBack: { actions: ({ context }) => context.send?.("sheet-picker", "focus", {}) },
     // Moving to another day folds the open sheet, as Done does. Nothing is asked: every
     // day's wheels are already held.
     "day.shown": [

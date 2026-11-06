@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing, render } from "lit";
-import { mount, unmount, ask } from "bus";
+import { mount, unmount, ask, send } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
 import { EditorState, Compartment, Prec, Annotation, StateField, StateEffect } from "@codemirror/state";
@@ -8,6 +8,7 @@ import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
 import { machine, boxMarks, cardBoxes, sayMarks, statusOf, writable, rowAction, rowTarget, boxEdge } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
+import add from "./commands/add.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text inside its scrolling page
 // (the product page nests it), so it scrolls with the day it is about.
@@ -241,8 +242,16 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       // Vim's registers are one per page, so text put there is what any editor's p pastes.
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now(), unfolded, pushRegister: toRegister },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        send: (target, name, payload) => send(machine, target, name, payload),
+        mint: ulid,
+        now: () => Date.now(),
+        unfolded,
+        pushRegister: toRegister,
+      },
       events: { "choice-point.saved": saved },
+      commands: { add },
     });
     this.subscription = this.actor.subscribe((snapshot) => {
       // Only once the day's choice points are in, so the empty start does not forget them.
@@ -272,6 +281,11 @@ class ChoicePointCards extends LitElement {
       container-type: inline-size;
       color: var(--color-body);
     }
+    /* The page around spaces what it holds with a gap, so a day without a choice point must
+       take no place in it at all. */
+    :host([idle]) {
+      display: none;
+    }
     /* Focusable only by script and by a press, so a press on the section's own text lands
        here rather than being handed to the journal's text by its delegated focus. */
     section {
@@ -300,31 +314,6 @@ class ChoicePointCards extends LitElement {
     button:disabled {
       cursor: default;
       color: var(--color-mute);
-    }
-    /* The New choice point row reads like the New note and New chat rows: a muted line
-       with a plus, the whole width, so it is one more row of the list rather than a
-       control beside its heading. */
-    .new {
-      display: flex;
-      align-items: center;
-      width: 100%;
-      box-sizing: border-box;
-      text-align: left;
-      padding: var(--space-xs) var(--space-sm);
-      border-color: transparent;
-      border-radius: var(--radius-sm);
-      background: transparent;
-      color: var(--color-body-mid);
-    }
-    .new:hover {
-      background: var(--color-surface-hover);
-    }
-    .new .mark {
-      display: inline-flex;
-      margin-right: var(--space-xs);
-    }
-    .new .mark svg {
-      display: block;
     }
     .list {
       display: flex;
@@ -593,26 +582,53 @@ class ChoicePointCards extends LitElement {
 
   #actor = new ActorController(this);
 
-  // Where the keyboard goes once the next render lands: a box of the open sheet, a card
-  // folded from it, or the New choice point row. Kept here because the elements exist only after render.
+  // Where the keyboard goes once the next render lands: a box of the open sheet or a card
+  // folded from it. Kept here because the elements exist only after render.
   #focusNext = null;
+  // The last add the keyboard was given for.
+  #landed = 0;
+  // Whether the keyboard was inside before this render, and whether the last thing the user
+  // did here was a press: after a press nothing moves, as a keyboard moved onto text would
+  // come up on a phone. On the host while capturing, because a box keeps some keys to itself.
+  #holding = false;
+  #byPress = false;
+
+  constructor() {
+    super();
+    this.addEventListener("keydown", () => { this.#byPress = false; }, true);
+    this.addEventListener("pointerdown", () => { this.#byPress = true; }, true);
+  }
 
   // The editors of the open sheet by key ("<id>:<field>"), each with the region it is
   // drawn in; and what the last render asked of each box.
   #boxes = new Map();
   #wanted = new Map();
 
-  updated() {
-    this.#syncBoxes();
-    if (!this.#focusNext) return;
-    const target = this.renderRoot.querySelector(this.#focusNext) ?? this.renderRoot.querySelector(".new");
-    this.#focusNext = null;
-    const box = [...this.#boxes.values()].find((b) => b.region === target);
-    if (box) this.#focusBox(box);
-    else if (target) this.#focusRow(target);
+  willUpdate() {
+    this.#holding = this.matches(":focus-within");
+    const snapshot = this.#actor.snapshot;
+    this.toggleAttribute("idle", !snapshot || !(snapshot.matches("failed") || this.#items(snapshot.context).length));
   }
 
-  // A box opened from the New row or a card takes the keyboard in Vim's insert mode when Vim
+  updated() {
+    this.#syncBoxes();
+    const context = this.#actor.snapshot?.context;
+    if (context && context.landing !== this.#landed) {
+      this.#landed = context.landing;
+      this.#focusNext = `.box[data-key="${context.drafts.at(-1)?.id}:situation"]`;
+    }
+    if (this.#focusNext) {
+      const target = this.renderRoot.querySelector(this.#focusNext);
+      this.#focusNext = null;
+      const box = [...this.#boxes.values()].find((b) => b.region === target);
+      if (box) this.#focusBox(box);
+      else if (target) this.#focusRow(target);
+    }
+    // What held the keyboard went (one left empty, a delete, an Undo).
+    if (this.#holding && !this.#byPress && !this.matches(":focus-within")) this.#actor.send({ type: "_handBack" });
+  }
+
+  // A box opened by the add command or from a card takes the keyboard in Vim's insert mode when Vim
   // keys is on, so the first key typed is text.
   #focusBox(box) {
     box.view.focus();
@@ -680,12 +696,12 @@ class ChoicePointCards extends LitElement {
     box.view.dispatch({ selection: { anchor: doc.line(n).from }, scrollIntoView: true });
   }
 
-  // The rows of the list, in the order shown: cards, open sheets and the New row.
+  // The rows of the list, in the order shown: cards and open sheets.
   #rows() {
     return [...(this.renderRoot?.querySelectorAll(".list > *") ?? [])];
   }
 
-  // A card or the New row takes the keyboard itself; an open sheet in its first box (its
+  // A card takes the keyboard itself; an open sheet in its first box (its
   // last, coming from below), or on Close when its boxes take no keyboard.
   #focusRow(row, edge = "first") {
     if (!row.classList.contains("sheet")) return row.focus();
@@ -697,15 +713,15 @@ class ChoicePointCards extends LitElement {
   }
 
   // A page that nests the cards hands them the keyboard by the host (journal-entry, with
-  // Vim keys): the first row, or the last when it comes from below.
+  // Vim keys): the first row, or the last when it comes from below. With no row it stays where
+  // it was, so the entry passes this view over.
   focus(options) {
     const rows = this.#rows();
     const row = options?.from === "below" ? rows.at(-1) : rows[0];
     if (row) this.#focusRow(row, options?.from === "below" ? "last" : "first");
-    else super.focus(options);
   }
 
-  // The list's keys (12, "Vim keys"), on a card, the New row or a sheet's button; a box
+  // The list's keys (12, "Vim keys"), on a card or a sheet's button; a box
   // decides its own (#boxEdge). gg is two presses, so a first g waits a moment for the
   // second, as in the other lists. A move past either end is not used here, so it
   // bubbles on to the page around.
@@ -847,12 +863,12 @@ class ChoicePointCards extends LitElement {
     this.#send({ type: "_done", id }, `.card[data-id="${id}"]`);
   }
 
-  // The keyboard moves on to the row after the sheet; the New row is always there to take
-  // it, because only a day that can be written offers Delete.
+  // After a key the keyboard moves on to the row after the sheet; with none it goes to + Add
+  // sheet, as updated() sees it went. After a press nothing moves.
   #delete(id) {
     const rows = this.#rows();
     const next = rows[rows.findIndex((row) => row.dataset.id === id) + 1];
-    this.#send({ type: "_delete", id }, next?.dataset.id ? `[data-id="${next.dataset.id}"]` : ".new");
+    this.#send({ type: "_delete", id }, next && !this.#byPress ? `[data-id="${next.dataset.id}"]` : null);
   }
 
   #card(context, r) {
@@ -928,30 +944,27 @@ class ChoicePointCards extends LitElement {
     </div>`;
   }
 
+  // A new choice point joins the list where it will stand once kept, last, so the sheet keeps
+  // its place (and the keyboard) when the fact first announces it.
+  #items({ choicePoints, drafts }) {
+    return [...choicePoints, ...drafts.filter((d) => !choicePoints.some((r) => r.id === d.id))];
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const ready = snapshot.matches("ready");
     const failed = snapshot.matches("failed");
     const { context } = snapshot;
-    const { choicePoints, drafts } = context;
-    // A new choice point joins the list where it will stand once kept, last, so the sheet
-    // keeps its place (and the keyboard) when the fact first announces it.
+    const { drafts } = context;
     this.#wanted.clear();
-    const items = [...choicePoints, ...drafts.filter((d) => !choicePoints.some((r) => r.id === d.id))];
+    const items = this.#items(context);
     const draftOf = (r) => drafts.find((d) => d.id === r.id);
-    // An earlier day without choice points has nothing to show or add.
-    if (!items.length && !failed && !writable(context)) return nothing;
+    if (!items.length && !failed) return nothing;
     return html`<section tabindex="-1" aria-label="Choice points">
       ${failed ? html`<p class="empty">Choice points are unavailable.</p>` : nothing}
-      ${items.length || writable(context)
+      ${items.length
         ? html`<div class="list" @keydown=${this.#rowKey}>
             ${items.map((r) => (draftOf(r) ? this.#sheet(context, draftOf(r)) : this.#card(context, r)))}
-            ${writable(context)
-              ? html`<button type="button" class="new" ?disabled=${!ready} @click=${() => this.#add()}>
-                  <span class="mark">${icon("plus")}</span>New choice point
-                </button>`
-              : nothing}
           </div>`
         : nothing}
     </section>`;

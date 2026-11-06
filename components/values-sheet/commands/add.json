@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "add puts Your values on the day shown, when that day can be written, and gives the panel the keyboard: folded to be read, or open in the first name when no values are written yet.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

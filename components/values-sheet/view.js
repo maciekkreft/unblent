@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing, render } from "lit";
-import { mount, unmount, ask } from "bus";
+import { mount, unmount, ask, send } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
 import { EditorState, Prec, Annotation, StateField, StateEffect } from "@codemirror/state";
@@ -9,10 +9,11 @@ import { baseExtensions, setVim, toRegister } from "editor";
 import { machine, writable, placeable, isPlaced, shownValues, changedLine, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey, suggestionFor, isEmpty } from "./machine.js";
 import saved from "./events/values.saved.json" with { type: "json" };
 import placed from "./events/values.placed.json" with { type: "json" };
+import add from "./commands/add.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text and above the choice
 // points, inside the day's scrolling page, so it scrolls with the day it is about. It is
-// drawn like choice-point-cards: the same section, card, sheet and New row.
+// drawn like choice-point-cards: the same section, card and sheet.
 
 // Each box is a CodeMirror editor built on the editor kit (10), so it takes Vim's keys when
 // the "Vim keys" preference (12) is on. A box holds one line (the machine turns a break
@@ -147,12 +148,14 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        send: (target, name, payload) => send(machine, target, name, payload),
         mint: ulid,
         now: () => Date.now(),
         // Vim's registers are one per page, so text put there is what any editor's p pastes.
         pushRegister: toRegister,
       },
       events: { "values.saved": saved, "values.placed": placed },
+      commands: { add },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -176,6 +179,11 @@ class ValuesSheet extends LitElement {
     :host {
       display: block;
       color: var(--color-body);
+    }
+    /* The page around spaces what it holds with a gap, so a day that does not show the panel
+       must take no place in it at all. */
+    :host([idle]) {
+      display: none;
     }
     /* Focusable only by script and by a press, so a press on the section's own text lands
        here rather than being handed to the journal's text by its delegated focus. */
@@ -221,8 +229,8 @@ class ValuesSheet extends LitElement {
       cursor: default;
       color: var(--color-mute);
     }
-    /* The New value and Write your values rows read like the New choice point row: a
-       muted line with a plus, the whole width. */
+    /* The New value and Write your values rows read like the New note row: a muted line with
+       a plus, the whole width. */
     .new {
       display: flex;
       align-items: center;
@@ -579,6 +587,19 @@ class ValuesSheet extends LitElement {
   // Where the keyboard goes once the next render lands, as a selector. Kept here because
   // the elements exist only after render.
   #focusNext = null;
+  // The last add the keyboard was given for.
+  #landed = 0;
+  // Whether the keyboard was inside before this render, and whether the last thing the user
+  // did here was a press: after a press nothing moves, as a keyboard moved onto text would
+  // come up on a phone. On the host while capturing, because a box keeps some keys to itself.
+  #holding = false;
+  #byPress = false;
+
+  constructor() {
+    super();
+    this.addEventListener("keydown", () => { this.#byPress = false; }, true);
+    this.addEventListener("pointerdown", () => { this.#byPress = true; }, true);
+  }
 
   // The editors of the open sheet by key ("<id>:<field>"), each with the region it is
   // drawn in; and what the last render asked of each box.
@@ -619,8 +640,28 @@ class ValuesSheet extends LitElement {
     this.#viewport.observe(document.documentElement, { attributes: true, attributeFilter: ["data-viewport"] });
   }
 
+  // Whether the day shows nothing of the panel, which render() draws as nothing.
+  #empty(snapshot) {
+    if (snapshot.matches("loading")) return true;
+    if (snapshot.matches("failed")) return false;
+    const { context } = snapshot;
+    if (!isPlaced(context)) return true;
+    return !context.open && !shownValues(context).length && !writable(context);
+  }
+
+  willUpdate() {
+    this.#holding = this.matches(":focus-within");
+    const snapshot = this.#actor.snapshot;
+    this.toggleAttribute("idle", !snapshot || this.#empty(snapshot));
+  }
+
   updated() {
     this.#syncBoxes();
+    const context = this.#actor.snapshot?.context;
+    if (context && context.landing !== this.#landed) {
+      this.#landed = context.landing;
+      this.#focusNext = ".box[data-key], section > .card, section > .new";
+    }
     if (this.#refocus) {
       // Reattached and focused, the editor reads the cursor from where the browser put it
       // a moment later; the cursor it had is put back then (#keepCursor).
@@ -632,12 +673,16 @@ class ValuesSheet extends LitElement {
       this.#refocus = null;
     }
     this.#moving = false;
-    if (!this.#focusNext) return;
-    const target = this.renderRoot.querySelector(this.#focusNext) ?? this.renderRoot.querySelector(".card, .new");
-    this.#focusNext = null;
-    const box = [...this.#boxes.values()].find((b) => b.region === target);
-    if (box) this.#focusBox(box);
-    else target?.focus();
+    if (this.#focusNext) {
+      const target = this.renderRoot.querySelector(this.#focusNext) ?? this.renderRoot.querySelector(".card, .new");
+      this.#focusNext = null;
+      const box = [...this.#boxes.values()].find((b) => b.region === target);
+      if (box) this.#focusBox(box);
+      else target?.focus();
+    }
+    // The panel went while holding the keyboard (taken off the day, an Undo). Only then: inside
+    // the sheet the keyboard has a place of its own to go.
+    if (this.#holding && !this.#byPress && this.hasAttribute("idle")) this.#actor.send({ type: "_handBack" });
   }
 
   // A box given the keyboard takes it in Vim's insert mode when Vim keys is on, so the
@@ -797,18 +842,12 @@ class ValuesSheet extends LitElement {
     this.#send({ type: "_open" }, writable(context) ? ".box[data-key]" : ".sheet .close");
   }
 
-  // + Your values: the panel joins today's page, folded with the keyboard on the list, or
-  // open in the first name when there are no values to read yet.
-  #place() {
-    this.#send({ type: "_place" }, ".box[data-key], section > .card");
-  }
-
   #done() {
     this.#send({ type: "_done" }, ".card, .new");
   }
 
   // A page that nests the sheet hands it the keyboard by its host (journal-entry, with
-  // Vim keys): folded, on the card, the + Your values row or the Write your values row;
+  // Vim keys): folded, on the card or the Write your values row;
   // open, on the first box, in Vim's normal mode, or on a button of a sheet only read.
   focus(options) {
     // Handed the keyboard from above or below with Vim keys on, an open sheet takes it on
@@ -819,8 +858,7 @@ class ValuesSheet extends LitElement {
     const box = first && this.#boxes.get(first.dataset.key);
     if (box) return box.view.focus();
     const button = this.renderRoot?.querySelector("section > .card, section > .new, .sheet button");
-    if (button) button.focus(options);
-    else super.focus(options);
+    button?.focus(options);
   }
 
   // A new value at the end, or at index `at` (Vim's o and O on a row).
@@ -1059,13 +1097,8 @@ class ValuesSheet extends LitElement {
     this.#wanted.clear();
     if (snapshot.matches("loading")) return nothing;
     const failed = snapshot.matches("failed");
-    // A day the panel was not added to shows nothing, and today's page the row that adds it.
-    if (!failed && !isPlaced(context)) {
-      if (!placeable(context)) return nothing;
-      return html`<section tabindex="-1" class="unplaced">
-        <button type="button" class="new" @click=${() => this.#place()}><span class="plus">${icon("plus")}</span>Your values</button>
-      </section>`;
-    }
+    // A day the panel was not added to shows nothing.
+    if (!failed && !isPlaced(context)) return nothing;
     const shown = shownValues(context);
     const names = shown.map((v) => v.name.trim() || "A value");
     // An earlier day without values has nothing to show.

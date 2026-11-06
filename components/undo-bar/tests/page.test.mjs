@@ -41,7 +41,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         assert.equal(await button(page, "undo").isDisabled(), true, "nothing to undo yet");
-        await page.locator("values-sheet .unplaced .new").click();
+        await page.locator("sheet-picker .new").click();
+        await page.locator('sheet-picker .pick[data-id="values"]').click();
         await page.keyboard.type("Courag");
         await page.locator("values-sheet .done").click();
         await until(async () => (await button(page, "undo").getAttribute("title")) === "Undo: add value Courag");

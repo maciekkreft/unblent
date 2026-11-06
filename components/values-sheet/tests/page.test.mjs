@@ -1,7 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// What only a browser shows: + Your values adds the panel to today's page, which a reload
+// What only a browser shows: Your values under + Add sheet adds the panel to today's page, which a reload
 // keeps, folded with the keyboard on the list when there are values, and Remove from this
 // day takes it off; with none it opens the sheet with the keyboard in the first name, Enter
 // moves on, Escape folds it into a list with each example under its value, which a reload
@@ -28,6 +28,12 @@ const isOpen = (page) => inSheet(page, (root) => !!root.querySelector(".sheet"))
 const card = (page) =>
   inSheet(page, (root) => (root.querySelector(".card") ? [...root.querySelectorAll(".card .value")].map((n) => n.textContent.trim()).join(" · ") : null));
 
+// The way in: Your values under + Add sheet.
+const addValues = async (page) => {
+  await page.locator("sheet-picker .new").click();
+  await page.locator('sheet-picker .pick[data-id="values"]').click();
+};
+
 const dayOf = (ms) => {
   const at = new Date(ms);
   return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
@@ -47,7 +53,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: a reload against real storage.
-    test("+ Your values opens a row in the name, Enter moves on, Escape folds to a card a reload keeps", async () => {
+    test("adding Your values opens a row in the name, Enter moves on, Escape folds to a card a reload keeps", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
       // Signed out the journal page asks to sign in and draws no slot.
@@ -56,7 +62,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await page.locator("values-sheet .unplaced .new").click();
+        await page.locator("sheet-picker .new").waitFor();
+        assert.equal(await page.locator("values-sheet").evaluate((el) => getComputedStyle(el).display), "none", "a day without the panel takes no room");
+        await addValues(page);
         await until(async () => (await focusedField(page)) === "name");
         await page.keyboard.type("Being a present parent");
         await page.keyboard.press("Enter");
@@ -85,7 +93,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // Yesterday's values arrive through the API under the test's own login, so today has
     // values in force but no version of its own, and so no panel until it is added.
     // Browser: a reload against real storage.
-    test("+ Your values adds the panel folded to read, a press on it opens it, a reload keeps it, and Remove from this day takes it off", async () => {
+    test("adding Your values shows the panel folded to read, a press on it opens it, a reload keeps it, and Remove from this day takes it off", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
       await signedIn(context, forgeCookie("values-placed"));
@@ -97,7 +105,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         const sheet = page.locator("values-sheet");
-        await sheet.locator(".unplaced .new").click();
+        await addValues(page);
         await until(async () => (await card(page)) === "Honest");
         assert.equal(await isOpen(page), false, "read first, edited on purpose");
         assert.equal(await inSheet(page, (root) => root.activeElement?.className), "card", "the keyboard on the list");
@@ -107,10 +115,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await sheet.locator(".card").click();
         await until(async () => (await focusedField(page)) === "name");
         await sheet.locator(".unplace").click();
-        await sheet.locator(".unplaced .new").waitFor();
-        assert.equal(await inSheet(page, (root) => root.activeElement?.textContent.trim()), "Your values", "the keyboard stays on the row that brings it back");
+        await until(async () => (await sheet.evaluate((el) => getComputedStyle(el).display)) === "none");
         await page.reload({ waitUntil: "domcontentloaded" });
-        await sheet.locator(".unplaced .new").click();
+        await addValues(page);
         await until(async () => (await card(page)) === "Honest");
         assert.deepEqual(problems, []);
       } finally {
@@ -238,7 +245,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const text = page.locator("journal-entry .cm-content").first();
         await text.click();
         await page.keyboard.type("Today");
-        await page.locator("values-sheet .unplaced .new").click();
+        await addValues(page);
         await until(async () => (await focusedField(page)) === "name");
         await page.keyboard.type("Kind");
         await page.locator("values-sheet .done").click();
@@ -265,7 +272,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
     // Today's values arrive through the API under the test's own login.
     // Browser: focus and keys.
-    test("with Vim keys on, j and k go on out of the open sheet's first and last rows to the journal's text and the choice points, and back to the same row", async () => {
+    test("with Vim keys on, j and k go on out of the open sheet's first and last rows to the journal's text and + Add sheet, and back to the same row", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
       await signedIn(context, forgeCookie("values-out"));
@@ -279,14 +286,14 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await page.locator("choice-point-cards .new:not([disabled])").waitFor();
+        await page.locator("sheet-picker .new").waitFor();
         // Where the keyboard is: a row of the sheet by its value's id, the journal's text, or
-        // the choice points.
+        // the + Add sheet row.
         const at = () =>
           page.evaluate(() => {
             const sheet = document.querySelector("values-sheet");
             if (sheet.matches(":focus-within")) return sheet.shadowRoot.activeElement?.closest(".row")?.dataset.id ?? "sheet";
-            if (document.querySelector("choice-point-cards").matches(":focus-within")) return "choice points";
+            if (document.querySelector("sheet-picker").matches(":focus-within")) return "add sheet";
             return document.querySelector("journal-entry").shadowRoot.activeElement?.classList.contains("cm-content") ? "text" : null;
           });
         const press = async (key, want) => {
@@ -300,7 +307,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await press("k", "text");
         await press("j", ID(1));
         await press("j", ID(2));
-        await press("j", "choice points");
+        await press("j", "add sheet");
         await press("k", ID(2));
         assert.equal(await isOpen(page), true, "the sheet stays open");
         assert.deepEqual(problems, []);

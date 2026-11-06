@@ -416,8 +416,9 @@ export const machine = setup({
   meta: {
     description:
       "Shows the choice points of the journal day on the page, under the day's text, in a " +
-      "section named \"Choice points\" for screen readers, with no heading shown. On today's page a \"New choice point\" row after the " +
-      "day's choice points, muted with a plus like the New note row, adds one and opens it in " +
+      "section named \"Choice points\" for screen readers, with no heading shown; a day with none " +
+      "shows nothing, takes no room and takes no keyboard. The add command, from Choice point " +
+      "under + Add sheet, adds one on a day that can be written and opens it in " +
       "place with the keyboard in Situation: the V drawing and four boxes, Away · hooked, " +
       "Towards · unhooked, Situation, and Thoughts & feelings. The boxes grow with what is " +
       "written and take Vim's keys when Vim keys is on, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept; Tab moves on to the next box or " +
@@ -439,12 +440,13 @@ export const machine = setup({
       "deleted, also one kept before, at once, with the short notice whose Undo brings it back. " +
       "Delete, to the left of Done on a day that can be written, does the same whatever the " +
       "boxes hold, and Undo brings back everything that was written; the sheet goes and the " +
-      "keyboard moves to the next row. A new one with nothing written just goes, with no " +
-      "notice. Undo and Redo also take back a stretch of typing in a choice " +
+      "keyboard moves to the next row, or, with none, onto the + Add sheet row; after a press " +
+      "nothing moves. A new one with nothing written just goes, with no " +
+      "notice, the same way. Undo and Redo also take back a stretch of typing in a choice " +
       "point, and an open sheet follows them while nothing typed in it waits to be saved. Choice points are written exactly while the day's own text " +
       "is, as the journal page says: today's page, also past midnight until the journal's day " +
       "ends at 2:00; then an open sheet becomes read only. On " +
-      "an earlier day there is no New choice point row, and a card opens its sheet " +
+      "an earlier day a card opens its sheet " +
       "to be read, with boxes that cannot be typed in and a Close button instead of Done and Delete. It " +
       "follows the day the journal page shows from day.shown, and shows today until the page " +
       "has said. On a narrow width the V stands above the boxes. When Settings has an " +
@@ -472,8 +474,8 @@ export const machine = setup({
       "after a mark is tapped until something else is pressed, or while the text cursor is " +
       "on a checked line; otherwise the status line says why Jev could not check when it " +
       "could not, and is empty. The arrow keys, and with Vim " +
-      "keys on j, k, gg and G, step through the cards, the open sheets and the New choice " +
-      "point row; Enter opens a card, or adds a choice point on the New row, and o adds one. " +
+      "keys on j, k, gg and G, step through the cards and the open sheets; Enter opens a card, " +
+      "and o adds a choice point. " +
       "An open sheet takes the keyboard in its first box, in Vim's normal mode, or, on an " +
       "earlier day, whose boxes take no keyboard, on Close. In a box, in Vim's normal mode, " +
       "j on the last line goes to the first line of the next box and k on the first line to " +
@@ -484,10 +486,12 @@ export const machine = setup({
     kind: "view",
     emits: ["choice-point.saved"],
     asks: ["choice-points: list", "settings: read", "choice-point-checks: read", "evaluators: list"],
+    sends: ["sheet-picker: focus"],
     attributes: [],
   },
   context: ({ input }) => ({
     ask: input.ask,
+    send: input.send,
     // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
     mint: input.mint,
@@ -505,6 +509,9 @@ export const machine = setup({
     drafts: [],
     dirty: [],
     vimKeys: false,
+    // Counts each add, so the view knows to give the new sheet the keyboard: a command has no
+    // reply, and the view is not who sent it.
+    landing: 0,
     // What choice-point-checks last said for the shown day: the settings of the four
     // boxes, and per choice point its lines and why the last check failed.
     checks: { settings: null, reports: {} },
@@ -536,6 +543,9 @@ export const machine = setup({
     "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    // What held the keyboard went: the row after the sheets is its natural place (4.3, one view
+    // instructing another).
+    _handBack: { actions: ({ context }) => context.send?.("sheet-picker", "focus", {}) },
     // On a page without the checks fact the reply is no-answerer and no line is marked.
     "xstate.done.actor.checks": {
       guard: ({ context, event }) => event.output?.day === context.day && Array.isArray(event.output.reply?.choicePoints),
@@ -634,6 +644,10 @@ export const machine = setup({
       on: {
         // A new one opens beside any already open; it is saved once something is written.
         _add: { guard: ({ context }) => writable(context), actions: assign(({ context }) => ({ drafts: [...context.drafts, blank(context.mint(), context.day)] })) },
+        add: {
+          guard: ({ context }) => writable(context),
+          actions: assign(({ context }) => ({ drafts: [...context.drafts, blank(context.mint(), context.day)], landing: context.landing + 1 })),
+        },
         _open: {
           guard: ({ context, event }) => {
             const r = held(context, event.id);

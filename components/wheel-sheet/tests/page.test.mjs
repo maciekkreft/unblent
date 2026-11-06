@@ -190,21 +190,21 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const { context, page, problems, sheet } = await open(browser, { vim: true });
       try {
         await sheet.locator(".card").waitFor();
-        const before = page.locator("choice-point-cards .new");
-        await before.waitFor();
-        await until(async () => !(await before.isDisabled()));
-        await before.focus();
-        const onNew = () => page.evaluate(() => document.querySelector("choice-point-cards").shadowRoot.activeElement?.className === "new");
+        const row = page.locator("sheet-picker .new");
+        await row.waitFor();
+        await row.focus();
+        const onRow = () => page.evaluate(() => document.querySelector("sheet-picker").shadowRoot.activeElement?.className === "new");
+        const onText = () => page.evaluate(() => document.querySelector("journal-entry").shadowRoot.activeElement?.classList.contains("cm-content") === true);
         const press = async (key, want) => {
           await page.keyboard.press(key);
           await until(async () => (await at(page)) === want);
         };
 
-        // Down from the sheet above, onto the card, and back up.
-        await press("j", "card");
-        await page.keyboard.press("k");
-        await until(onNew);
-        await press("j", "card");
+        // Up from + Add sheet below, onto the card, and back down.
+        await press("k", "card");
+        await page.keyboard.press("j");
+        await until(onRow);
+        await press("k", "card");
 
         // Into the sheet, and through it.
         await press("Enter", "0");
@@ -226,24 +226,20 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
         // Past the first area the key leaves upward, and j comes back to the same area.
         await page.keyboard.press("k");
-        await until(onNew);
+        await until(onText);
         await press("j", "0");
 
-        // Past the last area nothing follows on this page yet, so the keyboard stays there,
-        // and k goes back one.
+        // Past the last area the key goes on to + Add sheet, and k comes back to the same area.
         await press("G", "7");
         await page.keyboard.press("j");
-        await until(async () => (await at(page)) === "7");
+        await until(onRow);
+        await press("k", "7");
         await press("k", "6");
         await press("j", "7");
 
-        // Handed the keyboard from below, as journal-entry does, it lands on the last area.
-        await page.evaluate(() => document.querySelector("choice-point-cards").shadowRoot.querySelector(".new").focus());
-        await page.evaluate(() => document.querySelector("wheel-sheet").focus({ from: "below" }));
-        assert.equal(await at(page), "7");
         await press("Escape", "card");
         await page.keyboard.press("k");
-        await until(onNew);
+        await until(onText);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -281,7 +277,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
-    test("Delete shows the notice, the keyboard goes back to the page, and Undo shows the card again", async () => {
+    test("Delete shows the notice, the keyboard goes to + Add sheet, and Undo shows the card again", async () => {
       const { context, page, problems, sheet } = await open(browser);
       try {
         await sheet.locator(".card").click();
@@ -291,7 +287,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("Enter");
         await until(async () => (await sheet.locator("section").count()) === 0);
         assert.equal(await sheet.evaluate((el) => getComputedStyle(el).display), "none", "the day looks as it did without a wheel");
-        assert.equal(await page.evaluate(() => document.querySelector("journal-entry").matches(":focus-within")), true, "the keyboard went back to the day's text");
+        await until(() => page.evaluate(() => document.querySelector("sheet-picker").shadowRoot.activeElement?.className === "new"));
         await page.locator("notice-stack .undo").click();
         await sheet.locator(`.card[data-id="${ID}"]`).waitFor();
         assert.deepEqual(problems, []);

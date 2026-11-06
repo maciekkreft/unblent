@@ -1,5 +1,5 @@
 import { LitElement, html, svg, css, nothing } from "lit";
-import { mount, unmount, ask } from "bus";
+import { mount, unmount, ask, send } from "bus";
 import { ulid } from "ulid";
 import { machine, AREAS, writable, dayWheels, summaryOf, scoreLine, wheelLabel, caption, wantedLabel, sheetKey, rowKey, areaTarget } from "./machine.js";
 import saved from "./events/wheel.saved.json" with { type: "json" };
@@ -55,7 +55,12 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now() },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        send: (target, name, payload) => send(machine, target, name, payload),
+        mint: ulid,
+        now: () => Date.now(),
+      },
       events: { "wheel.saved": saved },
       commands: { add },
     });
@@ -385,8 +390,8 @@ class WheelSheet extends LitElement {
   // The last add the keyboard was given for.
   #landed = 0;
   // Whether the keyboard was inside before this render, and whether the last thing the user
-  // did here was a press: a press must not move the keyboard to the text, which on a phone
-  // would bring up the on-screen keyboard.
+  // did here was a press: after a press nothing moves, as a keyboard moved onto text would come
+  // up on a phone.
   #holding = false;
   #byPress = false;
 
@@ -416,15 +421,8 @@ class WheelSheet extends LitElement {
       this.renderRoot.querySelector(this.#focusNext)?.focus();
       this.#focusNext = null;
     }
-    if (this.#holding && !this.#byPress && !this.matches(":focus-within")) this.#handBack();
-  }
-
-  // What held the keyboard went (a wheel not kept, a delete, an Undo). With Vim keys on, the
-  // page around moves on to what follows this view, the way a j past the last area does; a key
-  // it does not use, or nothing to move to, gives the keyboard to the page around itself.
-  #handBack() {
-    this.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, composed: true }));
-    if (!this.parentElement?.matches(":focus-within")) this.parentElement?.focus();
+    // What held the keyboard went (a wheel not kept, a delete, an Undo).
+    if (this.#holding && !this.#byPress && !this.matches(":focus-within")) this.#actor.send({ type: "_handBack" });
   }
 
   // Focused by any way, an area is the one the keys act on.
@@ -507,7 +505,7 @@ class WheelSheet extends LitElement {
     this.#send({ type: "_done" }, `.card[data-id="${id}"]`);
   }
 
-  // The keyboard moves on to the next row, or the one before; with none it is handed back.
+  // The keyboard moves on to the next row, or the one before; with none it goes to + Add sheet.
   #delete() {
     const rows = this.#rows();
     const at = rows.findIndex((r) => r.classList.contains("sheet"));

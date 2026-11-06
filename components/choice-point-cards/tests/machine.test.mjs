@@ -290,8 +290,8 @@ test("yesterday is written on while the journal page says it is, and turns read 
   actor.send({ type: "day.shown", day: YESTERDAY, writable: true });
   await flush();
   assert.equal(writable(ctx()), true, "the journal's word wins over the calendar");
-  actor.send({ type: "_add" });
-  assert.equal(ctx().drafts.length, 1, "the New choice point row works");
+  actor.send({ type: "add" });
+  assert.equal(ctx().drafts.length, 1, "the add command works");
   actor.send({ type: "_open", id: A });
   actor.send({ type: "_edit", id: A, field: "thoughts", value: "Tired" });
 

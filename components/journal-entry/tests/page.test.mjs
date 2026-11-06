@@ -286,12 +286,12 @@ for (const engine of ENGINES) {
     run("with Vim keys on, j from the text's last line steps onto the nested views in order, and k back to the text", async (page) => {
       await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
-      await until(async () => (await page.locator("choice-point-cards .new:not([disabled])").count()) === 1);
+      await page.locator("sheet-picker .new").waitFor();
       await write(page, "one\ntwo");
       // Which nested view, or the text, holds the keyboard.
       const at = () =>
         page.evaluate(() => {
-          const host = ["values-sheet", "choice-point-cards"].find((n) => document.querySelector(n)?.matches(":focus-within"));
+          const host = ["values-sheet", "choice-point-cards", "sheet-picker"].find((n) => document.querySelector(n)?.matches(":focus-within"));
           if (host) return host;
           return document.querySelector("journal-entry").shadowRoot.activeElement?.classList.contains("cm-content") ? "text" : null;
         });
@@ -300,9 +300,7 @@ for (const engine of ENGINES) {
         await until(async () => (await at()) === want);
       };
       await press("Escape", "text");
-      await press("j", "values-sheet");
-      await press("j", "choice-point-cards");
-      await press("k", "values-sheet");
+      await press("j", "sheet-picker");
       await press("k", "text");
       // A appends at the end of the cursor's line: back on the last line.
       await page.keyboard.type("A!");
@@ -310,14 +308,15 @@ for (const engine of ENGINES) {
     });
 
     // Where the keyboard is, by name: the text, Your values, a choice point's box by its
-    // field, its card, its Close, or the New choice point row.
+    // field, its card or its Close, or the + Add sheet row.
     const keyboardAt = (page) =>
       page.evaluate(() => {
         if (document.querySelector("values-sheet").matches(":focus-within")) return "values";
+        if (document.querySelector("sheet-picker").matches(":focus-within")) return "add sheet";
         const cards = document.querySelector("choice-point-cards");
         if (cards.matches(":focus-within")) {
           const a = cards.shadowRoot.activeElement;
-          return a?.closest(".box")?.dataset.field ?? ["new", "card", "close", "done"].find((c) => a?.classList.contains(c)) ?? a?.className;
+          return a?.closest(".box")?.dataset.field ?? ["card", "close", "done"].find((c) => a?.classList.contains(c)) ?? a?.className;
         }
         return document.querySelector("journal-entry").shadowRoot.activeElement?.classList.contains("cm-content") ? "text" : null;
       });
@@ -332,10 +331,10 @@ for (const engine of ENGINES) {
       }, [host, selector]);
 
     // Browser: focus and keys.
-    run("with Vim keys on, j reaches blank lines at the end of the text, dd removes them, and j and k between the text, Your values and New choice point come back the same way", async (page) => {
+    run("with Vim keys on, j reaches blank lines at the end of the text, dd removes them, and j and k between the text and + Add sheet come back the same way", async (page) => {
       await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
-      await until(async () => (await page.locator("choice-point-cards .new:not([disabled])").count()) === 1);
+      await page.locator("sheet-picker .new").waitFor();
       await editor(page).click();
       await page.keyboard.press("i");
       await page.keyboard.type("one");
@@ -350,15 +349,13 @@ for (const engine of ENGINES) {
       await page.keyboard.press("d");
       await until(async () => (await linesIn(page, "journal-entry")) === 2);
       assert.equal(await keyboardAt(page), "text", "j stopped on the blank line, so dd removed it and the keyboard stays");
-      await pressTo(page, "j", "values");
+      await pressTo(page, "j", "add sheet");
       await pressTo(page, "k", "text");
       // k came back to the blank last line, which dd removes too.
       await page.keyboard.press("d");
       await page.keyboard.press("d");
       await until(async () => (await linesIn(page, "journal-entry")) === 1);
-      await pressTo(page, "j", "values");
-      await pressTo(page, "j", "new");
-      await pressTo(page, "k", "values");
+      await pressTo(page, "j", "add sheet");
       await pressTo(page, "k", "text");
     });
 
@@ -366,13 +363,14 @@ for (const engine of ENGINES) {
     run("with Vim keys on, j and k through a choice point's boxes go on out of the first and the last and come back, and a box's blank last line is reached", async (page) => {
       await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
-      await page.locator("choice-point-cards .new:not([disabled])").click();
+      await page.locator("sheet-picker .new").click();
+      await page.locator('sheet-picker .pick[data-id="choice-point"]').click();
       await until(async () => (await keyboardAt(page)) === "situation");
       await page.keyboard.press("Escape");
-      // Up through the boxes in the order shown, out of the first to Your values, and back.
+      // Up through the boxes in the order shown, out of the first to the text, and back.
       await pressTo(page, "k", "towards");
       await pressTo(page, "k", "away");
-      await pressTo(page, "k", "values");
+      await pressTo(page, "k", "text");
       await pressTo(page, "j", "away");
       await pressTo(page, "j", "towards");
       await pressTo(page, "j", "situation");
@@ -391,7 +389,7 @@ for (const engine of ENGINES) {
       await page.keyboard.press("d");
       await until(async () => (await linesIn(page, "choice-point-cards", thoughts)) === 2);
       assert.equal(await keyboardAt(page), "thoughts");
-      await pressTo(page, "j", "new");
+      await pressTo(page, "j", "add sheet");
       await pressTo(page, "k", "thoughts");
     });
 

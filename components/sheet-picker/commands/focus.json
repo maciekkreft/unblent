@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "focus puts the keyboard on the + Add sheet row: a sheet on the day just went while it held the keyboard, and this row is what follows it.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

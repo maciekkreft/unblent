@@ -1,7 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// What only a browser shows: the New choice point row opens a sheet with the keyboard in Situation,
+// What only a browser shows: Choice point under + Add sheet opens a sheet with the keyboard in Situation,
 // Escape folds it into a card that a reload keeps, Enter makes a paragraph with a gap and
 // Shift+Enter a line break, with Vim keys on the first Escape
 // only leaves insert mode, and on a narrow page the V stands above the boxes rather than
@@ -22,6 +22,12 @@ const VIM_ON = JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwit
 const inCards = (page, fn) =>
   page.evaluate((fn) => new Function("root", `return (${fn})(root)`)(document.querySelector("choice-point-cards").shadowRoot), fn.toString());
 
+// The way in: Choice point under + Add sheet.
+const addChoicePoint = async (page) => {
+  await page.locator("sheet-picker .new").click();
+  await page.locator('sheet-picker .pick[data-id="choice-point"]').click();
+};
+
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
   describe(`choice-point-cards in ${engine.name}`, { timeout: 30000 }, () => {
     let browser;
@@ -33,7 +39,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: a reload against real storage.
-    test("the New choice point row opens a sheet in Situation, Escape folds it to a card, and a reload keeps it", async () => {
+    test("adding a choice point opens a sheet in Situation, Escape folds it to a card, and a reload keeps it", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
       // Signed out the journal page asks to sign in and draws no choice points.
@@ -42,7 +48,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await page.click("choice-point-cards .new");
+        await page.locator("sheet-picker .new").waitFor();
+        assert.equal(await page.locator("choice-point-cards").evaluate((el) => getComputedStyle(el).display), "none", "a day without one takes no room");
+        await addChoicePoint(page);
         await until(async () => (await inCards(page, (root) => root.activeElement?.closest(".box")?.dataset.field)) === "situation");
         await page.keyboard.type("Family dinner");
         await page.keyboard.press("Shift+Tab");
@@ -77,8 +85,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await until(async () => (await inCards(page, (root) => root.querySelector(".new")?.disabled)) === false);
-        await page.click("choice-point-cards .new");
+        await addChoicePoint(page);
         await until(async () => (await inCards(page, (root) => root.activeElement?.closest(".box")?.dataset.field)) === "situation");
         await page.keyboard.press("Escape");
         await page.keyboard.type("iWalk");
@@ -107,9 +114,11 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         const cards = page.locator("choice-point-cards");
-        await cards.locator(".new").click();
+        await addChoicePoint(page);
+        await until(async () => (await inCards(page, (root) => root.activeElement?.closest(".box")?.dataset.field)) === "situation");
         await page.keyboard.type("First");
-        await cards.locator(".new").click();
+        await addChoicePoint(page);
+        await until(async () => (await cards.locator(".sheet").count()) === 2);
         await page.keyboard.type("Second");
         assert.equal(await cards.locator(".sheet").count(), 2);
         await cards.locator(".sheet").first().locator(".done").click();
@@ -162,7 +171,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         });
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         const cards = page.locator("choice-point-cards");
-        await cards.locator(".new").click();
+        await addChoicePoint(page);
         await cards.locator('.box[data-field="towards"] .cm-content').click();
         await page.keyboard.type("Call Anna");
         const line = (text) => cards.locator(".cm-line", { hasText: text });
@@ -227,7 +236,10 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         });
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         const cards = page.locator("choice-point-cards");
-        await cards.locator(".new").click();
+        // The values arrive from the server and their panel pushes + Add sheet down, so the row
+        // is pressed once it has come to rest.
+        await page.locator("values-sheet .card").waitFor();
+        await addChoicePoint(page);
         await cards.locator('.box[data-field="towards"] .cm-content').click();
         const line = (text) => cards.locator(".cm-line", { hasText: text });
         await page.keyboard.type("Take the kids to the pool");
@@ -250,7 +262,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
     // An earlier day and its choice point arrive through the APIs under the test's own login.
     // Browser: rendering and layout.
-    test("an earlier day's choice point opens to be read: no New row, no typing, Close", async () => {
+    test("an earlier day's choice point opens to be read: no + Add sheet, no typing, Close", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
       try {
@@ -269,7 +281,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const cards = page.locator("choice-point-cards");
         await cards.locator(".card").click();
         await cards.locator(".close").waitFor();
-        assert.equal(await cards.locator(".new").count(), 0, "no New choice point on an earlier day");
+        assert.equal(await page.locator("sheet-picker .new").count(), 0, "no + Add sheet on an earlier day");
         assert.equal(await cards.locator(".done").count(), 0);
         assert.equal(await cards.locator(".delete").count(), 0);
         await cards.locator('.box[data-field="towards"]').click();
@@ -295,7 +307,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await page.click("choice-point-cards .new");
+        await addChoicePoint(page);
         await until(async () => (await inCards(page, (root) => root.activeElement?.closest(".box")?.dataset.field)) === "situation");
         await page.keyboard.type("Dinner");
         await page.keyboard.press("Enter");
@@ -370,7 +382,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           const page = await context.newPage();
           const problems = watch(page);
           await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-          await page.click("choice-point-cards .new");
+          await addChoicePoint(page);
           const box = (sel) => page.locator(`choice-point-cards ${sel}`).boundingBox();
           const [v, away, towards] = [await box(".v"), await box(".field.away"), await box(".field.towards")];
           assert.deepEqual(problems, []);
@@ -410,7 +422,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         };
         await page.evaluate(() => document.querySelector("choice-point-cards").focus());
         await until(async () => (await at()) === "card");
-        await press("j", "new");
+        await page.keyboard.press("j");
+        await until(() => page.evaluate(() => document.querySelector("sheet-picker").shadowRoot.activeElement?.className === "new"));
         await press("k", "card");
         await press("Enter", "situation");
         await press("Escape", "situation");

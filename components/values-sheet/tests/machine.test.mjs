@@ -67,26 +67,26 @@ after(() => {
   for (const { type, ...rest } of placedRecorded) assert.ok(new Validator(PLACED, "2020-12").validate(rest).valid, JSON.stringify(rest));
 });
 
-test("today without the panel opens only by + Your values, which adds it folded to be read first", async () => {
+test("today without the panel opens only by the add command, which adds it folded to be read first", async () => {
   const { actor, places, ctx } = await start({ [EARLIER]: [v(1, "Honest")] }, { placed: {} });
   assert.equal(isPlaced(ctx()), false);
   actor.send({ type: "_open" });
   assert.equal(ctx().open, false, "a day without the panel has no sheet to open");
-  actor.send({ type: "_place" });
+  actor.send({ type: "add" });
   placedRecorded.push(...places);
   assert.deepEqual(places, [{ type: "values.placed", day: TODAY, placed: true }]);
   assert.equal(isPlaced(ctx()), true);
   assert.equal(ctx().open, false, "the values are read before they are edited");
   assert.deepEqual(shownValues(ctx()), [v(1, "Honest")], "the account's values, as they stand");
-  actor.send({ type: "_place" });
+  actor.send({ type: "add" });
   assert.equal(places.length, 1, "added once");
   actor.send({ type: "_open" });
   assert.deepEqual(ctx().drafts, [v(1, "Honest")]);
 });
 
-test("+ Your values with no values written yet opens the sheet, as there is nothing to read", async () => {
+test("the add command with no values written yet opens the sheet, as there is nothing to read", async () => {
   const { actor, ctx } = await start({}, { placed: {} });
-  actor.send({ type: "_place" });
+  actor.send({ type: "add" });
   assert.equal(ctx().open, true);
   assert.equal(ctx().drafts.length, 1, "one empty row to write in");
 });
@@ -102,20 +102,20 @@ test("Remove from this day folds the sheet, saves what was typed, and leaves the
   assert.equal(ctx().open, false);
   assert.equal(isPlaced(ctx()), false);
   actor.send({ type: "values.changed", day: TODAY, values: [v(1, "Honest and kind")], placed: false });
-  actor.send({ type: "_place" });
-  assert.equal(isPlaced(ctx()), true, "+ Your values is the one step back");
+  actor.send({ type: "add" });
+  assert.equal(isPlaced(ctx()), true, "the add command brings it back");
   assert.deepEqual(shownValues(ctx()).map((d) => d.name), ["Honest and kind"]);
 });
 
 test("Done on an added panel with no values takes it off the day; with values it keeps it", async () => {
   const empty = await start({}, { placed: {} });
-  empty.actor.send({ type: "_place" });
+  empty.actor.send({ type: "add" });
   empty.actor.send({ type: "_done" });
   assert.deepEqual(empty.places.map((e) => e.placed), [true, false]);
   assert.equal(isPlaced(empty.ctx()), false);
 
   const kept = await start({ [EARLIER]: [v(1, "Honest")] }, { placed: {} });
-  kept.actor.send({ type: "_place" });
+  kept.actor.send({ type: "add" });
   kept.actor.send({ type: "_done" });
   assert.deepEqual(kept.places.map((e) => e.placed), [true]);
   assert.equal(isPlaced(kept.ctx()), true);
@@ -127,7 +127,7 @@ test("an earlier day shows the panel only if it was added, and is never placed f
   await flush();
   assert.equal(isPlaced(ctx()), false);
   assert.equal(placeable(ctx()), false);
-  actor.send({ type: "_place" });
+  actor.send({ type: "add" });
   actor.send({ type: "_open" });
   assert.equal(ctx().open, false);
   actor.send({ type: "day.shown", day: YESTERDAY, writable: false });

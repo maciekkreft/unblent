@@ -435,14 +435,15 @@ export const machine = setup({
       "read-only list of every value on its own line with its example under it in smaller " +
       "type, whole however long; pressing it, anywhere on the folded section, opens the " +
       "sheet, as a folded choice point opens. Whether a day shows the panel is the values fact's (values: " +
-      "read's placed, and values.changed after, also from another device). Today's page " +
-      "without it shows a muted + Your values row, which adds the panel to the day " +
+      "read's placed, and values.changed after, also from another device); a day without it " +
+      "shows nothing, takes no room and takes no keyboard. The add command, from Your values " +
+      "under + Add sheet, adds the panel to a day that can be written " +
       "(values.placed) and shows the folded list with the keyboard on it, or, with no values " +
       "written yet, opens the sheet; the open sheet's Remove from this day folds it and " +
-      "takes it off the day again, leaving the values untouched, so + Your values is the one " +
-      "step back, and Done on an added panel with no values takes it off too. An earlier day " +
-      "shows the panel, read only, only if it was added on that day, and never offers + Your " +
-      "values. Open, each value is a row of its name " +
+      "takes it off the day again, leaving the values untouched, so + Add sheet brings it back, " +
+      "and Done on an added panel with no values takes it off too. After a key, going this way " +
+      "puts the keyboard on the + Add sheet row; after a press nothing moves. An earlier day " +
+      "shows the panel, read only, only if it was added on that day. Open, each value is a row of its name " +
       "and an optional example of living it, with a New value row after them; with " +
       "no values yet today's added panel shows a muted Write your values row, and an earlier " +
       "day with none shows nothing. The boxes take Vim's keys when Vim keys is on, where p pastes " +
@@ -467,7 +468,7 @@ export const machine = setup({
       "or the sheet folds; a save made as the user leaves a row they typed in (Enter or Tab " +
       "on to the next row, the box losing focus, or Done) names that row as finished, so its " +
       "lines are checked then and not while they are typed. When the page hands it the keyboard, it lands on the folded list, " +
-      "the + Your values row or the Write your values row, or, open, on the first box, or on a button when the " +
+      "the Write your values row, or, open, on the first box, or on a button when the " +
       "sheet is only read; with Vim keys on, an open sheet handed the keyboard from the text " +
       "above or the choice points below takes it on its first row or its last. When Settings names an evaluator to check the values or the " +
       "examples, and a decider can answer (a Jev key, or Kev on the Mac), the marks stand at the right end of " +
@@ -504,10 +505,15 @@ export const machine = setup({
     kind: "view",
     emits: ["values.saved", "values.placed"],
     asks: ["values: read", "settings: read", "value-checks: read", "evaluators: list", "generators: results"],
+    sends: ["sheet-picker: focus"],
     attributes: [],
   },
   context: ({ input }) => ({
     ask: input.ask,
+    send: input.send,
+    // Counts each add, so the view knows to give the panel the keyboard: a command has no
+    // reply, and the view is not who sent it.
+    landing: 0,
     // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
     mint: input.mint,
@@ -619,6 +625,9 @@ export const machine = setup({
     // system clipboard, so it goes there too, as copied; the box makes it one line (edit).
     "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    // What held the keyboard went: the row after the sheets is its natural place (4.3, one view
+    // instructing another).
+    _handBack: { actions: ({ context }) => context.send?.("sheet-picker", "focus", {}) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Moving to another day settles the sheet and asks for the new day's version. The
     // same day saying it can no longer be written saves what was typed while it could.
@@ -716,20 +725,24 @@ export const machine = setup({
           guard: ({ context }) => !context.open && isPlaced(context),
           actions: openSheet,
         },
-        // + Your values adds the panel to today's page, folded so the values are read before
-        // they are edited; with none written yet there is nothing to read, so it opens.
-        _place: {
-          guard: ({ context }) => !context.open && !isPlaced(context) && placeable(context),
-          actions: [
-            emit(({ context }) => ({ type: "values.placed", day: context.day, placed: true })),
-            assign({ placed: true }),
-            enqueueActions(({ context, enqueue }) => {
-              if (!(context.version?.values ?? []).some((v) => !isEmpty(v))) enqueue(openSheet);
-            }),
-          ],
-        },
+        // Adding puts the panel on today's page, folded so the values are read before they are
+        // edited; with none written yet there is nothing to read, so it opens. On a day that
+        // already shows it, nothing changes but where the keyboard is.
+        add: [
+          {
+            guard: ({ context }) => !context.open && !isPlaced(context) && placeable(context),
+            actions: [
+              emit(({ context }) => ({ type: "values.placed", day: context.day, placed: true })),
+              assign({ placed: true, landing: ({ context }) => context.landing + 1 }),
+              enqueueActions(({ context, enqueue }) => {
+                if (!(context.version?.values ?? []).some((v) => !isEmpty(v))) enqueue(openSheet);
+              }),
+            ],
+          },
+          { guard: ({ context }) => placeable(context), actions: assign({ landing: ({ context }) => context.landing + 1 }) },
+        ],
         // Remove from this day folds the sheet and takes the panel off today's page; the
-        // values are the account's and are not touched, so + Your values brings it back.
+        // values are the account's and are not touched, so + Add sheet brings it back.
         _unplace: {
           guard: ({ context }) => context.open && isPlaced(context) && placeable(context),
           actions: [fold, unplace],

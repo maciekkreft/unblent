@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "add opens a new choice point on the day shown, when that day can be written, with the keyboard in Situation.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}
