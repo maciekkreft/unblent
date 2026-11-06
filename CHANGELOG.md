@@ -4,6 +4,39 @@ All notable changes to Unblent for Mac are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-11-06
+
+### Added
+
+- Reading aloud, on your own Mac. Download the Kokoro voice once in Settings › This device,
+  and books are read aloud offline, at no cost. Point at a paragraph and click the speaker
+  in the margin to hear it, or press Read page in the footer. The paragraph being read is
+  tinted and the word being said lights up.
+- Highlights and comments on past journal days, with Copy, Copy link and Remove. Following a
+  link to one opens that day at the passage.
+- A comment on any highlight in a book.
+- In a chat, with Vim keys on, a cursor in the answers. It moves as it does in the book
+  reader, and `v` and Enter mark a passage.
+- In a chat, the lookups of journal day text and of books now link to what they read.
+- With Vim keys on, `dd` then `p` or `P` brings back a deleted note, chat or book in a new
+  place.
+- The Books shelf keeps the order you set.
+
+### Changed
+
+- A selection is a highlight as soon as you make it, with no button to press. Both of its
+  ends have handles you can drag, with a finger or a mouse, and Undo takes back each move.
+- Your values shows one mark per line. It is red and names each value the line goes against,
+  green when the line serves a value, and uncolored when it can't tell.
+- A folded Choice Point shows all four boxes, read only, with the marks on each line.
+- A Choice Point can be deleted again, with the Delete button to the left of Done. Undo
+  brings it back.
+
+### Fixed
+
+- Selecting text with a finger no longer jumps to everything above where it started. This
+  applies to books and to chats, including across two lines.
+
 ## [0.5.0] — 2026-11-03
 
 ### Added
