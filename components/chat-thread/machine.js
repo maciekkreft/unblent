@@ -558,10 +558,6 @@ const highlight = enqueueActions(({ context, event, enqueue }) => {
 
 const isHighlight = ({ context, event }) => (context.conversation?.highlights ?? []).some((h) => h.id === event.id);
 
-// The conversation's Vim keys (12, "Vim keys"): what a key pressed on the conversation
-// asks for. Ctrl+d and Ctrl+u are the only ones with a modifier; a letter with Ctrl, Alt
-// or Cmd belongs to the browser and the desk. `afterG` is whether a g was pressed just
-// before, which makes this g the second of gg. "g" alone waits for its second press.
 // What a lookup asked for, in plain words (7.7): each payload field as a readable word and
 // its value, dates as dates, a chapter counted from 1 as people count it (the payloads
 // count from 0), an id as "by its id" since the chat holds no name for it. Pure, so it is
@@ -650,16 +646,29 @@ const follow = (opening) =>
     enqueue.emit(opens);
   });
 
-export const vimAction = ({ key, ctrlKey, metaKey, altKey }, afterG = false) => {
+// The conversation's Vim keys (12, "Vim keys"): what a key pressed on the conversation
+// asks for. Ctrl+d and Ctrl+u are the only ones with a modifier; a letter with Ctrl, Alt
+// or Cmd belongs to the browser and the desk. `afterG` and `afterD` say a g or a d was pressed
+// just before, which makes this one the second of gg or dd; alone, each waits for its second
+// press. u is not here, because it is the global Undo (12). Enter and Escape are the
+// passage's only while one is being marked, so that otherwise Escape stays Back.
+const MOVES = new Set(["w", "b", ")", "(", "}", "{", "0", "$", "j", "k", "l", "h"]);
+export const vimAction = ({ key, ctrlKey, metaKey, altKey }, { afterG = false, afterD = false, visual = false } = {}) => {
   if (metaKey || altKey) return null;
   if (ctrlKey) return { d: "halfDown", u: "halfUp" }[key] ?? null;
+  if (visual && key === "Enter") return "make";
+  if (visual && key === "Escape") return "drop";
   if (key === "g") return afterG ? "top" : "g";
-  return { j: "down", k: "up", G: "bottom", i: "type" }[key] ?? null;
+  if (key === "d") return visual ? null : afterD ? "remove" : "d";
+  if (key === "v") return visual ? "drop" : "visual";
+  if (MOVES.has(key)) return "move";
+  return { G: "bottom", i: "type" }[key] ?? null;
 };
 
-// Where a scroll action leaves the conversation: a line's height for j and k, half the
-// box for Ctrl+d and Ctrl+u, never past either end. Half the box is whole pixels, so
-// Ctrl+u undoes Ctrl+d exactly where the browser snaps a scroll to the pixel grid.
+// Where a scroll action leaves the conversation: a line's height for j and k while there is
+// no answer for the cursor to stand in, half the box for Ctrl+d and Ctrl+u, never past either
+// end. Half the box is whole pixels, so Ctrl+u undoes Ctrl+d exactly where the browser snaps
+// a scroll to the pixel grid.
 export const scrollFor = (action, { top, height, max, line }) => {
   const half = Math.round(height / 2);
   const to = {
@@ -672,6 +681,321 @@ export const scrollFor = (action, { top, height, max, line }) => {
   }[action];
   return to === undefined ? null : Math.max(0, Math.min(max, to));
 };
+
+// The scroll that brings a box into the view, moving as little as it can, with `margin` of
+// room around it; the same scroll when the box is in view already.
+export const followTop = ({ top, height, max, boxTop, boxBottom, margin = 0 }) => {
+  const clamp = (v) => Math.max(0, Math.min(max, v));
+  if (boxTop - margin < top) return clamp(boxTop - margin);
+  if (boxBottom + margin > top + height) return clamp(boxBottom + margin - height);
+  return top;
+};
+
+// --- The answers as text, for a cursor and a passage --------------------------------------
+
+// The movement rules below, from here to `charNear`, are a copy of those in
+// components/book-reader/machine.js (`chapterText`, `step`, `charStep`, `passage`,
+// `wordAround`, `fingerPassage`, `linesOf`, `lineBoxes`, `charNear`) and of the reader's line
+// walk, because components never import each other (11.2). Where the reader has a chapter,
+// here is every answer of the chat, so a motion crosses from one answer to the next, and a
+// separator stands between two blocks and between two answers.
+const SEP = "\u0000";
+const blank = (c) => c === SEP || /\s/u.test(c);
+
+const shown = (flat, i) => {
+  if (i < 0 || i >= flat.length || flat[i] === SEP) return false;
+  if (!blank(flat[i])) return true;
+  if (i === 0 || blank(flat[i - 1])) return false;
+  let j = i + 1;
+  while (j < flat.length && blank(flat[j]) && flat[j] !== SEP) j += 1;
+  return j < flat.length && flat[j] !== SEP;
+};
+const wordStart = (flat, i) => !blank(flat[i]) && (i === 0 || blank(flat[i - 1]));
+const blockStart = (flat, i) => {
+  if (blank(flat[i])) return false;
+  let j = i - 1;
+  while (j >= 0 && blank(flat[j]) && flat[j] !== SEP) j -= 1;
+  return j < 0 || flat[j] === SEP;
+};
+const sentenceStart = (flat, i) => {
+  if (blockStart(flat, i)) return true;
+  if (blank(flat[i]) || !blank(flat[i - 1])) return false;
+  let j = i - 1;
+  while (j >= 0 && blank(flat[j])) j -= 1;
+  while (j >= 0 && /["'”’)\]]/u.test(flat[j])) j -= 1;
+  return j >= 0 && /[.!?]/u.test(flat[j]);
+};
+const blockEnd = (flat, i) => {
+  if (blank(flat[i])) return false;
+  let j = i + 1;
+  while (j < flat.length && blank(flat[j]) && flat[j] !== SEP) j += 1;
+  return j >= flat.length || flat[j] === SEP;
+};
+const seek = (flat, i, dir, ok) => {
+  for (let k = i + dir; k >= 0 && k < flat.length; k += dir) if (ok(flat, k)) return k;
+  return null;
+};
+
+const MOTIONS = {
+  w: [1, wordStart],
+  b: [-1, wordStart],
+  ")": [1, sentenceStart],
+  "(": [-1, sentenceStart],
+  "}": [1, blockEnd],
+  "{": [-1, blockStart],
+};
+
+export const isMotion = (key) => Object.hasOwn(MOTIONS, key);
+
+export const charStep = ({ flat }, i, dir) => seek(flat, i, dir, shown) ?? i;
+
+export const step = ({ flat }, i, key) => {
+  const [dir, ok] = MOTIONS[key];
+  return seek(flat, i, dir, ok) ?? (dir > 0 ? seek(flat, flat.length, -1, shown) : seek(flat, -1, 1, shown)) ?? i;
+};
+
+export const passage = ({ flat }, start, cursor, letter = false) => {
+  let lo = Math.min(start, cursor);
+  let hi = Math.max(start, cursor);
+  if (!letter && cursor > start && wordStart(flat, cursor)) hi = cursor - 1;
+  while (hi > lo && blank(flat[hi])) hi -= 1;
+  while (lo < hi && blank(flat[lo])) lo += 1;
+  return [lo, hi + 1];
+};
+
+export const wordAround = ({ flat }, i) => {
+  let at = i;
+  while (at > 0 && blank(flat[at])) at -= 1;
+  while (at < flat.length - 1 && blank(flat[at])) at += 1;
+  let from = at;
+  let to = at + 1;
+  while (from > 0 && !blank(flat[from - 1])) from -= 1;
+  while (to < flat.length && !blank(flat[to])) to += 1;
+  return [from, to];
+};
+
+export const fingerPassage = (text, [from, to], i) => {
+  const { flat } = text;
+  let at = i;
+  if (at >= from) {
+    while (at > from && blank(flat[at])) at -= 1;
+    return passage(text, from, Math.max(wordAround(text, at)[1], to) - 1, true);
+  }
+  while (at < from && blank(flat[at])) at += 1;
+  return passage(text, to - 1, wordAround(text, at)[0], true);
+};
+
+export const linesOf = (chars) => {
+  const lines = [];
+  for (const c of chars) {
+    const line = lines.at(-1);
+    if (line && Math.abs(c.top - line.top) < Math.min(c.bottom - c.top, line.bottom - line.top) / 2) {
+      line.left = Math.min(line.left, c.left);
+      line.right = Math.max(line.right, c.right);
+      line.chars.push(c);
+    } else {
+      lines.push({ top: c.top, bottom: c.bottom, left: c.left, right: c.right, chars: [c] });
+    }
+  }
+  return lines;
+};
+
+export const lineBoxes = (lines, from, to) =>
+  lines.flatMap((line) => {
+    const on = line.chars.filter((c) => c.i >= from && c.i < to);
+    if (on.length === 0) return [];
+    return [{ left: Math.min(...on.map((c) => c.left)), right: Math.max(...on.map((c) => c.right)), top: line.top, bottom: line.bottom }];
+  });
+
+const away = (v, lo, hi) => (v < lo ? lo - v : v > hi ? v - hi : 0);
+
+export const charNear = (lines, x, y) => {
+  let line = null;
+  for (const l of lines) {
+    if (!line || away(y, l.top, l.bottom) < away(y, line.top, line.bottom) || (away(y, l.top, l.bottom) === away(y, line.top, line.bottom) && away(x, l.left, l.right) < away(x, line.left, line.right))) line = l;
+  }
+  if (!line) return null;
+  let best = line.chars[0];
+  for (const c of line.chars) if (away(x, c.left, c.right) < away(x, best.left, best.right)) best = c;
+  return best.i;
+};
+
+// How many characters a line motion reads before it gives up on a line that never ends.
+const LINE_SCAN = 4000;
+const sameLine = (a, b) => Math.abs(a.top - b.top) < Math.min(a.height, b.height) / 2;
+
+// 0 and $ walk the cursor's own line to its ends; j and k walk to the next or previous line
+// and stop at the character nearest `wantX` across. `lineOf(i)` measures a character, as
+// { top, height, x }, or null when it has no box. `wantX` is Vim's wanted column, kept across
+// a run of j and k by the view, so j then k comes back to the same letter over a shorter line.
+export const lineStep = (text, i, key, lineOf, wantX = null) => {
+  const here = lineOf(i);
+  if (!here) return i;
+  const dir = key === "$" || key === "j" ? 1 : -1;
+  if (key === "0" || key === "$") {
+    // A wrapped line's last box is the space it broke at; $ stops on the last letter, as
+    // Vim's does.
+    let k = i;
+    let word = i;
+    for (let n = 0; n < LINE_SCAN; n += 1) {
+      const next = charStep(text, k, dir);
+      const at = next === k ? null : lineOf(next);
+      if (!at || !sameLine(at, here)) break;
+      k = next;
+      if (!/\s/u.test(text.flat[k])) word = k;
+    }
+    return key === "$" ? word : k;
+  }
+  const x = wantX ?? here.x;
+  let k = i;
+  let line = null;
+  let best = null;
+  for (let n = 0; n < LINE_SCAN; n += 1) {
+    const next = charStep(text, k, dir);
+    if (next === k) break;
+    k = next;
+    const at = lineOf(k);
+    if (!at) continue;
+    if (!line) {
+      if (sameLine(at, here)) continue;
+      line = at;
+    } else if (!sameLine(at, line)) break;
+    const d = Math.abs(at.x - x);
+    if (!best || d < best.d) best = { k, d };
+  }
+  return best ? best.k : i;
+};
+
+// The first character whose box ends at or below `y`, which is the start of the line at that
+// height, or the last character when none does. Characters read top to bottom, so it asks
+// for few boxes however long the chat is. `bottomOf(i)` is null for a character with no box.
+export const charAtY = ({ flat }, y, bottomOf) => {
+  let lo = 0;
+  let hi = flat.length - 1;
+  let found = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    let k = mid;
+    let bottom = null;
+    while (k <= hi && (!shown(flat, k) || (bottom = bottomOf(k)) == null)) k += 1;
+    if (k > hi) hi = mid - 1;
+    else if (bottom >= y) {
+      found = k;
+      hi = mid - 1;
+    } else lo = k + 1;
+  }
+  return found ?? seek(flat, flat.length, -1, shown);
+};
+
+export const firstChar = ({ flat }) => seek(flat, -1, 1, shown);
+export const lastChar = ({ flat }) => seek(flat, flat.length, -1, shown);
+
+// One answer's drawn text as blocks, each a list of runs that carry their offset in the
+// answer, the same runs the view draws. A line break ends a block, because the break has no
+// character of its own in a run for the cursor to stand on.
+const inlineBlocks = (nodes) => {
+  const lines = [[]];
+  const walk = (list) => {
+    for (const node of list) {
+      if (node.type === "break") lines.push([]);
+      else if (node.inline) walk(node.inline);
+      else lines.at(-1).push({ value: node.value, s: node.s });
+    }
+  };
+  walk(nodes);
+  return lines;
+};
+const textBlocks = (blocks) =>
+  blocks.flatMap((block) => {
+    switch (block.type) {
+      case "list":
+        return block.items.flatMap((item) => textBlocks(item.blocks));
+      case "quote":
+        return textBlocks(block.blocks);
+      case "code":
+        return block.lines.map((l) => [{ value: l.value, s: l.s }]);
+      case "table":
+        return [block.head, ...block.rows].flat().flatMap(inlineBlocks);
+      case "rule":
+        return [];
+      default:
+        return inlineBlocks(block.inline);
+    }
+  });
+const plainBlocks = (text) => toLines(text).map((line) => [{ value: line.text, s: line.at }]);
+
+// The finished answers of a chat as the one text a cursor walks: `flat`, the characters;
+// `at`, each character's offset in its own answer, -1 on a separator; and `answers`, the
+// [from, to) each answer takes in `flat`. What a comment or a highlight stores is an offset
+// in the answer, so `at` is how a place in this text becomes one.
+export const answersText = (turns, markdown = true) => {
+  let flat = "";
+  const at = [];
+  const answers = [];
+  for (const turn of turns) {
+    const blocks = (markdown ? textBlocks(parseMarkdown(turn.text)) : plainBlocks(turn.text))
+      .map((runs) => runs.filter((run) => run.value !== ""))
+      .filter((runs) => runs.length > 0);
+    if (blocks.length === 0) continue;
+    if (answers.length > 0) {
+      flat += SEP;
+      at.push(-1);
+    }
+    const from = flat.length;
+    blocks.forEach((runs, k) => {
+      if (k > 0) {
+        flat += SEP;
+        at.push(-1);
+      }
+      for (const run of runs) {
+        flat += run.value;
+        for (let j = 0; j < run.value.length; j += 1) at.push(run.s + j);
+      }
+    });
+    answers.push({ id: turn.id, from, to: flat.length });
+  }
+  return { flat, at, answers };
+};
+
+// The answers a cursor or a finger can mark, the ones the view draws with their offsets.
+export const finishedAnswers = (conversation) => (conversation?.turns ?? []).filter((t) => holdsHighlights(conversation, t.id));
+
+export const answerAt = ({ answers }, i) => answers.find((a) => i >= a.from && i < a.to) ?? null;
+
+// The index of one offset in one answer, or null when the text no longer holds it.
+export const indexOfPlace = (text, id, s) => {
+  const answer = text.answers.find((a) => a.id === id);
+  if (!answer) return null;
+  for (let i = answer.from; i < answer.to; i += 1) if (text.at[i] === s) return i;
+  return null;
+};
+
+// A passage of the text as the existing `_selected`, or null when it holds no character.
+export const selectionOf = (text, from, to) => {
+  const answer = answerAt(text, from);
+  if (!answer || to <= from || text.at[from] < 0 || text.at[to - 1] < 0) return null;
+  return { answerId: answer.id, start: text.at[from], end: text.at[to - 1] + 1 };
+};
+
+// A passage stays in one answer: a motion that would leave it stops on that answer's edge,
+// since a comment or a highlight is a range of one answer's text.
+export const staysIn = (text, start, next) => {
+  const answer = answerAt(text, start);
+  if (!answer || (next >= answer.from && next < answer.to)) return next;
+  if (next < answer.from) return seek(text.flat, answer.from - 1, 1, shown) ?? start;
+  return seek(text.flat, answer.to, -1, shown) ?? start;
+};
+
+// What a passage can become, the word on its button, or null when `_selected` would refuse
+// it: a Comment on the last answer, a Highlight on an earlier one, nothing over a mark.
+export const offerOf = (context, { answerId, start, end }) => {
+  const event = { answerId, start, end };
+  if (lastAnswer(context.conversation)?.id === answerId) return canSelect({ context, event }) ? "Comment" : null;
+  return canHighlight({ context, event }) ? "Highlight" : null;
+};
+
+// The highlight holding one offset of an answer, what dd removes.
+export const highlightAtPlace = (conversation, answerId, s) => highlightsOf(conversation, answerId).find((h) => h.start <= s && s < h.end) ?? null;
 
 // A Journal chapter is a day, named by its date (13, Link); a book's never has that
 // shape, so the date alone tells the Journal apart without the thread learning about books.
@@ -870,14 +1194,31 @@ export const machine = setup({
       "and never sent to the model. A click on one offers Remove. The answer's text never " +
       "changes. Removing a comment or a highlight happens at once; the top bar's Undo, and " +
       "the short notice `conversations` asks for, bring it back (12, Undo). " +
+      "A mouse selects a passage with the browser's own selection. A finger does not: the " +
+      "browser's selection jumps as a finger moves, so on a touch screen an answer's text cannot " +
+      "be selected and the system's Copy is not offered there. Instead, a finger resting on an " +
+      "answer for about 400 ms starts a passage at the word under it, tinted, which grows by whole " +
+      "words as the finger moves, from a start that stays fixed and only inside that answer, as " +
+      "far as the text on screen. A pause changes nothing. Lifting shows one button under the " +
+      "passage's last line, Comment on the last answer and Highlight on an earlier one, which does " +
+      "the same as a mouse selection; over an existing mark no button shows and the passage goes. " +
+      "A tap elsewhere or Escape drops it. A quick finger drag still scrolls the conversation, " +
+      "since the browser keeps the touch until a hold has started, and a touch the system ends " +
+      "counts as a lift, which keeps what was painted. " +
       "A failed answer says why in plain words under it; when Ollama on the user's Mac did not " +
       "answer, it reads \"Ollama isn't running. Open the Ollama app, or get it at ollama.com.\" " +
       "The conversation can hold the keyboard, with the focus ring on it. With Vim keys on, " +
-      "while it does, j and k scroll it a line, gg and G go to the top and the bottom, Ctrl+d " +
-      "and Ctrl+u scroll half the box, and i moves the keyboard into the chat box under it in " +
-      "insert mode; Escape in the chat box's normal mode, the second Escape after typing, puts " +
-      "the keyboard back on the conversation. These keys never act while the user types in the " +
-      "comment box. Its header also has Open on stage, at the top right, which shows the chat on " +
+      "while it does, a one-letter cursor is drawn as a box on its letter, in finished answers " +
+      "only, starting at the first letter in view and coming back there when the conversation was " +
+      "scrolled away from it. w b ) ( } { 0 $ j k l h move it as in the book reader, from one " +
+      "answer into the next, and the view follows; gg, G, Ctrl+d and Ctrl+u move it with the view. " +
+      "With no finished answer, j and k scroll a line. v starts a passage in the answer under the " +
+      "cursor, which no motion can leave; Enter makes it what the same selection would make, and " +
+      "the keyboard comes back to the conversation when a comment box it opened closes; Escape or " +
+      "v drops it. dd inside a highlight removes it, u is the global Undo, and i moves the keyboard " +
+      "into the chat box under it in insert mode; Escape in the chat box's normal mode, the second " +
+      "Escape after typing, puts the keyboard back on the conversation. These keys never act while " +
+      "the user types in the comment box. Its header also has Open on stage, at the top right, which shows the chat on " +
       "the stage as a tab of its own (and `:tab split` or `:tab sp` in the chat box while Vim " +
       "keys is on); the button is accent while the chat has a tab there, its arrow points towards " +
       "the stage, also after the desk moves its dock, and it is disabled until the chat has its " +

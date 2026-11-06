@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { inflateSync } from "node:zlib";
 
-// The conversation with Vim keys (12): it takes the keyboard, scrolls with j, k, gg, G,
-// Ctrl+d and Ctrl+u, hands the keyboard to the chat box in insert mode with i, and gets it
-// back from the box's normal-mode Escape. The scroll arithmetic is tested in Node.
+// The conversation with Vim keys (12): it takes the keyboard, hands it to the chat box in
+// insert mode with i, and gets it back from the box's normal-mode Escape. Its cursor is in
+// cursor.test.mjs.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
@@ -91,38 +91,6 @@ async function onConversation(browser, name) {
 }
 
 for (const engine of ENGINES) {
-  // Browser: focus and keys.
-  test(`the conversation scrolls with j, k, gg, G, Ctrl+d and Ctrl+u in ${engine.name}`, async () => {
-    const browser = await engine.launch();
-    let context;
-    try {
-      const opened = await onConversation(browser, `chat-scroll-${engine.name}`);
-      context = opened.context;
-      const { page, problems } = opened;
-      await page.keyboard.press("g");
-      await page.keyboard.press("g");
-      await until(async () => (await box(page)).top === 0);
-      await page.keyboard.press("j");
-      await until(async () => (await box(page)).top > 0);
-      const afterJ = (await box(page)).top;
-      await page.keyboard.press("Control+d");
-      await until(async () => (await box(page)).top > afterJ);
-      await page.keyboard.press("Control+u");
-      await until(async () => (await box(page)).top === afterJ);
-      await page.keyboard.press("k");
-      await until(async () => (await box(page)).top === 0);
-      await page.keyboard.press("G");
-      await until(async () => {
-        const b = await box(page);
-        return Math.abs(b.top - b.max) <= 1;
-      });
-      assert.deepEqual(problems, []);
-    } finally {
-      await context?.close();
-      await browser.close();
-    }
-  });
-
   // Browser: focus and keys.
   test(`i hands the keyboard to the chat box and its normal-mode Escape brings it back in ${engine.name}`, async () => {
     const browser = await engine.launch();

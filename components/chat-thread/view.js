@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords, openingOf, shelfOf, spineOf } from "./machine.js";
+import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords, openingOf, shelfOf, spineOf, followTop, isMotion, charStep, step, passage, wordAround, fingerPassage, linesOf, lineBoxes, charNear, lineStep, charAtY, firstChar, lastChar, answersText, finishedAnswers, answerAt, indexOfPlace, selectionOf, staysIn, offerOf, highlightAtPlace } from "./machine.js";
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
@@ -19,9 +19,13 @@ import load from "./commands/load.json" with { type: "json" };
 // The gap between a passage's last line and the comment box under it, in px; the box is
 // placed in JS, so the value is not a style (7.4 covers styles).
 const POPOVER_GAP = 6;
-// How long a finger's selection must stay still before its comment box opens: a touch
-// selection is adjusted with handles that send no pointer events, only selection changes.
-const TOUCH_SETTLE_MS = 700;
+// How long a finger rests before it starts a passage, and how far it may wander meanwhile.
+// As in book-reader's view.js, where the reasons are the same: iOS's own long press takes
+// about half a second and allows ten points of wander, and the thread acts just before it.
+const HOLD_MS = 400;
+const HOLD_SLOP = 10;
+// The text a cursor walks while the conversation does not hold the keyboard: none.
+const NO_TEXT = answersText([]);
 
 // Whether the experts shelf is folded, kept in this browser (3.1) under the component's
 // name; losing it only opens the shelf again. Wrapped, so a browser refusing storage
@@ -363,6 +367,7 @@ class ChatThread extends LitElement {
     /* The transcript scrolls inside its own box so the question box below stays in
        view and the page never scrolls. */
     .transcript {
+      position: relative;
       flex: 1;
       min-height: 0;
       overflow-y: auto;
@@ -552,6 +557,59 @@ class ChatThread extends LitElement {
       user-select: none;
       -webkit-user-select: none;
     }
+    /* What is drawn over the text: the cursor and a passage in progress. In the transcript's
+       own coordinates, so they scroll with the text, and under a comment box or a bubble
+       (z-index 1). */
+    .paint {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    /* A passage in progress, as boxes over its lines, as the book reader draws a finger's:
+       WebKit paints no ::highlight on text that cannot be selected, and a touch screen's
+       answer cannot be (below). */
+    .passage i {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--px, 0) var(--py, 0);
+      width: var(--pw, 0);
+      height: var(--ph, 0);
+      background: var(--color-accent-selection);
+      border-radius: var(--radius-sm);
+    }
+    /* The Vim cursor, as the book reader draws it: a real box on its character's own rect,
+       carrying that character in the character's own type. */
+    .cursor {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--cx, 0) var(--cy, 0);
+      width: var(--cw, 0);
+      height: var(--ch, 0);
+      line-height: var(--ch, 0);
+      text-align: center;
+      white-space: pre;
+      overflow: hidden;
+      background: var(--color-accent);
+      color: var(--color-accent-text);
+      border-radius: var(--radius-sm);
+    }
+    /* A touch screen selects no answer: the browser's selection jumps as a finger moves, so
+       a finger's passage is the thread's own (#held). The rest of the conversation keeps the
+       browser's selection, and a mouse keeps it everywhere. The conversation keeps its
+       default touch-action, because it scrolls with a finger: iOS reads that as the touch
+       begins, before a hold can be told from a drag, and a hold stops the scroll with
+       #touchmove instead. */
+    @media (hover: none) and (pointer: coarse) {
+      [data-answer] {
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+    }
     /* The comments under the answer: number, the passage, the comment. */
     .comments {
       list-style: none;
@@ -683,6 +741,11 @@ class ChatThread extends LitElement {
       align-items: center;
       gap: var(--space-2xs);
       padding: var(--space-2xs) var(--space-xs);
+    }
+    /* What a finger's passage can become: one button, placed like the comment box. */
+    .make .act,
+    .make .act:hover {
+      color: var(--color-ink);
     }
     /* A message sent with comments says so above its text. */
     .turn.user .sent-marks {
@@ -861,36 +924,32 @@ class ChatThread extends LitElement {
   // Whether the transcript is pinned to the bottom, so it follows a streaming answer
   // but leaves the reader where they scrolled if they scrolled up.
   #stick = true;
-  // The pointer that pressed last on the last answer, and the comment box last focused.
-  #pointer = null;
+  // The comment box last focused.
   #focused = null;
-  #settle;
   // The results of the chat being drawn, by call id, gathered once per render.
   #results = new Map();
   // Answers parsed once per text, not per keystroke in the comment box.
   #parsed = new Map();
 
-  #onSelectionChange = () => {
-    if (this.#pointer !== "touch") return;
-    clearTimeout(this.#settle);
-    this.#settle = setTimeout(() => this.#sendSelection(), TOUCH_SETTLE_MS);
-  };
-
   connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("selectionchange", this.#onSelectionChange);
     this.addEventListener("keydown", this.#onBoxEscape);
+    this.addEventListener("touchmove", this.#touchmove, { passive: false });
+    this.addEventListener("touchend", this.#touchend);
+    this.addEventListener("touchcancel", this.#touchend);
     this.#resized.observe(this);
     globalThis.addEventListener("resize", this.#place);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    document.removeEventListener("selectionchange", this.#onSelectionChange);
     this.removeEventListener("keydown", this.#onBoxEscape);
+    this.removeEventListener("touchmove", this.#touchmove);
+    this.removeEventListener("touchend", this.#touchend);
+    this.removeEventListener("touchcancel", this.#touchend);
     this.#resized.disconnect();
     globalThis.removeEventListener("resize", this.#place);
-    clearTimeout(this.#settle);
+    this.#cancelHold();
   }
 
   #onScroll(event) {
@@ -898,11 +957,23 @@ class ChatThread extends LitElement {
     this.#stick = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_SLOP;
   }
 
+  // A chat drawn in a hidden panel is shown unscrolled with no scroll event, so what the
+  // last event said may be out of date. Read before a change this view makes itself, so the
+  // render it brings stays where the reader is.
+  #readStick() {
+    const el = this.renderRoot.querySelector(".transcript");
+    if (el.clientHeight > 0) this.#stick = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_SLOP;
+  }
+
   updated() {
     // A desk layout change (dock.changed counted in `layouts`) may move the dock without a resize.
     this.#place();
+    // The drawn runs may have changed with this render.
+    this.#runs = new Map();
     this.#afterComment();
-    if (!this.#stick) return;
+    this.#afterFinger();
+    this.#paint();
+    if (!this.#stick || this.#finger?.down) return;
     const el = this.renderRoot.querySelector(".transcript");
     if (el) el.scrollTop = el.scrollHeight;
   }
@@ -924,28 +995,40 @@ class ChatThread extends LitElement {
   }
 
   // Vim keys on the conversation (12, "Vim keys"): only while the preference is on and
-  // never in the comment box, where a letter is typed text. gg is two presses, so a first
-  // g waits a moment for the second, as in the lists.
+  // never in the comment box, where a letter is typed text. gg and dd are two presses, so a
+  // first g or d waits a moment for the second, as in the lists. Escape takes back a finger's
+  // passage with or without the preference, the way a keyboard on a tablet would.
   #gAt = 0;
+  #dAt = 0;
   #transcriptKey(event) {
-    if (this.#actor.snapshot?.context.vimKeys !== true) return;
     if (event.isComposing) return;
     const target = event.composedPath()[0];
     if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return;
-    const afterG = event.key === "g" && Date.now() - this.#gAt < 1000;
-    const action = vimAction(event, afterG);
-    this.#gAt = action === "g" ? Date.now() : 0;
+    if (event.key === "Escape" && this.#finger && !this.#finger.down) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#dropFinger();
+      return;
+    }
+    if (this.#actor.snapshot?.context.vimKeys !== true) return;
+    const now = Date.now();
+    const action = vimAction(event, { afterG: event.key === "g" && now - this.#gAt < 1000, afterD: event.key === "d" && now - this.#dAt < 1000, visual: Boolean(this.#visual) });
+    this.#gAt = action === "g" ? now : 0;
+    this.#dAt = action === "d" ? now : 0;
     if (!action) return;
     event.preventDefault();
-    if (action === "g") return;
+    event.stopPropagation();
+    this.#readStick();
+    if (action === "g" || action === "d") return;
     // i hands the keyboard to the box slotted below in Vim's insert mode, the way a
     // container focuses its child (list-then-item); the box decides whether it can type.
     if (action === "type") return this.#box()?.focus({ insert: true });
-    const el = event.currentTarget;
-    const style = getComputedStyle(el);
-    const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
-    const top = scrollFor(action, { top: el.scrollTop, height: el.clientHeight, max: el.scrollHeight - el.clientHeight, line });
-    if (top != null) el.scrollTop = top;
+    if (action === "drop") return this.#dropVisual();
+    if (action === "make") return this.#makeVisual();
+    if (action === "visual") return this.#startVisual();
+    if (action === "remove") return this.#removeAtCursor();
+    if (action === "move") return this.#move(event.key);
+    this.#jump(action);
   }
 
   // An Escape the box left unhandled (Vim's normal mode: the first Escape after typing
@@ -1051,14 +1134,22 @@ class ChatThread extends LitElement {
           role="region"
           aria-label="Conversation"
           @keydown=${(e) => this.#transcriptKey(e)}
+          @focus=${() => this.#paint()}
+          @blur=${() => this.#transcriptLeft()}
           @scroll=${(e) => this.#onScroll(e)}
           @pointerdown=${(e) => this.#pointerdown(e)}
+          @pointermove=${(e) => this.#pointermove(e)}
           @pointerup=${(e) => this.#pointerup(e)}
+          @pointercancel=${() => this.#pointercancel()}
+          @selectstart=${(e) => this.#noNative(e)}
+          @contextmenu=${(e) => this.#noNative(e)}
+          @dragstart=${(e) => this.#noNative(e)}
         >
           ${this.#body(snapshot)}
+          <div class="paint" aria-hidden="true"><span class="cursor" hidden></span><div class="passage"></div></div>
         </div>
       </div>
-      <div class="composer"><slot></slot></div>
+      <div class="composer" @pointerdown=${() => this.#dropLifted()}><slot></slot></div>
     `;
   }
 
@@ -1094,7 +1185,17 @@ class ChatThread extends LitElement {
   // Whether the arrow is mirrored: layout reading only. The left edge, not the centre,
   // tells a dock right of the middle, as the note editor reads it.
   #mirrored = false;
-  #resized = new ResizeObserver(() => this.#place());
+  #resized = new ResizeObserver(() => {
+    this.#place();
+    // Lines change only with the width; a phone's address bar folding changes the height
+    // as the finger scrolls, which leaves a passage and its button where they are.
+    const width = this.getBoundingClientRect().width;
+    if (width === this.#width) return;
+    this.#width = width;
+    this.#dropFinger();
+    this.#paint();
+  });
+  #width = 0;
   #place = () => {
     const mirrored = this.getBoundingClientRect().left >= globalThis.innerWidth / 2;
     if (mirrored === this.#mirrored) return;
@@ -1212,6 +1313,7 @@ class ChatThread extends LitElement {
         ${marking ? this.#comments(marking) : nothing}
         ${marking?.draft ? this.#popover(marking.draft, marking) : nothing}
         ${marking?.chosen ? this.#bubble(marking) : nothing}
+        ${this.#makeButton(turn)}
       </div>
     `;
     this.#marking = null;
@@ -1468,20 +1570,515 @@ class ChatThread extends LitElement {
     `;
   }
 
-  // --- Gestures on the last answer ----------------------------------------------------
+  // --- A finger's passage ---------------------------------------------------------------
+  //
+  // The same gesture as book-reader's view.js, copied because components never import each
+  // other (11.2). A finger never uses the browser's selection. The answer's characters are
+  // measured once, at the hold, and every move is then a sum over those boxes (machine.js).
+  // The boxes are in the transcript's own coordinates (#content), so they stay true when it
+  // scrolls.
+  //
+  // One thing differs from the reader, because this view scrolls with a finger and the
+  // reader's page does not. The reader refuses the touchstart of a touch on its text, so that
+  // iOS's own long presses cannot end the touch. Refusing it here would stop the conversation
+  // from scrolling under a finger, so no touchstart is refused: the browser keeps its scroll,
+  // its clicks and its focus. Only once a hold has started does #touchmove refuse the moves,
+  // which keeps that touch from turning into a scroll. A touch iOS ends anyway counts as a
+  // lift (#touchend, #pointercancel).
+  #press = null;
+  #holdTimer = 0;
+  // From the hold until it is made or dropped: this answer's own text, so a passage cannot
+  // leave it; the word it started on, the [from, to) painted, the lines as measured, where
+  // the finger is, and whether it is still down.
+  #finger = null;
 
+  // These must be on the host before a touch begins: only a listener that is not passive
+  // may refuse a move, and iOS decides that as the touch begins. A touch may end with no
+  // pointerup, and a passage must not stay down then.
+  #touchmove = (e) => {
+    if (this.#finger?.down && e.cancelable) e.preventDefault();
+  };
+  #touchend = (e) => {
+    if (e.touches?.length) return;
+    this.#cancelHold();
+    if (this.#finger?.down) this.#lift();
+  };
+
+  #cancelHold() {
+    clearTimeout(this.#holdTimer);
+    this.#holdTimer = 0;
+  }
+
+  // What the system would do with a finger's long press where the text can still select (a
+  // touch screen with a fine main pointer), or a menu (Android). A mouse keeps both.
+  #noNative(e) {
+    if (this.#press && e.composedPath().some((el) => el.dataset?.answer)) e.preventDefault();
+  }
+
+  #content(rect) {
+    const el = this.renderRoot.querySelector(".transcript");
+    const box = el.getBoundingClientRect();
+    return { left: rect.left - box.left, right: rect.right - box.left, top: rect.top - box.top + el.scrollTop, bottom: rect.bottom - box.top + el.scrollTop };
+  }
+
+  // Each character of a stretch of the text with its box, as machine.js's linesOf reads them.
+  #charsOf(text, from, to) {
+    const chars = [];
+    for (let i = from; i < to; i += 1) {
+      const r = this.#rectOf(text, i);
+      if (r && r.width > 0) chars.push({ i, ...this.#content(r) });
+    }
+    return chars;
+  }
+
+  // The finger has rested: this press is no tap and no scroll any more.
+  #held() {
+    this.#holdTimer = 0;
+    const press = this.#press;
+    const turn = this.#actor.snapshot?.context.conversation?.turns?.find((t) => t.id === press?.answer);
+    if (!turn) return;
+    const text = answersText([turn], this.markdown);
+    const lines = linesOf(this.#charsOf(text, 0, text.flat.length));
+    const here = this.#content({ left: press.x0, right: press.x0, top: press.y0, bottom: press.y0 });
+    const at = charNear(lines, here.left, here.top);
+    if (at == null) return;
+    this.#readStick();
+    this.#clearSelection();
+    this.#visual = null;
+    this.#actor.send({ type: "_highlightClosed" });
+    this.#actor.send({ type: "_closed" });
+    const word = wordAround(text, at);
+    this.#finger = { answerId: turn.id, text, word, span: fingerPassage(text, word, at), lines, x: press.x0, y: press.y0, down: true, frame: 0, reveal: false };
+    this.#paint();
+  }
+
+  // A move may come many times a frame, and only the last before a frame can be seen.
+  #follow(x, y) {
+    const f = this.#finger;
+    f.x = x;
+    f.y = y;
+    f.frame ||= requestAnimationFrame(() => this.#grow());
+  }
+
+  #grow() {
+    const f = this.#finger;
+    if (!f) return;
+    cancelAnimationFrame(f.frame);
+    f.frame = 0;
+    const here = this.#content({ left: f.x, right: f.x, top: f.y, bottom: f.y });
+    const span = fingerPassage(f.text, f.word, charNear(f.lines, here.left, here.top));
+    if (span[0] === f.span[0] && span[1] === f.span[1]) return;
+    f.span = span;
+    this.#paint();
+  }
+
+  #fingerSelection() {
+    const f = this.#finger;
+    return f ? selectionOf(f.text, f.span[0], f.span[1]) : null;
+  }
+
+  // The passage stays as painted and waits for its button; a cancelled touch ends here too.
+  // Over a mark it can become nothing, which is what a mouse selection there does, so it goes.
+  #lift() {
+    const f = this.#finger;
+    this.#grow();
+    f.down = false;
+    f.reveal = true;
+    this.#press = null;
+    const selection = this.#fingerSelection();
+    if (!selection || !offerOf(this.#actor.snapshot.context, selection)) return this.#dropFinger();
+    this.requestUpdate();
+  }
+
+  #dropFinger() {
+    if (!this.#finger) return;
+    cancelAnimationFrame(this.#finger.frame);
+    this.#finger = null;
+    this.#paint();
+    this.requestUpdate();
+  }
+
+  #dropLifted() {
+    if (this.#finger && !this.#finger.down) this.#dropFinger();
+  }
+
+  // The button under the passage: the machine says what it is. A real button, because a touch
+  // here is never refused, and its click may open the comment box's keyboard on a phone.
+  #makeButton(turn) {
+    const f = this.#finger;
+    if (!f || f.down || f.answerId !== turn.id) return nothing;
+    const selection = this.#fingerSelection();
+    const offer = selection && offerOf(this.#actor.snapshot.context, selection);
+    if (!offer) return nothing;
+    return html`
+      <div class="popover bubble make" @mousedown=${(e) => e.preventDefault()}>
+        <button class="act" type="button" @click=${() => this.#makeFinger()}>${offer}</button>
+      </div>
+    `;
+  }
+
+  #makeFinger() {
+    const selection = this.#fingerSelection();
+    this.#dropFinger();
+    if (selection) this.#actor.send({ type: "_selected", ...selection });
+  }
+
+  // After each render: the button under the passage's last line, in view the first time. A
+  // passage whose answer is gone, or which can no longer become anything, goes.
+  #afterFinger() {
+    const f = this.#finger;
+    if (!f) return;
+    if (!this.renderRoot.querySelector(`[data-answer="${f.answerId}"]`)) return this.#dropFinger();
+    if (f.down) return;
+    const popover = this.renderRoot.querySelector(".make");
+    if (!popover) return this.#dropFinger();
+    const line = lineBoxes(f.lines, f.span[0], f.span[1]).at(-1);
+    if (!line) return;
+    const turn = this.#content(popover.closest(".turn.assistant").getBoundingClientRect());
+    const x = Math.max(0, Math.min(Math.max(0, turn.right - turn.left - popover.offsetWidth), line.left - turn.left));
+    const y = line.bottom - turn.top + POPOVER_GAP;
+    popover.style.setProperty("--bx", `${Math.round(x)}px`);
+    popover.style.setProperty("--by", `${Math.round(y)}px`);
+    if (!f.reveal) return;
+    f.reveal = false;
+    const el = this.renderRoot.querySelector(".transcript");
+    const box = this.#content(popover.getBoundingClientRect());
+    el.scrollTop = followTop({ top: el.scrollTop, height: el.clientHeight, max: el.scrollHeight - el.clientHeight, boxTop: box.top, boxBottom: box.bottom, margin: POPOVER_GAP });
+  }
+
+  // --- The Vim cursor (12, "Vim keys") ---------------------------------------------------
+
+  // The answers as one text (machine.js), rebuilt only when a finished answer comes or goes,
+  // since a finished answer's text never changes. The cursor and a passage in progress keep
+  // their letter across it, by the offset each holds in its own answer.
+  #text = NO_TEXT;
+  #textKey = "";
+  #cursor = null;
+  #visual = null;
+  #wantX = null;
+  // The text runs drawn in each answer, by answer, gathered once per render.
+  #runs = new Map();
+
+  #answers() {
+    const snapshot = this.#actor.snapshot;
+    const turns = snapshot?.matches("showing") ? finishedAnswers(snapshot.context.conversation) : [];
+    const key = turns.map((t) => `${t.id}:${t.text.length}`).join();
+    if (key === this.#textKey) return this.#text;
+    const was = this.#text;
+    const place = (i) => {
+      const answer = i == null ? null : answerAt(was, i);
+      return answer ? { id: answer.id, s: was.at[i] } : null;
+    };
+    const cursor = place(this.#cursor);
+    const start = place(this.#visual?.start);
+    this.#text = answersText(turns, this.markdown);
+    this.#textKey = key;
+    this.#cursor = cursor ? indexOfPlace(this.#text, cursor.id, cursor.s) : null;
+    if (this.#visual) {
+      const back = start ? indexOfPlace(this.#text, start.id, start.s) : null;
+      if (back == null || this.#cursor == null) this.#visual = null;
+      else this.#visual.start = back;
+    }
+    return this.#text;
+  }
+
+  // What the keys walk: a key pressed on a button or a line inside the conversation has no
+  // cursor drawn, so j and k only scroll there, as they do with no finished answer.
+  #walked() {
+    return this.#cursorShown() ? this.#answers() : NO_TEXT;
+  }
+
+  #runsOf(id) {
+    let runs = this.#runs.get(id);
+    if (!runs) {
+      const answer = this.renderRoot.querySelector(`[data-answer="${id}"]`);
+      runs = [...(answer?.querySelectorAll("[data-s]") ?? [])].flatMap((span) => {
+        const node = [...span.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+        return node ? [{ s: Number(span.dataset.s), node }] : [];
+      });
+      this.#runs.set(id, runs);
+    }
+    return runs;
+  }
+
+  // A DOM range over one character of the text, or null for a separator.
+  #rangeOf(text, i) {
+    const answer = answerAt(text, i);
+    const s = text.at[i];
+    if (!answer || s < 0) return null;
+    const runs = this.#runsOf(answer.id);
+    let lo = 0;
+    let hi = runs.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (runs[mid].s <= s) lo = mid;
+      else hi = mid - 1;
+    }
+    const run = runs[lo];
+    if (!run || s < run.s || s >= run.s + run.node.data.length) return null;
+    const range = document.createRange();
+    range.setStart(run.node, s - run.s);
+    range.setEnd(run.node, s - run.s + 1);
+    return range;
+  }
+
+  #rectOf(text, i) {
+    const range = this.#rangeOf(text, i);
+    return range ? ([...range.getClientRects()].find((r) => r.width > 0 || r.height > 0) ?? null) : null;
+  }
+
+  #lineOf(text, i) {
+    const r = this.#rectOf(text, i);
+    return r ? { top: r.top, height: r.height, x: r.left + r.width / 2 } : null;
+  }
+
+  #atY(text, y) {
+    return charAtY(text, y, (i) => {
+      const r = this.#rectOf(text, i);
+      return r ? this.#content(r).bottom : null;
+    });
+  }
+
+  #cursorShown() {
+    const el = this.renderRoot?.querySelector(".transcript");
+    return Boolean(el) && this.renderRoot.activeElement === el && this.#actor.snapshot?.context.vimKeys === true;
+  }
+
+  // The cursor where the user can see it: where it was while that is in view, else the first
+  // letter in view, since the conversation may have scrolled away from it. A passage in
+  // progress keeps its cursor wherever it is.
+  #placeCursor(text) {
+    if (this.#visual) return;
+    const el = this.renderRoot.querySelector(".transcript");
+    const r = this.#cursor == null ? null : this.#rectOf(text, this.#cursor);
+    const box = r && this.#content(r);
+    if (box && box.bottom > el.scrollTop && box.top < el.scrollTop + el.clientHeight) return;
+    this.#cursor = this.#atY(text, el.scrollTop + 1);
+  }
+
+  // The view follows the cursor, keeping `lines` of room around it.
+  #followCursor(text, lines = 1) {
+    const el = this.renderRoot.querySelector(".transcript");
+    const r = this.#rectOf(text, this.#cursor);
+    if (!r) return;
+    const box = this.#content(r);
+    el.scrollTop = followTop({ top: el.scrollTop, height: el.clientHeight, max: el.scrollHeight - el.clientHeight, boxTop: box.top, boxBottom: box.bottom, margin: lines * r.height });
+  }
+
+  #move(key) {
+    const text = this.#walked();
+    const el = this.renderRoot.querySelector(".transcript");
+    if (!text.flat) {
+      if (key !== "j" && key !== "k") return;
+      const style = getComputedStyle(el);
+      const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
+      el.scrollTop = scrollFor(key === "j" ? "down" : "up", { top: el.scrollTop, height: el.clientHeight, max: el.scrollHeight - el.clientHeight, line });
+      return;
+    }
+    this.#placeCursor(text);
+    const letter = key === "l" || key === "h";
+    if (key === "j" || key === "k") this.#wantX ??= this.#lineOf(text, this.#cursor)?.x ?? null;
+    else this.#wantX = null;
+    let next;
+    if (isMotion(key)) next = step(text, this.#cursor, key);
+    else if (letter) next = charStep(text, this.#cursor, key === "l" ? 1 : -1);
+    else next = lineStep(text, this.#cursor, key, (i) => this.#lineOf(text, i), this.#wantX);
+    if (this.#visual) {
+      this.#visual.letter = letter;
+      next = staysIn(text, this.#visual.start, next);
+    }
+    this.#cursor = next;
+    this.#followCursor(text);
+    this.#paint();
+  }
+
+  // gg, G, Ctrl+d and Ctrl+u move the cursor and the view together. Half a box keeps the
+  // cursor at its height in the view, as Vim does, on the start of the line it lands on.
+  #jump(action) {
+    const text = this.#walked();
+    const el = this.renderRoot.querySelector(".transcript");
+    const top = scrollFor(action, { top: el.scrollTop, height: el.clientHeight, max: el.scrollHeight - el.clientHeight, line: 0 });
+    this.#wantX = null;
+    if (!text.flat) {
+      el.scrollTop = top;
+      return;
+    }
+    this.#placeCursor(text);
+    let next;
+    if (action === "top") next = firstChar(text);
+    else if (action === "bottom") next = lastChar(text);
+    else {
+      const r = this.#rectOf(text, this.#cursor);
+      const half = Math.round(el.clientHeight / 2) * (action === "halfDown" ? 1 : -1);
+      const y = r ? this.#content(r).top + half : top;
+      const line = r?.height ?? 0;
+      next = this.#atY(text, Math.max(top + line, Math.min(top + el.clientHeight - line, y)));
+    }
+    if (this.#visual) {
+      this.#visual.letter = false;
+      next = staysIn(text, this.#visual.start, next);
+    } else el.scrollTop = top;
+    this.#cursor = next;
+    this.#followCursor(text, 0);
+    this.#paint();
+  }
+
+  #startVisual() {
+    const text = this.#walked();
+    if (!text.flat) return;
+    this.#placeCursor(text);
+    this.#dropFinger();
+    this.#actor.send({ type: "_highlightClosed" });
+    this.#visual = { start: this.#cursor, letter: false };
+    this.#paint();
+  }
+
+  #dropVisual() {
+    this.#visual = null;
+    this.#paint();
+  }
+
+  // Enter sends what a mouse selection sends; a comment box it opens gives the keyboard
+  // back when it closes (#afterComment), so the keys can go on.
+  #boxFromKeys = false;
+  #makeVisual() {
+    const text = this.#answers();
+    const v = this.#visual;
+    this.#visual = null;
+    this.#paint();
+    const [from, to] = passage(text, v.start, this.#cursor, v.letter);
+    const selection = selectionOf(text, from, to);
+    if (!selection) return;
+    this.#boxFromKeys = offerOf(this.#actor.snapshot.context, selection) === "Comment";
+    this.#actor.send({ type: "_selected", ...selection });
+  }
+
+  #removeAtCursor() {
+    const text = this.#walked();
+    const answer = this.#cursor == null ? null : answerAt(text, this.#cursor);
+    const hit = answer && highlightAtPlace(this.#actor.snapshot.context.conversation, answer.id, text.at[this.#cursor]);
+    if (hit) this.#actor.send({ type: "_unhighlight", id: hit.id });
+  }
+
+  // A passage in progress does not outlive the keyboard leaving the conversation. A window
+  // that loses the focus keeps its active element, and comes back to the same passage.
+  #transcriptLeft() {
+    if (this.renderRoot.activeElement !== this.renderRoot.querySelector(".transcript")) this.#visual = null;
+    this.#paint();
+  }
+
+  // The cursor and the passage in progress, drawn in the same task as the key or the finger
+  // that moved them, so what shows is never a step behind.
+  #paint() {
+    const layer = this.renderRoot?.querySelector(".paint");
+    if (!layer) return;
+    this.#paintCursor(layer.querySelector(".cursor"));
+    this.#paintPassage(layer.querySelector(".passage"));
+  }
+
+  #paintCursor(el) {
+    const text = this.#walked();
+    if (text.flat && this.#cursor == null) this.#placeCursor(text);
+    const range = text.flat && this.#cursor != null ? this.#rangeOf(text, this.#cursor) : null;
+    const rect = range && [...range.getClientRects()].find((r) => r.width > 0 || r.height > 0);
+    if (!rect) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    const box = this.#content(rect);
+    el.style.setProperty("--cx", `${box.left}px`);
+    el.style.setProperty("--cy", `${box.top}px`);
+    el.style.setProperty("--cw", `${rect.width}px`);
+    el.style.setProperty("--ch", `${rect.height}px`);
+    // The letter as the answer sets it: a heading's size and weight, inline code's font.
+    const type = getComputedStyle(range.startContainer.parentElement);
+    for (const p of ["fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing"]) el.style[p] = type[p];
+    el.textContent = range.toString();
+    el.dataset.answer = answerAt(text, this.#cursor).id;
+    el.dataset.s = text.at[this.#cursor];
+    el.hidden = false;
+  }
+
+  // The passage's lines as boxes: a finger's from the boxes measured at the hold, a keyboard's
+  // measured now. The text it names is for tests.
+  #paintPassage(el) {
+    const f = this.#finger;
+    let boxes = [];
+    let named = "";
+    if (f) {
+      boxes = lineBoxes(f.lines, f.span[0], f.span[1]);
+      named = f.text.flat.slice(f.span[0], f.span[1]).replaceAll("\u0000", "\n");
+    } else if (this.#visual && this.#cursor != null) {
+      const text = this.#answers();
+      const [from, to] = passage(text, this.#visual.start, this.#cursor, this.#visual.letter);
+      boxes = lineBoxes(linesOf(this.#charsOf(text, from, to)), from, to);
+      named = text.flat.slice(from, to).replaceAll("\u0000", "\n");
+    }
+    el.replaceChildren(
+      ...boxes.map((line) => {
+        const box = document.createElement("i");
+        box.style.setProperty("--px", `${line.left}px`);
+        box.style.setProperty("--py", `${line.top}px`);
+        box.style.setProperty("--pw", `${line.right - line.left}px`);
+        box.style.setProperty("--ph", `${line.bottom - line.top}px`);
+        return box;
+      }),
+    );
+    el.dataset.text = named;
+  }
+
+  // --- Gestures on the answers -----------------------------------------------------------
+
+  // A mouse keeps the browser's selection, which #pointerup reads. A finger or a pen starts
+  // the wait for a hold, only on an answer that can take a passage; a second finger is not a
+  // press, and is how a pinch begins.
   #pointerdown(e) {
-    this.#pointer = e.pointerType;
-    clearTimeout(this.#settle);
+    if (e.pointerType === "mouse" || (e.button != null && e.button !== 0)) return;
+    if (this.#finger?.down) return;
+    this.#cancelHold();
+    this.#press = null;
+    if (!e.isPrimary) return;
+    const path = e.composedPath();
+    if (path.some((el) => el.classList?.contains("popover"))) return;
+    const answer = path.find((el) => el.dataset?.answer)?.dataset.answer ?? null;
+    this.#press = { pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, answer };
+    if (answer) this.#holdTimer = setTimeout(() => this.#held(), HOLD_MS);
+  }
+
+  #pointermove(e) {
+    const press = this.#press;
+    if (!press || e.pointerId !== press.pointerId) return;
+    if (this.#finger?.down) return this.#follow(e.clientX, e.clientY);
+    if (this.#holdTimer && Math.hypot(e.clientX - press.x0, e.clientY - press.y0) > HOLD_SLOP) this.#cancelHold();
+  }
+
+  // The system took the touch, usually for a scroll: nothing waits for a hold any more, and a
+  // passage being dragged keeps what it painted and offers its button.
+  #pointercancel() {
+    this.#cancelHold();
+    if (this.#finger?.down) this.#lift();
+    this.#press = null;
   }
 
   // A selection in the last answer ends: its comment box opens; in an earlier answer it
   // becomes a highlight. A click on a comment's passage opens the comment, on a
-  // highlight its bubble; a click anywhere else closes the bubble.
+  // highlight its bubble; a click anywhere else closes the bubble. A finger's tap does the
+  // same but for the selection, and first takes back a passage waiting for its button, which
+  // is all that tap does.
   #pointerup(e) {
-    if (e.composedPath().some((el) => el.classList?.contains("popover"))) return;
-    if (this.#sendSelection()) return;
     const path = e.composedPath();
+    if (e.pointerType !== "mouse") {
+      const press = this.#press;
+      this.#cancelHold();
+      if (this.#finger?.down) return this.#lift();
+      this.#press = null;
+      if (!press || Math.hypot(e.clientX - press.x0, e.clientY - press.y0) > HOLD_SLOP) return;
+      if (this.#finger) return this.#dropFinger();
+    } else {
+      if (path.some((el) => el.classList?.contains("popover"))) return;
+      if (this.#sendSelection()) return;
+    }
     const hl = path.find((el) => el.localName === "mark" && el.classList?.contains("hl"));
     if (hl) return this.#actor.send({ type: "_highlightOpened", id: hl.dataset.id });
     if (this.#actor.snapshot?.context.chosen) this.#actor.send({ type: "_highlightClosed" });
@@ -1500,6 +2097,7 @@ class ChatThread extends LitElement {
     const start = this.#offsetOf(range, "start", answer);
     const end = this.#offsetOf(range, "end", answer);
     if (start == null || end == null || end <= start) return false;
+    this.#readStick();
     this.#clearSelection();
     this.#actor.send({ type: "_selected", answerId: answer.dataset.answer, start, end });
     return true;
@@ -1555,6 +2153,10 @@ class ChatThread extends LitElement {
     this.#afterBubble(snapshot);
     const draft = snapshot?.matches({ showing: "commenting" }) ? snapshot.context.draft : null;
     if (!draft) {
+      // The focused box just went with its element, and a comment started from the keys
+      // gives the keyboard back to where they were.
+      if (this.#focused != null && this.#boxFromKeys && document.activeElement?.localName === "body") this.renderRoot.querySelector(".transcript")?.focus({ preventScroll: true });
+      if (this.#focused != null) this.#boxFromKeys = false;
       this.#focused = null;
       return;
     }
@@ -1584,10 +2186,10 @@ class ChatThread extends LitElement {
       this.#bubbleFor = null;
       return;
     }
-    this.#positionPopover(chosen, ".bubble");
+    this.#positionPopover(chosen, ".bubble:not(.make)");
     if (this.#bubbleFor === chosen) return;
     this.#bubbleFor = chosen;
-    this.renderRoot.querySelector(".bubble button")?.focus({ preventScroll: true });
+    this.renderRoot.querySelector(".bubble:not(.make) button")?.focus({ preventScroll: true });
   }
 
   // Under the passage's last line, aligned with that line's start, clamped inside the

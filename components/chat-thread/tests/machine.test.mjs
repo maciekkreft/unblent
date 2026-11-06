@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, relinkOf, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS, askedFor, lengthWords, dateWords, openingOf, noteOpening, shelfOf, spineOf } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, canStage, isStaged, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS, askedFor, lengthWords, dateWords, openingOf, noteOpening, shelfOf, spineOf } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -110,23 +110,6 @@ test("Vim keys follow the settings read and settings.changed after it", async ()
   await until(() => h.actor.getSnapshot().context.vimKeys === true, "vim on");
   h.actor.send({ type: "settings.changed", vimKeys: false });
   assert.equal(h.actor.getSnapshot().context.vimKeys, false);
-});
-
-test("the conversation's keys: j k scroll, gg G jump, Ctrl+d Ctrl+u half, i types", () => {
-  const key = (k, mods = {}) => vimAction({ key: k, ctrlKey: false, metaKey: false, altKey: false, ...mods });
-  assert.equal(key("j"), "down");
-  assert.equal(key("k"), "up");
-  assert.equal(key("G"), "bottom");
-  assert.equal(key("g"), "g");
-  assert.equal(vimAction({ key: "g" }, true), "top");
-  assert.equal(key("i"), "type");
-  assert.equal(key("d", { ctrlKey: true }), "halfDown");
-  assert.equal(key("u", { ctrlKey: true }), "halfUp");
-  // A letter with a modifier belongs to the browser or the desk (Ctrl+j is dock-desk's).
-  assert.equal(key("j", { ctrlKey: true }), null);
-  assert.equal(key("j", { metaKey: true }), null);
-  assert.equal(key("d", { ctrlKey: true, altKey: true }), null);
-  assert.equal(key("x"), null);
 });
 
 test("a scroll never passes either end of the conversation", () => {
