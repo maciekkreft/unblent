@@ -651,19 +651,6 @@ class NoteEditor extends LitElement {
     .type-row[aria-disabled="true"] .tag {
       color: var(--color-mute);
     }
-    .type-add {
-      appearance: none;
-      align-self: flex-start;
-      margin: 0;
-      border: 0;
-      background: none;
-      padding: 0;
-      font: inherit;
-      font-size: var(--text-caption);
-      color: var(--color-accent);
-      text-decoration: underline;
-      cursor: pointer;
-    }
     /* Add to Slip-Box's list: the look of the editor kit's # and [[ lists, never wider than
        the editor. */
     .slip-list {
@@ -1388,18 +1375,23 @@ class NoteEditor extends LitElement {
   }
 
   // A type picked: set it, or, for Permanent while the note is not in the Slip-Box, open
-  // the Add to Slip-Box list, which is what makes it possible.
+  // the Add to Slip-Box list, where a place sets both. A greyed type only says why, in its
+  // line, because a phone has no tooltip.
   #pickType(option) {
     if (!option) return;
-    if (!option.enabled) return this.#slipFirst();
+    if (!option.enabled) {
+      this.#types = { ...this.#types, told: option.value };
+      this.requestUpdate();
+      return;
+    }
+    if (option.needsPlace) {
+      this.#types = { open: false, selected: 0 };
+      this.#slip = { open: false, selected: 0 };
+      this.#openSlip(".home-type");
+      return;
+    }
     this.#actor.send({ type: "_retype", noteType: option.value });
     this.#closeTypes(true);
-  }
-
-  #slipFirst() {
-    this.#types = { open: false, selected: 0 };
-    this.#slip = { open: false, selected: 0 };
-    this.#openSlip();
   }
 
   #typeKey(e, type, vimKeys) {
@@ -1434,23 +1426,19 @@ class NoteEditor extends LitElement {
           aria-checked=${t.value === type.value}
           aria-disabled=${!t.enabled}
           aria-selected=${i === selected}
-          title=${t.enabled ? nothing : "A permanent note is kept in the Slip-Box"}
+          title=${t.why ?? nothing}
           @mousedown=${(e) => e.preventDefault()}
-          @click=${() => t.enabled && this.#pickType(t)}
+          @click=${() => this.#pickType(t)}
         >
-          <span class="tag">${t.label}${t.value === type.value ? icon("check") : nothing}</span><span class="under">${t.says}</span>
-          ${t.enabled
-            ? nothing
-            : html`<button class="type-add" type="button" tabindex="-1" @mousedown=${(e) => e.preventDefault()} @click=${() => this.#slipFirst()}>
-                Add it to the Slip-Box first
-              </button>`}
+          <span class="tag">${t.label}${t.value === type.value ? icon("check") : nothing}</span><span class="under" aria-live="polite">${this.#types.told === t.value ? t.why : t.says}</span>
         </div>`,
       )}
     </div>`;
   }
 
-  #openSlip() {
-    this.#slip = { open: !this.#slip.open, selected: 0 };
+  // `back` is the control that opened the list, where the keyboard returns.
+  #openSlip(back = ".home-add") {
+    this.#slip = { open: !this.#slip.open, selected: 0, back };
     this.requestUpdate();
     // The keyboard goes to the list, where the picker's keys work (the kit's pickerKey).
     if (this.#slip.open) this.updateComplete.then(() => this.renderRoot.querySelector(".slip-list")?.focus());
@@ -1458,9 +1446,10 @@ class NoteEditor extends LitElement {
 
   #closeSlip(refocus) {
     if (!this.#slip.open) return;
+    const { back } = this.#slip;
     this.#slip = { open: false, selected: 0 };
     this.requestUpdate();
-    if (refocus) this.updateComplete.then(() => this.renderRoot.querySelector(".home-add")?.focus());
+    if (refocus) this.updateComplete.then(() => this.renderRoot.querySelector(back)?.focus());
   }
 
   #pickSlip(targets, index) {
@@ -1478,7 +1467,7 @@ class NoteEditor extends LitElement {
     if (key === "close") return this.#closeSlip(true);
     if (key === "pick") return this.#pickSlip(targets, this.#slip.selected);
     const n = targets.length;
-    this.#slip = { open: true, selected: (((this.#slip.selected + (key === "down" ? 1 : -1)) % n) + n) % n };
+    this.#slip = { ...this.#slip, selected: (((this.#slip.selected + (key === "down" ? 1 : -1)) % n) + n) % n };
     this.requestUpdate();
     this.updateComplete.then(() => this.renderRoot.querySelector('.slip-row[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" }));
   }

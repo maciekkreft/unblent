@@ -153,11 +153,18 @@ const hasChildren = (context, id) => context.notes.some((n) => links(n).some((l)
 // never leaves a note without the place it was put in.
 export const deletable = (context, id) => context.notes.some((n) => n.id === id) && !hasChildren(context, id);
 
+// Whether this list can hold a new note: only a Permanent note or the Slip-Box can have
+// notes under it (13), so not while another note is the subject. With Slip-Box hidden types
+// do not show, so no note is judged by one.
+export const takesNotes = ({ subject, hidden, notes }) =>
+  subject?.kind !== "note" || subject.id === SLIPBOX || !slipBoxShown(hidden) || notes.some((n) => n.id === subject.id && n.noteType === "permanent");
+
 // The link a note brought back with p or P takes (12): while Slip-Box shows and the list
-// is about a thing the deleted note was not about, that thing, with its open chapter, as
-// a new note there would be linked; otherwise none, and the note keeps its links.
-export const pasteLink = ({ following, subject, hidden, deletedAbout }) => {
-  if (!following || subject == null || !slipBoxShown(hidden)) return undefined;
+// is about a thing the deleted note was not about and that can hold notes, that thing, with
+// its open chapter, as a new note there would be linked; otherwise none, and the note keeps
+// its links.
+export const pasteLink = ({ following, subject, hidden, deletedAbout, notes }) => {
+  if (!following || subject == null || !slipBoxShown(hidden) || !takesNotes({ subject, hidden, notes })) return undefined;
   if ((deletedAbout ?? []).some((l) => l.kind === subject.kind && l.id === subject.id)) return undefined;
   const chapter = subject.chapter ? { chapter: subject.chapter, chapterTitle: subject.chapterTitle } : {};
   return { kind: subject.kind, id: subject.id, ...chapter };
@@ -190,7 +197,7 @@ export const machine = setup({
   meta: {
     description:
       "Lists the notes in the order the user set, kept on the account and the same on every " +
-      "device, with New note always the first row; a new note goes to the top and editing a " +
+      "device, with New note the first row; a new note goes to the top and editing a " +
       "note does not move it. The user can open, move or delete a note; a delete happens at " +
       "once and shows the short notice with Undo, and Undo and Redo take back a delete or a " +
       "move (section 12). With Vim keys on, never while typing in a field: dd deletes the row " +
@@ -205,7 +212,9 @@ export const machine = setup({
       "on it. While the Slip-Box feature shows, each row's second line starts with the note's type, " +
       "Fleeting, Literature or Permanent (Fleeting for a note without one). The Slip-Box note is never listed. While a note is the subject (a note in front on " +
       "the stage), the list shows the notes under it, with no chapter switch, and New note writes " +
-      "one under it. o makes a new note " +
+      "one under it. Only a Permanent note or the Slip-Box can have notes under it: while the subject is any other note " +
+      "there is no New note row, o and O do nothing, p or P does not place the deleted note under it, and a list with no " +
+      "rows says so in one line. o makes a new note " +
       "below the cursor row and O above it, opened in the editor. The New note row stays " +
       "put: dd does nothing there. A moved or new note goes right below or above the " +
       "row it was placed at, also in the whole order, so notes hidden by the subject or the " +
@@ -398,7 +407,7 @@ export const machine = setup({
     // o or O (12): a new note, opened in the editor like New note, that goes between
     // these neighbours once the user writes in it.
     _place: {
-      guard: shows,
+      guard: ({ context }) => shows({ context }) && takesNotes(context),
       actions: enqueueActions(({ context, event, enqueue }) => {
         enqueue.assign({ placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null } });
         enqueue.emit({ type: "note.selected", id: context.draft });
@@ -415,7 +424,7 @@ export const machine = setup({
     // it follows the editor's note.opened, the same for the draft as any other row.
     _pick: {
       guard: ({ context, event }) =>
-        shows({ context }) && (context.notes.some((n) => n.id === event.id) || context.draft === event.id),
+        shows({ context }) && (context.notes.some((n) => n.id === event.id) || (context.draft === event.id && takesNotes(context))),
       actions: [
         assign({ placing: null }),
         emit(({ event }) => ({ type: "note.selected", id: event.id })),

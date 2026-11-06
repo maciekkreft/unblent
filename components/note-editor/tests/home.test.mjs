@@ -21,17 +21,19 @@ const LOOSE = "01ARZ3NDEKTSV4RRFFQ69G5FA3";
 const HL = "01ARZ3NDEKTSV4RRFFQ69G5FA4";
 const OTHER = "01ARZ3NDEKTSV4RRFFQ69G5FA5";
 const KID = "01ARZ3NDEKTSV4RRFFQ69G5FA6";
+const PLAIN = "01ARZ3NDEKTSV4RRFFQ69G5FA7";
 const BOOK = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
 const JOURNAL = "00000000000000000000000JRN";
 
 const place = { chapter: 2, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 9 } };
 const under = (id) => ({ kind: "note", id });
 
-// A box: TOP under the Slip-Box, SUB under TOP, KID under ME, LOOSE under no one, and a
-// highlight in BOOK.
+// A box: TOP under the Slip-Box, SUB, permanent, under TOP, PLAIN, not permanent, under the
+// Slip-Box, KID under ME, LOOSE under no one, and a highlight in BOOK.
 const LIST = [
   { id: TOP, title: "Top", subtitle: "the top", updatedAt: 5, about: [under(SLIPBOX)] },
-  { id: SUB, title: "Sub", subtitle: "", updatedAt: 6, about: [under(TOP)] },
+  { id: SUB, title: "Sub", subtitle: "", updatedAt: 6, about: [under(TOP)], noteType: "permanent" },
+  { id: PLAIN, title: "Plain", subtitle: "", updatedAt: 9, about: [under(SLIPBOX)] },
   { id: LOOSE, title: "Loose", subtitle: "", updatedAt: 7, about: [] },
   { id: KID, title: "Kid", subtitle: "", updatedAt: 8, about: [under(ME)] },
   {
@@ -98,10 +100,14 @@ test("hidden Slip-Box: no home line and no footer, as before the feature", async
 });
 
 test("the home line names the book and chapter, then each place, and offers Add to Slip-Box", async () => {
-  const { actor } = await opened();
+  const note = { ...MINE, noteType: "permanent", about: [...MINE.about, under(SLIPBOX)] };
+  const { actor } = await opened({ note });
   const home = homeOf(actor.getSnapshot());
   assert.deepEqual(home.books.map((b) => b.text), ["A Book · Two"]);
-  assert.deepEqual(home.places, [{ id: TOP, label: "Slip-Box › Top", removable: true }]);
+  assert.deepEqual(home.places, [
+    { id: TOP, label: "Slip-Box › Top", removable: true },
+    { id: SLIPBOX, label: "Slip-Box", removable: true },
+  ]);
   assert.deepEqual(home.add, { enabled: true });
 });
 
@@ -113,10 +119,11 @@ test("a place outside the Slip-Box is named by its title, the Slip-Box by its na
   assert.deepEqual(home.places.map((p) => p.label), ["Slip-Box", "Loose"]);
 });
 
-test("Add to Slip-Box offers the Slip-Box and the notes in it, never the note itself, a place it has, or a note under it", async () => {
+test("Add to Slip-Box offers the Slip-Box and the Permanent notes in it, never the note itself, a place it has, or a note under it", async () => {
   const { actor } = await opened();
   const { context } = actor.getSnapshot();
-  // TOP is a place already; LOOSE is not in the box; KID is under ME, so a loop; HL is a highlight.
+  // TOP is a place already; LOOSE is not in the box; PLAIN is not permanent; KID is under
+  // ME, so a loop; HL is a highlight.
   assert.deepEqual(slipBoxTargets(context).map((t) => t.id), [SLIPBOX, SUB]);
   assert.equal(slipBoxTargets(context)[1].title, "Slip-Box › Sub");
   assert.equal(inSlipBox(context.entries, SUB), true);
@@ -135,7 +142,7 @@ test("a place picked, a place taken out and a passage taken out are each one sav
   assert.deepEqual(saved[2].about.map((l) => l.kind), ["book", "note"]);
   for (const { type, ...rest } of saved) assert.ok(SAVED.validate(rest).valid, JSON.stringify(SAVED.validate(rest).errors?.[0]));
   // What is not on offer saves nothing: the note itself, a note under it, one not in the box.
-  for (const id of [ME, KID, LOOSE, SUB]) actor.send({ type: "_place", id });
+  for (const id of [ME, KID, LOOSE, PLAIN, SUB]) actor.send({ type: "_place", id });
   actor.send({ type: "_unplace", id: LOOSE });
   assert.equal(saved.length, 3);
 });

@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, showing, chaptered, placement, deletable, typeLabelOf } from "./machine.js";
+import { machine, shown, showing, chaptered, placement, deletable, typeLabelOf, takesNotes } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import moved from "./events/note.moved.json" with { type: "json" };
@@ -369,7 +369,7 @@ class NoteList extends LitElement {
     const groups = chaptered(snapshot.context);
     const notes = groups ? [...groups.loose, ...(groups.all ? groups.rest : groups.here)] : shown(snapshot.context);
     const { draft } = snapshot.context;
-    return [...(draft ? [{ id: draft, draft: true }] : []), ...notes];
+    return [...(draft && takesNotes(snapshot.context) ? [{ id: draft, draft: true }] : []), ...notes];
   }
 
   // The keyboard's row: the one it moved to, else the open note, else the first.
@@ -573,14 +573,15 @@ class NoteList extends LitElement {
     const focusId = this.#focusRow(rows, snapshot.context);
     const groups = chaptered(snapshot.context);
     const row = (r) => this.#row(r, open, focusId, subject, snapshot.context.hidden);
-    // The failed state is the one time no rows show: notes could not answer, so the
-    // next-note row would write into a picture we do not have. Otherwise the list is
-    // always at least the next-note row, so there is no empty state.
+    // Notes could not answer, so the next-note row would write into a picture we do not
+    // have. Otherwise only a note that cannot have notes under it leaves the list with no
+    // row, and the line says why (13).
     return html`
       ${snapshot.matches("failed")
         ? html`<p class="empty">Notes unavailable.</p>`
         : html`
             ${groups ? this.#switch(groups, rows) : nothing}
+            ${rows.length ? nothing : html`<p class="empty">Only a Permanent note can have notes under it.</p>`}
             <ul class="list" role="listbox" aria-label="Notes" @keydown=${(e) => this.#keydown(e, rows, Boolean(groups))}>
               ${groups ? this.#grouped(rows, groups, row) : rows.map(row)}
             </ul>

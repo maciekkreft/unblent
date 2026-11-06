@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown, plain, showing, chaptered, deletable, typeLabelOf } from "../machine.js";
+import { machine, shown, plain, showing, chaptered, deletable, typeLabelOf, takesNotes } from "../machine.js";
 
 // A long stretch of simulated time, to show nothing waits on a clock.
 const LATER = 10000;
@@ -604,7 +604,7 @@ test("the Slip-Box note is never listed, from the list or a change", async () =>
 
 test("p in a list about another thing brings the note back under it; in its own list it keeps its links", async () => {
   const notes = [
-    { id: A, title: "Parent", updatedAt: 10, about: [] },
+    { id: A, title: "Parent", updatedAt: 10, about: [{ kind: "note", id: SLIPBOX }], noteType: "permanent" },
     { id: B, title: "Beside Dune", updatedAt: 20, about: [DUNE] },
   ];
   const { actor, moved } = tree({ subject: { kind: "book", id: "dune", title: "Dune", view: "book-stage", ...{ chapter: "one", chapterTitle: "One" } }, notes });
@@ -619,6 +619,45 @@ test("p in a list about another thing brings the note back under it; in its own 
   actor.send({ type: "subject.changed", subject: { kind: "note", id: A, title: "Parent", view: "book-stage" } });
   actor.send({ type: "_paste", after: null, before: null });
   assert.deepEqual(moved.at(-1), { id: B, after: null, before: null, about: { kind: "note", id: A } });
+});
+
+test("only a Permanent note or the Slip-Box takes new notes: under any other note there is no New note, o and O do nothing, p does not place under it", async () => {
+  const subjectIs = (id) => ({ kind: "note", id, title: "Parent", view: "book-stage" });
+  const notes = [
+    { id: A, title: "Parent", updatedAt: 10, about: [], noteType: "literature" },
+    { id: B, title: "Child", updatedAt: 20, about: [PARENT] },
+    { id: C, title: "Beside Dune", updatedAt: 30, about: [DUNE] },
+  ];
+  const { actor, moved } = tree({ subject: subjectIs(A), notes });
+  const seen = [];
+  actor.on("note.selected", (e) => seen.push(e.id));
+  await tick();
+  const context = () => actor.getSnapshot().context;
+  assert.equal(takesNotes(context()), false);
+  assert.deepEqual(shownIds(actor), [B], "the notes it holds stay reachable");
+  actor.send({ type: "_place", after: null, before: null });
+  actor.send({ type: "_pick", id: context().draft });
+  assert.deepEqual(seen, []);
+  actor.send({ type: "_dd", id: C });
+  actor.send({ type: "note.deleted", id: C });
+  actor.send({ type: "_paste", after: null, before: null });
+  assert.deepEqual(moved.at(-1), { id: C, after: null, before: null }, "back with its own links");
+
+  // Turned Permanent, it takes them; so does the Slip-Box, and a book.
+  actor.send({ type: "note.changed", id: A, title: "Parent", body: "Parent", version: 2, pending: false, updatedAt: 40, about: [], noteType: "permanent" });
+  assert.equal(takesNotes(context()), true);
+  actor.send({ type: "_place", after: null, before: null });
+  assert.equal(seen.length, 1);
+  actor.send({ type: "subject.changed", subject: subjectIs(SLIPBOX) });
+  assert.equal(takesNotes(context()), true);
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "dune", title: "Dune", view: "book-stage" } });
+  assert.equal(takesNotes(context()), true);
+});
+
+test("with Slip-Box hidden a note as the subject still takes new notes, as before", async () => {
+  const { actor } = tree({ hidden: ["slip-box"], subject: { kind: "note", id: A, title: "Parent", view: "book-stage" }, notes: [{ id: A, title: "Parent", updatedAt: 10, about: [] }] });
+  await tick();
+  assert.equal(takesNotes(actor.getSnapshot().context), true);
 });
 
 test("with Slip-Box hidden p brings the note back with its links, as before", async () => {

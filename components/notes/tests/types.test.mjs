@@ -99,6 +99,18 @@ test("a change of type with the same text is one step of its own; Undo puts the 
   assert.equal(steps.length, before);
 });
 
+test("a save of a place and a type together is one step; Undo takes both back", async () => {
+  const { actor, steps, changed } = await start();
+  actor.send(save(A, "Idea", null));
+  const place = { kind: "note", id: "00000000000000000000000SBX" };
+  actor.send(save(A, "Idea", 1, { about: [place], noteType: "permanent" }));
+  assert.equal(steps.length, 2, "typing, then the place and the type");
+  assert.deepEqual(changed.at(-1).about, [place]);
+  actor.send({ type: "step.undone", id: steps[1].id, owner: "notes", payload: steps[1].undo });
+  assert.deepEqual(changed.at(-1).about, []);
+  assert.equal("noteType" in changed.at(-1), false);
+});
+
 test("signed in, the outbox row carries the type, null for fleeting, and a pull takes the server's", async () => {
   const puts = [];
   const api = {
