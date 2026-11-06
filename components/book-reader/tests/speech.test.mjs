@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, readingShown, canRead, speakMessage, wordAt } from "../machine.js";
+import { machine, readingShown, canRead, speakMessage, wordAt, bySentence } from "../machine.js";
 
 // Reading aloud is decided in the actor (3.2): what is read, in which order, when the next
 // block's audio is asked for, and what stops it. The view only plays the clip it is
@@ -252,4 +252,14 @@ test("the word lit is the last one started", () => {
   assert.equal(wordAt(words, 0.2), 1);
   assert.equal(wordAt(words, 9), 2);
   assert.equal(wordAt([], 1), -1);
+});
+
+test("a long block is read a sentence at a time, each clip keeping its place in the block", () => {
+  const text = "Short one. This sentence is long enough to stand alone as a clip. And a last one that is also long enough.";
+  const clips = bySentence({ block: 4, text, start: 10 });
+  assert.equal(clips.length, 2, "the short first sentence joins the next");
+  assert.deepEqual(clips.map((c) => c.block), [4, 4]);
+  for (const c of clips) assert.equal(text.slice(c.start - 10, c.start - 10 + c.text.length), c.text);
+  assert.equal(clips.map((c) => c.text).join(""), text, "nothing lost between clips");
+  assert.equal(bySentence({ block: 0, text: "Just a few words." }).length, 1);
 });

@@ -632,7 +632,33 @@ export const wordAt = (words, t) => {
 // The blocks to read, cleaned: a block with no word to say (an empty block, white space)
 // is dropped, so the queue never asks the voice for nothing.
 const sayable = (blocks) =>
-  (Array.isArray(blocks) ? blocks : []).filter((b) => Number.isInteger(b?.block) && typeof b.text === "string" && b.text.trim() !== "");
+  (Array.isArray(blocks) ? blocks : [])
+    .filter((b) => Number.isInteger(b?.block) && typeof b.text === "string" && b.text.trim() !== "")
+    .flatMap(bySentence);
+
+// A short sentence is joined to the next, so a clip is not a few words with a pause after it.
+const MIN_CLIP = 40;
+
+// A block in clips of one or more sentences, each with where it starts in the block's text.
+// The voice takes a long paragraph whole and the user waits for all of it before hearing
+// the first word; a sentence is heard after the time it alone takes, and the next one is
+// fetched while it plays (the speaking state's `ahead`).
+export const bySentence = (item) => {
+  const base = item.start ?? 0;
+  const out = [];
+  let from = 0;
+  const flush = (to) => {
+    const text = item.text.slice(from, to);
+    if (text.trim() !== "") out.push({ ...item, text, start: base + from });
+    from = to;
+  };
+  for (const { index, segment } of new Intl.Segmenter("en", { granularity: "sentence" }).segment(item.text)) {
+    const end = index + segment.length;
+    if (item.text.slice(from, end).trim().length >= MIN_CLIP) flush(end);
+  }
+  flush(item.text.length);
+  return out;
+};
 
 // The clip the view plays, with a nonce counted over every reading, so each clip is
 // played once; returned with the count, for one assign.
