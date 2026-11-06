@@ -6,11 +6,16 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister, hashtags, refreshHashtags, hashtagPicker, refreshHashtagPicker, shortName, lineMarks, setLineMarks, finishedLines, hashtagScopes } from "editor";
-import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, flagShown, knownTags, lineMarksOf } from "./machine.js";
+import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, flagShown, knownTags, lineMarksOf, marksOf, markAt, pastKey, wordAround, fingerPassage, addToNote, sourceLink } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
+import noteSaved from "./events/note.saved.json" with { type: "json" };
+import noteDiscarded from "./events/note.discarded.json" with { type: "json" };
+import passageAdded from "./events/passage.added.json" with { type: "json" };
+import linkCopied from "./events/link.copied.json" with { type: "json" };
+import textCopied from "./events/text.copied.json" with { type: "json" };
 
 // The entry's view: one CodeMirror 6 document holds the day's text, so it is shown once.
 // The theme, Vim and the paragraphs come from the editor kit (architecture.md 10). The
@@ -164,13 +169,48 @@ const levelTheme = EditorView.theme({
 });
 
 // What the editable compartment holds: the open day takes typing, an earlier day (or a
-// day in conflict) is read only and offers no placeholder.
+// day in conflict) is read only and offers no placeholder. It stays not editable, so a tap
+// on a phone opens no on-screen keyboard, and the tabindex is what lets it hold the keys.
 const editability = (on) => [
   EditorState.readOnly.of(!on),
   EditorView.editable.of(on),
-  EditorView.contentAttributes.of({ "aria-label": on ? "Today's entry" : "The entry" }),
+  EditorView.contentAttributes.of(on ? { "aria-label": "Today's entry" } : { "aria-label": "The entry", tabindex: "0" }),
   on ? placeholder("What is on your mind? Enter starts a new paragraph; Shift+Enter breaks the line.") : [],
 ];
+
+// The day's highlights (machine.js: marksOf), painted as marks that add no box, so the text
+// never moves. The field holds what it is given, since a day shown here takes no typing.
+const setMarks = StateEffect.define();
+const markField = StateField.define({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    for (const e of tr.effects) if (e.is(setMarks)) deco = e.value;
+    return tr.docChanged ? deco.map(tr.changes) : deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+const markSet = (marks, glowing) =>
+  Decoration.set(
+    marks
+      .filter((m) => m.from < m.to)
+      .map((m) =>
+        Decoration.mark({
+          class: `hl${m.commented ? " commented" : ""}${m.id === glowing ? " glow" : ""}`,
+          attributes: { "data-id": m.id },
+        }).range(m.from, m.to),
+      ),
+    true,
+  );
+
+// A finger's gesture (book-reader and chat-thread, copied because components never import
+// each other, 11.2): how long it rests before it is a hold, and how far it may stray.
+const HOLD_MS = 400;
+const HOLD_SLOP = 10;
+const COPIED_MS = 1200;
+// Vim's two-press keys count within this long of the first press, as in the reader.
+const CHORD_MS = 1000;
+// A press that means something of its own inside a highlight: following a link.
+const onLink = (path) => path.some((el) => el.classList?.contains("cm-source-link") || el.classList?.contains("cm-web-link"));
 
 // The icons an evaluator's option may carry (7.6), drawn at a checked line's end. The
 // names are literals so the icon check sees each one (11.2).
@@ -240,6 +280,11 @@ class ActorController {
         "day.shown": dayShown,
         "book.closed": closed,
         "passage.selected": passageSelected,
+        "note.saved": noteSaved,
+        "note.discarded": noteDiscarded,
+        "passage.added": passageAdded,
+        "link.copied": linkCopied,
+        "text.copied": textCopied,
       },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -281,6 +326,7 @@ class JournalEntry extends LitElement {
     }
     /* The stage's width, which the text and the level bar below it both answer to. */
     .frame {
+      position: relative;
       flex: 1;
       min-height: 0;
       display: flex;
@@ -295,6 +341,7 @@ class JournalEntry extends LitElement {
       flex-direction: column;
     }
     .page {
+      position: relative;
       flex: 1 0 auto;
       box-sizing: border-box;
       padding: var(--space-md) var(--space-lg);
@@ -482,6 +529,130 @@ class JournalEntry extends LitElement {
         grid-template-columns: minmax(0, 1fr);
       }
     }
+    /* A highlight, as in the book reader: one color, rounded ends on every wrapped line, and
+       no box of its own, so the painted text measures as the bare text did. */
+    .hl {
+      background: var(--color-highlight);
+      border-radius: var(--radius-sm);
+      -webkit-box-decoration-break: clone;
+      box-decoration-break: clone;
+      cursor: pointer;
+    }
+    .hl.commented {
+      box-shadow: inset 0 calc(-1 * var(--border-width)) 0 var(--color-accent);
+    }
+    .hl.glow {
+      animation: entry-glow calc(3 * var(--duration-slide)) var(--ease);
+    }
+    @keyframes entry-glow {
+      from,
+      60% {
+        background: var(--color-accent-selection);
+        box-shadow: 0 0 0 var(--space-2xs) var(--color-accent-selection);
+      }
+    }
+    /* A touch screen selects no earlier day: the browser's selection jumps as a finger moves,
+       so a finger's passage is the entry's own (#held). The text keeps its default
+       touch-action, because the day scrolls with a finger: iOS reads that as the touch begins,
+       before a hold can be told from a drag, and a hold stops the scroll with #touchmove. */
+    @media (hover: none) and (pointer: coarse) {
+      .region.past .cm-content {
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+    }
+    /* A finger's passage: boxes over its lines, never a change inside the editor, because a
+       node redrawn under a finger takes the touch with it. */
+    .passage {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+    .passage i {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--px, 0) var(--py, 0);
+      width: var(--pw, 0);
+      height: var(--ph, 0);
+      background: var(--color-accent-selection);
+      border-radius: var(--radius-sm);
+    }
+    /* A highlight's bubble (book-reader's): under the passage's end, placed by --bx/--by. */
+    .bubble {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--bx, 0) var(--by, 0);
+      margin-top: var(--space-xs);
+      z-index: 2;
+      box-sizing: border-box;
+      max-width: 100%;
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-xs);
+      padding: var(--space-2xs) var(--space-xs);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-card);
+      font-size: var(--text-caption);
+      color: var(--color-mute);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .bubble .act {
+      border: 0;
+      background: none;
+      font-size: var(--text-caption);
+      padding: var(--space-2xs) var(--space-xs);
+      color: var(--color-body);
+    }
+    .bubble .act.remove:hover {
+      color: var(--color-danger);
+    }
+    /* aria-disabled rather than disabled, so the button still takes the press and says why. */
+    .bubble .act[aria-disabled="true"] {
+      cursor: default;
+      color: var(--color-mute);
+      background: none;
+    }
+    .bubble textarea {
+      flex: 1 0 100%;
+      box-sizing: border-box;
+      min-height: calc(var(--text-sm) * var(--leading-normal) * 3);
+      padding: var(--space-xs);
+      border: var(--border-width) solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--color-canvas);
+      color: var(--color-ink);
+      font: inherit;
+      font-size: var(--text-sm);
+      resize: vertical;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .bubble textarea:focus {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    /* What a key did or why it could not, said for a moment over the foot of the day. */
+    .said {
+      position: absolute;
+      bottom: var(--space-sm);
+      left: var(--space-lg);
+      z-index: 2;
+      padding: var(--space-2xs) var(--space-sm);
+      border-radius: var(--radius-sm);
+      background: var(--color-canvas);
+      box-shadow: var(--shadow-card);
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
     /* Jev's answers at a checked line's end (the editor kit places them): each the
        option's icon and name, several in one row, on a soft tint. */
     .marks {
@@ -615,11 +786,17 @@ class JournalEntry extends LitElement {
     const root = document.documentElement;
     const rem = parseFloat(getComputedStyle(root).fontSize) || 16;
     this.toggleAttribute("narrow", root.getAttribute("data-viewport") === "phone" || globalThis.innerWidth < 45 * rem);
+    this.#placeBubble();
   });
 
   connectedCallback() {
     super.connectedCallback();
     this.addEventListener("keydown", this.#onNestedKey);
+    // On the host before a touch begins: only a listener that is not passive may refuse a
+    // move, and iOS decides that as the touch begins. A touch may end with no pointerup.
+    this.addEventListener("touchmove", this.#touchmove, { passive: false });
+    this.addEventListener("touchend", this.#touchend);
+    this.addEventListener("touchcancel", this.#touchend);
     this.#resized.observe(this);
   }
 
@@ -627,16 +804,21 @@ class JournalEntry extends LitElement {
     super.disconnectedCallback();
     this.#resized.disconnect();
     this.removeEventListener("keydown", this.#onNestedKey);
+    this.removeEventListener("touchmove", this.#touchmove);
+    this.removeEventListener("touchend", this.#touchend);
+    this.removeEventListener("touchcancel", this.#touchend);
+    this.#cancelHold();
+    clearTimeout(this.#saidTimer);
+    clearTimeout(this.#glowTimer);
     this.#view?.destroy();
     this.#view = null;
   }
 
-  // dock-desk's Ctrl+h/j/k/l and list-then-item focus a panel by its host: land in the
-  // text when it can be typed in, else on the first nested view that takes the keyboard
-  // (an earlier day), so its keys work at once.
+  // dock-desk's Ctrl+h/j/k/l and list-then-item focus a panel by its host: land in the text,
+  // which holds the keyboard on an earlier day too.
   focus(options) {
-    if (this.#view && this.#editableOn) this.#view.focus();
-    else if (!this.#enter(0, 1)) super.focus(options);
+    if (this.#view) this.#view.focus();
+    else super.focus(options);
   }
 
   #nested() {
@@ -655,10 +837,9 @@ class JournalEntry extends LitElement {
     return false;
   }
 
-  // Back up to the start of the text's last line, in Vim's normal mode; an earlier day's
-  // text takes no keyboard.
+  // Back up to the start of the text's last line, in Vim's normal mode.
   #toText() {
-    if (!this.#view || !this.#editableOn) return false;
+    if (!this.#view) return false;
     const { doc } = this.#view.state;
     this.#view.focus();
     this.#view.dispatch({ selection: { anchor: doc.line(doc.lines).from }, scrollIntoView: true });
@@ -687,6 +868,7 @@ class JournalEntry extends LitElement {
       Prec.highest(
         EditorView.domEventHandlers({
           keydown: (event, view) => {
+            if (!this.#editableOn && this.#pastKeydown(event, view)) return true;
             if (this.#actor.snapshot?.context.vimKeys !== true) return false;
             const line = view.state.doc.lineAt(view.state.selection.main.head).number;
             // The text's very last line, blank or not: the editor kit stops on blank lines
@@ -703,6 +885,7 @@ class JournalEntry extends LitElement {
       this.#editable.of(editability(editable)),
       levelField,
       levelTheme,
+      markField,
       // A source link is drawn as a tag (the editor kit, 10), followed also on an earlier
       // day, which takes no typing; the link stays raw in the text, so serialize keeps it.
       sourceLinks({
@@ -729,6 +912,9 @@ class JournalEntry extends LitElement {
           }
         }
         if (update.selectionSet || update.docChanged || leveled) this.#syncLevel(update.state);
+        // The cursor leaving a highlight takes its bubble with it, as long as the keyboard
+        // is on the text; a bubble holding the keyboard stays.
+        if (update.selectionSet && update.view.hasFocus && this.#active && markAt(this.#marks, update.state.selection.main.head)?.id !== this.#active) this.#closeBubble();
         if (update.docChanged || leveled) {
           const text = serialize(update.state.doc.toString(), levelsOf(update.state));
           if (text !== this.#shown) {
@@ -826,6 +1012,520 @@ class JournalEntry extends LitElement {
     }
     this.#shown = text;
     if (changes || effects.length) this.#view.dispatch({ changes, effects });
+    this.#afterMarks(snapshot);
+    this.#afterComment(snapshot.context);
+  }
+
+  // --- Highlights on an earlier day (13, Highlight) --------------------------------------
+
+  // What is painted, and the bubble's highlight (the view's own UI state, as in the reader).
+  #marks = [];
+  #marksFrom = null;
+  #active = null;
+  // Whether the open bubble's highlight has been seen, because a new one's note arrives just
+  // after the bubble opens, and whether its first button should take the keyboard.
+  #activeSeen = false;
+  #bubbleKeys = false;
+  #bubbleShown = null;
+  #lastReveal = 0;
+  #lastGlow = 0;
+  #glowing = null;
+  #glowTimer = 0;
+  #dayShown = null;
+  // "text", "link", "note" or "passage" for a Copied or Added shown for a moment, "why" for
+  // why Add to note cannot be pressed.
+  #said = null;
+  #why = "";
+  #saidTimer = 0;
+  #yAt = 0;
+  #dAt = 0;
+
+  // After the text is in the editor: paint the shown day's highlights and act on the
+  // machine's one-shots, a glow only once its highlight is painted, since the day it is on
+  // may arrive after the event.
+  #afterMarks(snapshot) {
+    const { context } = snapshot;
+    const { day, editable } = shown(context.picture, selectedOf(context), context.fresh, Date.now());
+    const doc = this.#view.state.doc.toString();
+    if (day.id !== this.#dayShown) {
+      this.#dayShown = day.id;
+      this.#closeBubble(false);
+      this.#dropFinger();
+    }
+    const key = `${day.id}|${this.#glowing}`;
+    const from = this.#marksFrom;
+    if (!from || from.highlights !== context.highlights || from.doc !== doc || from.key !== key) {
+      this.#marksFrom = { highlights: context.highlights, doc, key };
+      this.#marks = editable ? [] : marksOf(context.highlights, day.day, doc);
+      this.#view.dispatch({ effects: setMarks.of(markSet(this.#marks, this.#glowing)) });
+    }
+    if (context.reveal && context.reveal.n !== this.#lastReveal) {
+      this.#lastReveal = context.reveal.n;
+      this.#openBubble(context.reveal.id);
+    }
+    const { glow } = context;
+    const target = glow && glow.n !== this.#lastGlow ? this.#marks.find((m) => m.id === glow.id) : null;
+    if (target) {
+      this.#lastGlow = glow.n;
+      clearTimeout(this.#glowTimer);
+      this.#glowing = glow.id;
+      this.#view.dispatch({ selection: { anchor: target.from }, effects: EditorView.scrollIntoView(target.from, { y: "center" }) });
+      const ms = parseFloat(getComputedStyle(this).getPropertyValue("--duration-slide")) || 300;
+      this.#glowTimer = setTimeout(() => {
+        this.#glowing = null;
+        this.requestUpdate();
+      }, 3 * ms + 100);
+      this.requestUpdate();
+    }
+    if (this.#active) {
+      const held = context.highlights.some((h) => h.id === this.#active);
+      if (held) this.#activeSeen = true;
+      else if (this.#activeSeen) this.#closeBubble(false);
+    }
+  }
+
+  #openBubble(id, keys = false) {
+    this.#saveComment();
+    this.#send({ type: "_commentClose" });
+    this.#active = id;
+    this.#activeSeen = false;
+    this.#bubbleKeys = keys;
+    this.#bubbleShown = null;
+    this.#say(null);
+    this.requestUpdate();
+  }
+
+  // `back` hands the keyboard to the text when the bubble held it.
+  #closeBubble(back = true) {
+    if (!this.#active) return;
+    const held = this.renderRoot.querySelector(".bubble")?.matches(":focus-within");
+    this.#saveComment();
+    this.#send({ type: "_commentClose" });
+    this.#active = null;
+    this.requestUpdate();
+    if (back && held) this.#view?.focus();
+  }
+
+  #saveComment() {
+    const box = this.renderRoot?.querySelector(".bubble textarea");
+    if (box) this.#send({ type: "_commentSave", body: box.value });
+  }
+
+  // Under the end of the passage, inside the page. The first time, in view, and with the
+  // keyboard when Enter opened it.
+  #placeBubble() {
+    const bubble = this.renderRoot?.querySelector(".bubble");
+    const mark = this.#marks.find((m) => m.id === this.#active);
+    const page = this.renderRoot?.querySelector(".page");
+    if (!bubble || !page || !mark || !this.#view) return;
+    const end = this.#view.coordsAtPos(mark.to, -1);
+    if (!end) return;
+    const box = page.getBoundingClientRect();
+    const x = Math.max(0, Math.min(page.clientWidth - bubble.offsetWidth, end.left - box.left - bubble.offsetWidth / 2));
+    bubble.style.setProperty("--bx", `${Math.round(x)}px`);
+    bubble.style.setProperty("--by", `${Math.round(end.bottom - box.top)}px`);
+    if (this.#bubbleShown === this.#active) return;
+    this.#bubbleShown = this.#active;
+    bubble.scrollIntoView({ block: "nearest" });
+    if (this.#bubbleKeys) bubble.querySelector("button")?.focus({ preventScroll: true });
+  }
+
+  #say(kind, ms = COPIED_MS) {
+    clearTimeout(this.#saidTimer);
+    this.#said = kind;
+    this.requestUpdate();
+    if (kind) {
+      this.#saidTimer = setTimeout(() => {
+        this.#said = null;
+        this.requestUpdate();
+      }, ms);
+    }
+  }
+
+  // On the clipboard, inside the click or key handler, where the permission holds; a blocked
+  // clipboard leaves the label as it was. A link is announced either way, so an editor's Vim
+  // register still gets it.
+  async #copyLink(mark) {
+    const h = this.#actor.snapshot.context.highlights.find((x) => x.id === mark.id);
+    try {
+      await navigator.clipboard.writeText(sourceLink(mark.id, h?.quote ?? { exact: mark.exact }));
+      this.#say("link");
+    } catch {
+      // no clipboard permission
+    }
+    this.#send({ type: "_copyLink", id: mark.id });
+  }
+
+  async #copyText(text, kind, announce) {
+    try {
+      await navigator.clipboard.writeText(text);
+      this.#say(kind);
+    } catch {
+      // no clipboard permission
+    }
+    if (announce) this.#send({ type: "_copyText", text });
+  }
+
+  // A greyed Add to note still takes the press and says why, so a finger, which never sees a
+  // tooltip, learns it too (Norman: feedback).
+  #add(mark) {
+    const add = addToNote(this.#actor.snapshot.context, mark.id);
+    if (!add) return;
+    if (!add.enabled) {
+      this.#why = add.why ?? "";
+      this.#say("why");
+      return;
+    }
+    this.#send({ type: "_addToNote", id: mark.id });
+    this.#say("note");
+  }
+
+  // Exits by Vim's own Escape, so its mode and its drawn selection end together.
+  #leaveVisual(view) {
+    const cm = getCM(view);
+    if (cm?.state?.vim?.visualMode) Vim.handleKey(cm, "<Esc>", "user");
+  }
+
+  // The keys of an earlier day, true when one was used. See machine.js: pastKey.
+  #pastKeydown(event, view) {
+    const { head, empty, from, to } = view.state.selection.main;
+    if (event.key === "Escape" && this.#active) {
+      this.#closeBubble();
+      return true;
+    }
+    if (this.#actor.snapshot?.context.vimKeys !== true) {
+      if (event.key !== "Enter" || event.ctrlKey || event.metaKey || event.altKey) return false;
+      if (!empty) this.#send({ type: "_highlight", from, to, exact: true });
+      else if (markAt(this.#marks, head)) this.#openBubble(markAt(this.#marks, head).id, true);
+      else return false;
+      return true;
+    }
+    const action = pastKey(event, getCM(view)?.state?.vim);
+    if (action === "vim") return false;
+    const mark = markAt(this.#marks, head);
+    const yHeld = Date.now() - this.#yAt < CHORD_MS;
+    const dHeld = Date.now() - this.#dAt < CHORD_MS;
+    this.#yAt = 0;
+    this.#dAt = 0;
+    if (action === "global") {
+      // Used here, so Vim leaves the document alone; the event goes on from the host, where
+      // nothing has used it, to the global Undo, which reads it on the window.
+      this.dispatchEvent(new KeyboardEvent("keydown", { key: event.key, code: event.code, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, bubbles: true, composed: true, cancelable: true }));
+    } else if (action === "yank") {
+      const text = view.state.sliceDoc(from, to);
+      this.#leaveVisual(view);
+      if (text.trim()) this.#copyText(text, "passage", true);
+    } else if (action === "make") {
+      this.#send({ type: "_highlight", from, to, exact: true });
+      this.#leaveVisual(view);
+    } else if (action === "enter") {
+      if (!mark) return false;
+      this.#openBubble(mark.id, true);
+    } else if (action === "y" && mark) {
+      this.#openBubble(mark.id);
+      if (yHeld) this.#copyText(mark.exact, "text", true);
+      else {
+        this.#yAt = Date.now();
+        this.#copyLink(mark);
+      }
+    } else if (action === "a" && mark) {
+      this.#openBubble(mark.id);
+      this.#add(mark);
+    } else if (action === "d" && mark) {
+      if (dHeld) this.#send({ type: "_remove", id: mark.id });
+      else this.#dAt = Date.now();
+    }
+    return true;
+  }
+
+  // --- A finger and the mouse on an earlier day -------------------------------------------
+
+  // The same gesture as chat-thread's view.js, which also scrolls with a finger, copied
+  // because components never import each other (11.2). Nothing refuses the touchstart, so the
+  // browser keeps its scroll, its clicks and its focus; only once a hold has started does
+  // #touchmove refuse the moves. A touch iOS ends anyway counts as a lift.
+  #press = null;
+  #holdTimer = 0;
+  // From the hold until the lift: the doc as flat text, the word it started on, the [from, to)
+  // painted, where the finger is.
+  #finger = null;
+  #lastPointer = null;
+
+  #touchmove = (e) => {
+    if (this.#finger && e.cancelable) e.preventDefault();
+  };
+  #touchend = (e) => {
+    if (e.touches?.length) return;
+    this.#cancelHold();
+    if (this.#finger) this.#lift();
+  };
+
+  #cancelHold() {
+    clearTimeout(this.#holdTimer);
+    this.#holdTimer = 0;
+  }
+
+  // Whether the day shown takes highlights: not today's page, and not two copies waiting.
+  get #past() {
+    return Boolean(this.renderRoot.querySelector(".region.past")) && Boolean(this.#view);
+  }
+
+  // What the system would do with a finger's long press: a selection where the text can still
+  // select (a touch screen with a fine main pointer), or a menu (Android). A mouse keeps both.
+  #noNative = (e) => {
+    if (this.#press?.onText) e.preventDefault();
+  };
+
+  // A finger or a pen, on the text, starts the wait for a hold; a second finger is not a
+  // press, and is how a pinch begins.
+  #pointerdown = (e) => {
+    this.#lastPointer = e.pointerType;
+    if (e.pointerType === "mouse" || (e.button != null && e.button !== 0)) return;
+    if (this.#finger) return;
+    this.#cancelHold();
+    this.#press = null;
+    if (!e.isPrimary) return;
+    const path = e.composedPath();
+    if (path.some((el) => el.classList?.contains("bubble"))) return;
+    const onText = this.#past && path.includes(this.#view.contentDOM);
+    this.#press = { pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, onText };
+    if (onText) this.#holdTimer = setTimeout(() => this.#held(), HOLD_MS);
+  };
+
+  #pointermove = (e) => {
+    const press = this.#press;
+    if (!press || e.pointerId !== press.pointerId) return;
+    if (this.#finger) return this.#follow(e.clientX, e.clientY);
+    if (this.#holdTimer && Math.hypot(e.clientX - press.x0, e.clientY - press.y0) > HOLD_SLOP) this.#cancelHold();
+  };
+
+  // The system took the touch, usually for a scroll: nothing waits for a hold any more, and a
+  // passage being dragged is made as painted.
+  #pointercancel = () => {
+    this.#cancelHold();
+    if (this.#finger) this.#lift();
+    this.#press = null;
+  };
+
+  // A tap: on a highlight its bubble, anywhere else closes the bubble. A link keeps its own.
+  #pointerup = (e) => {
+    if (e.pointerType === "mouse") return;
+    const press = this.#press;
+    this.#cancelHold();
+    if (this.#finger) return this.#lift();
+    this.#press = null;
+    if (!press || Math.hypot(e.clientX - press.x0, e.clientY - press.y0) > HOLD_SLOP) return;
+    this.#pressed(e.composedPath());
+  };
+
+  #pressed(path) {
+    if (path.some((el) => el.classList?.contains("bubble")) || onLink(path)) return;
+    const id = path.find((el) => el.classList?.contains("hl"))?.dataset.id;
+    if (id) this.#openBubble(id);
+    else this.#closeBubble();
+  }
+
+  // The mouse keeps the browser's selection. A drag that began on the text makes a highlight
+  // as it ends, and the selection stays, so the browser's copy still copies it. The mouse
+  // events a touch sends after it are not the mouse's. CodeMirror settles the selection in
+  // its own mouseup on the document, so this reads it a moment later.
+  #mousedown = (e) => {
+    if (this.#lastPointer !== "mouse" || e.button !== 0 || !this.#past) return;
+    const down = e.composedPath();
+    if (down.some((el) => el.classList?.contains("bubble"))) return;
+    const onText = down.includes(this.#view.contentDOM);
+    window.addEventListener(
+      "mouseup",
+      (up) => {
+        const path = up.composedPath();
+        setTimeout(() => {
+          if (!this.#view) return;
+          const { empty, from, to } = this.#view.state.selection.main;
+          if (onText && !empty) this.#send({ type: "_highlight", from, to, exact: false, open: true });
+          else this.#pressed(path);
+        }, 0);
+      },
+      { once: true },
+    );
+  };
+
+  // The finger has rested: this press is no tap and no scroll any more.
+  #held() {
+    this.#holdTimer = 0;
+    const press = this.#press;
+    if (!press || !this.#view) return;
+    const flat = this.#view.state.doc.toString();
+    const at = this.#view.posAtCoords({ x: press.x0, y: press.y0 }, false);
+    if (at == null || !flat.trim()) return;
+    this.#closeBubble(false);
+    const word = wordAround(flat, at);
+    this.#finger = { flat, word, span: word, x: press.x0, y: press.y0, frame: 0 };
+    this.#paintPassage(word[0], word[1]);
+  }
+
+  // A move may come many times a frame, and only the last before a frame can be seen.
+  #follow(x, y) {
+    const f = this.#finger;
+    f.x = x;
+    f.y = y;
+    f.frame ||= requestAnimationFrame(() => this.#grow());
+  }
+
+  #grow() {
+    const f = this.#finger;
+    if (!f) return;
+    cancelAnimationFrame(f.frame);
+    f.frame = 0;
+    const at = this.#view.posAtCoords({ x: f.x, y: f.y }, false);
+    if (at == null) return;
+    const span = fingerPassage(f.flat, f.word, at);
+    if (span[0] === f.span[0] && span[1] === f.span[1]) return;
+    f.span = span;
+    this.#paintPassage(span[0], span[1]);
+  }
+
+  // Lifting makes what is painted, letter for letter, and its bubble opens with the comment
+  // one press away; Undo takes it back (12, Undo).
+  #lift() {
+    this.#grow();
+    const [from, to] = this.#finger.span;
+    this.#dropFinger();
+    this.#press = null;
+    this.#send({ type: "_highlight", from, to, exact: true, open: true });
+  }
+
+  #dropFinger() {
+    if (!this.#finger) return;
+    cancelAnimationFrame(this.#finger.frame);
+    this.#finger = null;
+    this.#paintPassage(0, 0);
+  }
+
+  // The rectangles [from, to) of the doc takes on screen, in the page's own coordinates, so
+  // they scroll with the text: one per run of text per line, from the text nodes alone, since
+  // a range's own rectangles also hold the boxes of the lines it spans.
+  #boxesOf(from, to) {
+    const page = this.renderRoot.querySelector(".page");
+    if (!page || from >= to) return [];
+    const origin = page.getBoundingClientRect();
+    const { contentDOM } = this.#view;
+    const walker = document.createTreeWalker(contentDOM, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    const boxes = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      // A widget's text (a link's tag, a line's marks) has no place in the doc.
+      if (node.parentElement.closest('[contenteditable="false"]') !== contentDOM) continue;
+      const start = this.#view.posAtDOM(node, 0);
+      const a = Math.max(from, start);
+      const b = Math.min(to, start + node.length);
+      if (a >= b) continue;
+      range.setStart(node, a - start);
+      range.setEnd(node, b - start);
+      for (const r of range.getClientRects()) {
+        if (r.width > 0) boxes.push({ left: r.left - origin.left, top: r.top - origin.top, width: r.width, height: r.height });
+      }
+    }
+    return boxes;
+  }
+
+  // The passage's tinted boxes. The text it names is for tests.
+  #paintPassage(from, to) {
+    const el = this.renderRoot.querySelector(".passage");
+    if (!el) return;
+    el.replaceChildren(
+      ...this.#boxesOf(from, to).map((b) => {
+        const box = document.createElement("i");
+        box.style.setProperty("--px", `${b.left}px`);
+        box.style.setProperty("--py", `${b.top}px`);
+        box.style.setProperty("--pw", `${b.width}px`);
+        box.style.setProperty("--ph", `${b.height}px`);
+        return box;
+      }),
+    );
+    el.dataset.text = from < to ? this.#view.state.sliceDoc(from, to) : "";
+  }
+
+  // Along the bubble with h, l or the arrows; Escape back to the text, or from the comment
+  // box back to its Comment button, which keeps what was written.
+  #bubbleKey = (e) => {
+    const box = e.composedPath()[0]?.localName === "textarea" ? e.composedPath()[0] : null;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (box) {
+        this.#saveComment();
+        this.#send({ type: "_commentClose" });
+        this.#commentBack = true;
+        return;
+      }
+      this.#closeBubble();
+      this.#view?.focus();
+      return;
+    }
+    if (box) return;
+    const step = { ArrowRight: 1, ArrowLeft: -1, l: 1, h: -1 }[e.key];
+    if (!step || e.ctrlKey || e.metaKey || e.altKey) return;
+    const buttons = [...this.renderRoot.querySelectorAll(".bubble button")];
+    buttons[(buttons.indexOf(e.composedPath()[0]) + step + buttons.length) % buttons.length]?.focus({ preventScroll: true });
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  // Set when the comment box closes by Escape, which hands the keyboard to Comment.
+  #commentBack = false;
+  #boxFor = null;
+
+  // The bubble for the open highlight. A press on it stays on it, and is not let move the
+  // focus off the text, so a selection there can still be copied.
+  #bubble(context) {
+    const h = this.#active && context.highlights.find((x) => x.id === this.#active);
+    if (!h) return nothing;
+    const mark = this.#marks.find((m) => m.id === h.id) ?? { id: h.id, exact: h.quote?.exact ?? "" };
+    const add = addToNote(context, h.id);
+    const open = context.comment?.id === h.id;
+    return html`
+      <div class="bubble" role="group" aria-label="Highlight" @keydown=${this.#bubbleKey} @mousedown=${(e) => e.composedPath()[0]?.localName !== "textarea" && e.preventDefault()}>
+        <button class="act copy" type="button" @click=${() => this.#copyText(mark.exact, "text", false)}>${this.#said === "text" ? "Copied" : "Copy"}</button>
+        <button class="act copy-link" type="button" @click=${() => this.#copyLink(mark)}>${this.#said === "link" ? "Copied" : "Copy link"}</button>
+        ${add
+          ? html`<button class="act add" type="button" aria-disabled=${add.enabled ? "false" : "true"} title=${add.why ?? nothing} @click=${() => this.#add(mark)}>${this.#said === "note" ? "Added" : "Add to note"}</button>`
+          : nothing}
+        <button class="act comment" type="button" aria-expanded=${open} @click=${() => (open ? this.#commentToggle() : this.#send({ type: "_commentOpen", id: h.id }))}>Comment</button>
+        <button
+          class="act remove"
+          type="button"
+          @click=${() => {
+            this.#view?.focus();
+            this.#send({ type: "_remove", id: h.id });
+          }}
+        >
+          Remove
+        </button>
+        ${open
+          ? html`<textarea aria-label="Your comment on this passage" placeholder="Your comment on this passage" .value=${context.comment.body} @blur=${() => this.#saveComment()}></textarea>`
+          : nothing}
+      </div>
+    `;
+  }
+
+  #commentToggle() {
+    this.#saveComment();
+    this.#send({ type: "_commentClose" });
+  }
+
+  // A comment box just opened gets the keyboard; one closed by Escape hands it to Comment.
+  // Placed last, because the box changes the bubble's size.
+  #afterComment(context) {
+    const id = context.comment?.id ?? null;
+    if (id !== this.#boxFor) {
+      this.#boxFor = id;
+      if (id) this.renderRoot.querySelector(".bubble textarea")?.focus({ preventScroll: true });
+    }
+    if (this.#commentBack && !id) {
+      this.#commentBack = false;
+      this.renderRoot.querySelector(".bubble .comment")?.focus({ preventScroll: true });
+    }
+    this.#placeBubble();
   }
 
   // What the editor shows: the text being typed on the open day, else the day's text;
@@ -856,16 +1556,28 @@ class JournalEntry extends LitElement {
     // holds chat-input; it sits in the page so it scrolls with the day it is about.
     return html`
       <div class="frame">
-        <div class="scroll">
+        <div
+          class="scroll"
+          @pointerdown=${this.#pointerdown}
+          @pointermove=${this.#pointermove}
+          @pointerup=${this.#pointerup}
+          @pointercancel=${this.#pointercancel}
+          @mousedown=${this.#mousedown}
+          @contextmenu=${this.#noNative}
+          @selectstart=${this.#noNative}
+        >
           <div class="page ${this.#holds ? "holds" : ""}">
             <header>
               <h2>${longDate(day.day)}</h2>
             </header>
             ${conflict ? this.#conflict(conflict) : nothing}
-            <div class="region ${editable && !conflict ? "open" : ""}"></div>
+            <div class="region ${editable && !conflict ? "open" : conflict ? "" : "past"}"></div>
             <slot @slotchange=${this.#slotted}></slot>
+            <div class="passage" aria-hidden="true"></div>
+            ${this.#bubble(context)}
           </div>
         </div>
+        ${this.#said === "passage" ? html`<div class="said" role="status">Copied</div>` : this.#said === "why" ? html`<div class="said" role="status">${this.#why}</div>` : nothing}
         ${editable && !conflict ? html`<div class="footer">${this.#levelBar(vimKeys)}</div>` : nothing}
       </div>
     `;

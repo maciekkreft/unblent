@@ -419,7 +419,11 @@ for (const engine of ENGINES) {
         await page.locator("values-sheet .card").waitFor();
         // The page hands the keyboard to the journal as dock-desk's Ctrl+h/j/k/l does.
         await page.evaluate(() => document.querySelector("journal-entry").focus());
-        await until(async () => (await keyboardAt(page)) === "values");
+        await until(async () => (await keyboardAt(page)) === "text");
+        await pressTo(page, "j", "values");
+        await pressTo(page, "k", "text");
+        await pressTo(page, "k", "text");
+        await pressTo(page, "j", "values");
         await pressTo(page, "j", "card");
         await pressTo(page, "k", "values");
         await pressTo(page, "j", "card");

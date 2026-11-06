@@ -7,8 +7,9 @@ import { setup, assign, emit, enqueueActions, fromPromise, fromCallback, spawnCh
 // starting picture and follows journal.changed, settings.changed and session.changed after
 // (4.3, fourth rule); settings only for the "Vim keys" preference (12), session only for
 // whether anyone is signed in, and books: read only to learn whether an opened book is the
-// journal (written); notes: list and notes: read, following note.changed and note.deleted,
-// only for which highlights the day's source links point at still exist and where they are;
+// journal (written); notes: list, notes: read and notes: open, following note.changed,
+// note.deleted and note.opened, for which highlights the day's source links point at still
+// exist and where they are, for the highlights of an earlier day, and for Add to note;
 // evaluators: list, following evaluator.changed and evaluator.deleted, only for the names
 // the "#" picker offers. Writing leaves as day.saved, at a throttle while
 // typing and at once on blur with `left` (4.3, third rule); whether a save lands is the
@@ -374,8 +375,291 @@ export const withEvaluator = (list, evaluator) =>
     ? list.map((e) => (e.id === evaluator.id ? pickable(evaluator) : e))
     : [...list, pickable(evaluator)];
 
+// --- Highlights on an earlier day (13, Highlight) ---------------------------------------
+// Copied from book-reader/machine.js, and the finger's passage from chat-thread/machine.js,
+// because components never import each other (11.2). A highlight is an ordinary note whose
+// link to the Journal names the day. Its place counts by the lines of the text the editor
+// shows (parseBody's doc): `block` is a line and `offset` a place in it, since a day has
+// no book page to count by. Today's page takes no highlights, because its text still changes.
+
+// `books` presents the journal under this fixed id (books/machine.js).
+export const JOURNAL = "00000000000000000000000JRN";
+const isDay = (chapter) => /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chapter ?? "");
+
+const before = (a, b) => a.block < b.block || (a.block === b.block && a.offset < b.offset);
+const WORD = /[\p{L}\p{N}\p{M}'’]/u;
+const isWord = (ch) => ch != null && WORD.test(ch);
+const isSpace = (ch) => ch != null && /\s/u.test(ch);
+const forward = (texts, p) => {
+  if (p.offset < texts[p.block].length) return { block: p.block, offset: p.offset + 1 };
+  if (p.block + 1 < texts.length) return { block: p.block + 1, offset: 0 };
+  return null;
+};
+const charAfter = (texts, p) => (p.offset < texts[p.block].length ? texts[p.block][p.offset] : null);
+const charBefore = (texts, p) => (p.offset > 0 ? texts[p.block][p.offset - 1] : null);
+
+export const snapToWords = (texts, range, { grow = true } = {}) => {
+  let start = { ...range.start };
+  let end = { ...range.end };
+  while (grow && start.offset > 0 && isWord(texts[start.block][start.offset]) && isWord(texts[start.block][start.offset - 1])) start.offset -= 1;
+  while (grow && end.offset < texts[end.block].length && isWord(texts[end.block][end.offset]) && isWord(texts[end.block][end.offset - 1])) end.offset += 1;
+  while (before(start, end) && isSpace(charAfter(texts, start))) start = forward(texts, start);
+  while (before(start, end) && isSpace(charBefore(texts, end))) end = { block: end.block, offset: end.offset - 1 };
+  while (before(start, end) && end.offset === 0 && end.block > start.block) {
+    end = { block: end.block - 1, offset: texts[end.block - 1].length };
+    while (before(start, end) && isSpace(charBefore(texts, end))) end = { block: end.block, offset: end.offset - 1 };
+  }
+  return before(start, end) ? { start, end } : null;
+};
+
+const CONTEXT = 32;
+export const quoteOf = (texts, { start, end }) => {
+  const parts = [];
+  if (start.block === end.block) parts.push(texts[start.block].slice(start.offset, end.offset));
+  else {
+    parts.push(texts[start.block].slice(start.offset));
+    for (let b = start.block + 1; b < end.block; b += 1) parts.push(texts[b]);
+    parts.push(texts[end.block].slice(0, end.offset));
+  }
+  return {
+    exact: parts.join("\n"),
+    prefix: texts[start.block].slice(Math.max(0, start.offset - CONTEXT), start.offset),
+    suffix: texts[end.block].slice(end.offset, end.offset + CONTEXT),
+  };
+};
+
+const overlaps = (a, b) => !(before(a.end, b.start) || before(b.end, a.start));
+const contains = (outer, inner) => !before(inner.start, outer.start) && !before(outer.end, inner.end);
+const rangeOf = (place) => ({ start: place.start, end: place.end });
+const covering = (ranges) =>
+  ranges.reduce((u, r) => ({ start: before(r.start, u.start) ? r.start : u.start, end: before(u.end, r.end) ? r.end : u.end }));
+const joined = (bodies) => bodies.filter((b) => b.trim() !== "").join("\n\n");
+
+// A highlight's title is its comment's first line that says anything, so a list row, which
+// carries no body, can still tell a commented highlight from a bare one (12).
+export const titleOf = (body) => body.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+
+const LABEL_MAX = 40;
+export const linkLabel = (exact) => {
+  const words = String(exact ?? "").trim().split(/\s+/u).filter(Boolean);
+  let label = "";
+  for (const w of words) {
+    const next = label ? `${label} ${w}` : w;
+    if (next.length > LABEL_MAX) break;
+    label = next;
+  }
+  if (!label && words.length) label = words[0].slice(0, LABEL_MAX);
+  const cut = label.length < words.join(" ").length;
+  return (cut ? `${label}…` : label).replace(/[\\[\]]/g, "\\$&");
+};
+export const sourceLink = (id, quote) => `[${linkLabel(quote?.exact)}](note:${id})`;
+
+const notesLinks = (note) => (Array.isArray(note.about) ? note.about : []);
+
+// The notes that are highlights of a journal day, reduced to what the entry paints.
+export const highlightsOf = (notes) =>
+  notes
+    .map((note) => {
+      const link = notesLinks(note).find((l) => l.kind === "book" && l.id === JOURNAL && l.place && isDay(l.chapter));
+      return link ? { id: note.id, day: link.chapter, place: link.place, quote: link.quote, commented: Boolean(note.title) } : null;
+    })
+    .filter(Boolean);
+
+const foldHighlight = (highlights, note) => [...highlights.filter((h) => h.id !== note.id), ...highlightsOf([note])];
+
+const heldBy = (note) => notesLinks(note).filter((l) => l.kind === "highlight").map((l) => l.id);
+export const holdingOf = (notes) => Object.fromEntries(notes.map((n) => [n.id, heldBy(n)]).filter(([, ids]) => ids.length > 0));
+const foldHolding = (holding, note) => {
+  const { [note.id]: _, ...rest } = holding;
+  const ids = heldBy(note);
+  return ids.length ? { ...rest, [note.id]: ids } : rest;
+};
+
+// The bubble's Add to note: null while Slip-Box is hidden, so the button is not drawn;
+// otherwise whether it can be pressed and, when not, why.
+export const addToNote = (context, id) => {
+  if (!(Array.isArray(context.hidden) && !context.hidden.includes("slip-box"))) return null;
+  if (context.opened == null) return { enabled: false, why: "Open a note first" };
+  if (context.opened === id || (context.holding[context.opened] ?? []).includes(id)) return { enabled: false, why: "Already in this note" };
+  return { enabled: true, why: null };
+};
+
+// A place in the doc as a line and an offset, and back.
+export const pointOf = (doc, pos) => {
+  const lines = doc.slice(0, pos).split("\n");
+  return { block: lines.length - 1, offset: lines.at(-1).length };
+};
+export const posOf = (doc, { block, offset }) => {
+  const lines = doc.split("\n");
+  if (block >= lines.length || offset > lines[block].length) return null;
+  return lines.slice(0, block).reduce((sum, l) => sum + l.length + 1, 0) + offset;
+};
+
+// What the editor paints for one day, in order, as [from, to) in its doc. An earlier day's
+// text changes only when the user keeps the other copy of a conflict, so a place whose text
+// no longer reads as its quote is looked for by the quote, and left unpainted when it is gone.
+export function marksOf(highlights, day, doc) {
+  return highlights
+    .filter((h) => h.day === day)
+    .map((h) => {
+      const exact = h.quote?.exact ?? "";
+      let from = posOf(doc, h.place.start);
+      if (from == null || doc.slice(from, from + exact.length) !== exact) from = exact ? doc.indexOf(exact) : -1;
+      return from == null || from < 0 ? null : { id: h.id, from, to: from + exact.length, commented: h.commented, exact };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.from - b.from);
+}
+
+// The highlight holding a position (the cursor): start inclusive, end exclusive.
+export const markAt = (marks, pos) => marks.find((m) => pos >= m.from && pos < m.to) ?? null;
+
+// A finger's passage on the doc. The word holding an index, between blanks; on a blank, the
+// word before it, or with none before it, the one after.
+const blank = (c) => /\s/u.test(c);
+export const wordAround = (flat, i) => {
+  let at = Math.min(i, flat.length - 1);
+  while (at > 0 && blank(flat[at])) at -= 1;
+  while (at < flat.length - 1 && blank(flat[at])) at += 1;
+  let from = at;
+  let to = at + 1;
+  while (from > 0 && !blank(flat[from - 1])) from -= 1;
+  while (to < flat.length && !blank(flat[to])) to += 1;
+  return [from, to];
+};
+
+// The passage with the finger over index `i`, from the fixed `word` the hold started on.
+// Which way it runs depends only on where the finger is against that word.
+export const fingerPassage = (flat, [from, to], i) => {
+  if (i >= from) return [from, Math.max(wordAround(flat, Math.max(from, i))[1], to)];
+  let at = i;
+  while (at < from && blank(flat[at])) at += 1;
+  return [wordAround(flat, at)[0], to];
+};
+
+// What a key does on an earlier day with Vim keys on. Vim's edits would change the document
+// even in a read-only editor, so they stop here (`block`); Undo and Redo stay the global ones
+// (12, "Vim keys"), which Vim would swallow (`global`); the motions and v are Vim's own; the
+// rest is the reader's keys. A half-typed Vim command (gx, gg, fa) stays Vim's.
+const NORMAL_EDITS = new Set([..."iIAoOcCsSrRxXDpPJ~.Y"]);
+const VISUAL_EDITS = new Set([..."dDxXcCsSrRJ~uUpPYAI"]);
+export function pastKey(e, vim) {
+  if (!vim || vim.insertMode || e.altKey || e.metaKey || e.isComposing) return "vim";
+  if (e.ctrlKey) {
+    if (e.key === "r" && !vim.visualMode) return "global";
+    return e.key === "a" || e.key === "x" ? "block" : "vim";
+  }
+  const s = vim.inputState;
+  if (s && (s.operator || s.keyBuffer?.length)) return "vim";
+  if (vim.visualMode) {
+    if (e.key === "y") return "yank";
+    if (e.key === "Enter") return "make";
+    return VISUAL_EDITS.has(e.key) ? "block" : "vim";
+  }
+  if (e.key === "u") return "global";
+  if (e.key === "y" || e.key === "a" || e.key === "d") return e.key;
+  if (e.key === "Enter") return "enter";
+  return NORMAL_EDITS.has(e.key) ? "block" : "vim";
+}
+
+// The day shown when it can take a highlight, or null: an earlier day with no two copies
+// waiting to be settled, since keeping the other copy may remove the passage.
+const markable = (context) => {
+  const view = shown(context.picture, selectedOf(context), context.fresh, context.now?.() ?? 0);
+  return !view.editable && !conflictOn(context.conflict, view.day) ? view.day : null;
+};
+
+const opening = (context, id) => ({ id, n: (context.reveal?.n ?? 0) + 1 });
+
+// A range wholly inside one highlight makes nothing and opens that highlight's bubble; a
+// range clear of them all is a new note; one that overlaps or touches others merges them
+// into one, the same as in a book. `open` asks for the bubble of what was made: the mouse and
+// the finger make at once and offer the comment next, and the keyboard stays where it is.
+const makeHighlight = enqueueActions(({ context, event, enqueue }) => {
+  const day = markable(context);
+  if (!day) return;
+  const { doc } = parseBody(day.text);
+  const texts = doc.split("\n");
+  const range = snapToWords(texts, { start: pointOf(doc, event.from), end: pointOf(doc, event.to) }, { grow: !event.exact });
+  if (!range) return;
+  const hit = context.highlights.filter((h) => h.day === day.day && overlaps(rangeOf(h.place), range));
+  if (hit.length === 1 && contains(rangeOf(hit[0].place), range)) {
+    enqueue.assign({ reveal: opening(context, hit[0].id) });
+    return;
+  }
+  const chapter = context.picture.days.findIndex((d) => d.id === day.id);
+  // The journal has no re-imports to tell apart, so its places carry no content version.
+  const placeOf = (r) => ({ chapter, contentVersion: 0, start: r.start, end: r.end });
+  if (hit.length === 0) {
+    const id = context.mint();
+    enqueue.emit({
+      type: "note.saved",
+      id,
+      title: "",
+      body: "",
+      baseVersion: null,
+      about: [{ kind: "book", id: JOURNAL, chapter: day.day, chapterTitle: longDate(day.day), place: placeOf(range), quote: quoteOf(texts, range) }],
+      // One finished gesture, so one step of its own (12, Undo).
+      left: true,
+    });
+    if (event.open) enqueue.assign({ reveal: opening(context, id) });
+    return;
+  }
+  const involved = [...hit].sort((a, b) => (before(a.place.start, b.place.start) ? -1 : 1));
+  const u = covering([range, ...involved.map((h) => rangeOf(h.place))]);
+  enqueue.assign({ merge: { ids: involved.map((h) => h.id), place: placeOf(u), quote: quoteOf(texts, u), open: event.open === true } });
+  enqueue.stopChild("merging");
+  enqueue.spawnChild("readNotes", { id: "merging", input: { ask: context.ask, ids: involved.map((h) => h.id) } });
+});
+
+// The earliest overlapping note survives, grown to the union, with the comments stacked; the
+// rest are discarded.
+const finishMerge = enqueueActions(({ context, event, enqueue }) => {
+  const { merge } = context;
+  if (!merge) return;
+  enqueue.assign({ merge: null });
+  const notes = new Map(event.notes.map((n) => [n.id, n]));
+  const [survivorId, ...others] = merge.ids;
+  const survivor = notes.get(survivorId);
+  if (!survivor) return;
+  const body = joined(merge.ids.map((id) => notes.get(id)?.body ?? ""));
+  const about = notesLinks(survivor).map((l) => (l.kind === "book" && l.id === JOURNAL && l.place ? { ...l, place: merge.place, quote: merge.quote } : l));
+  enqueue.emit({ type: "note.saved", id: survivorId, title: titleOf(body), body, baseVersion: survivor.version, about, left: true });
+  for (const id of others) enqueue.emit({ type: "note.discarded", id });
+  if (merge.open) enqueue.assign({ reveal: opening(context, survivorId) });
+});
+
+// A followed link to a journal highlight: that day shows and the passage glows. A book the
+// followed link opens keeps this pick (followBook).
+const toPassage = enqueueActions(({ context, event, enqueue }) => {
+  if (event.book !== JOURNAL) return;
+  enqueue.assign({
+    want: { id: JOURNAL, chapter: event.place.chapter },
+    dayPicked: false,
+    written: { ...context.written, [JOURNAL]: true },
+    glow: { id: event.id, n: (context.glow?.n ?? 0) + 1 },
+  });
+  enqueue.raise({ type: "_show", chapter: event.place.chapter });
+});
+
 export const machine = setup({
   actors: {
+    // The notes a merge combines, for their comments and versions.
+    readNotes: fromCallback(({ input, sendBack }) => {
+      Promise.all(input.ids.map((id) => input.ask("notes", "read", { id }))).then(
+        (replies) => sendBack({ type: "_merged", notes: replies.filter((r) => r && "note" in r).map((r) => r.note) }),
+        () => sendBack({ type: "_merged", notes: [] }),
+      );
+    }),
+    // The highlight's comment and version, for the comment box.
+    readComment: fromCallback(({ input, sendBack }) => {
+      Promise.resolve(input.ask("notes", "read", { id: input.id })).then(
+        (reply) => sendBack({ type: "_commentRead", id: input.id, note: reply?.note ?? null }),
+        () => sendBack({ type: "_commentRead", id: input.id, note: null }),
+      );
+    }),
+    // The note open in the Notes panel, announced before this entry was mounted.
+    openNote: fromPromise(({ input }) => input.ask("notes", "open", {})),
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
@@ -456,8 +740,7 @@ export const machine = setup({
       "keyboard down onto the views nested under the text, in the order they are shown, and " +
       "j or k on one of them that it does not use itself (j on its last row, k on its first) " +
       "moves to the next one or back up, the text being the stop above the first; the keyboard " +
-      "comes back to the start of the text's last line. On an earlier day, whose text takes no " +
-      "keyboard, the keyboard lands on the first nested view instead. A nested view the page " +
+      "comes back to the start of the text's last line, on an earlier day too. A nested view the page " +
       "gives `flag` naming a feature is not shown while `flags` reports the feature hidden, " +
       "and until `flags` answers; a page without `flags` hides nothing. A hashtag, such as " +
       "#in-my-control, is drawn in the accent color when it names one of the account's " +
@@ -474,11 +757,31 @@ export const machine = setup({
       "typed; the arrow keys (or Ctrl+N and Ctrl+P) choose, Enter, Tab, a click or a tap " +
       "writes the name and a space, and Escape or moving away closes it. Enter at the end of " +
       "a hashtag line starts a bullet directly below it, so the lines written next are the " +
-      "ones it checks. An earlier day never opens the list.",
+      "ones it checks. An earlier day never opens the list." +
+      " An earlier day's text can hold the keyboard and is read only: Vim's motions and v work " +
+      "there, and Vim's edits do nothing. A mouse selection makes a highlight at once, grown to " +
+      "whole words, and opens its bubble, and the selection stays, so the browser's copy still " +
+      "copies it. On a touch screen a finger never uses the browser's selection: pressing and " +
+      "holding for about 0.4 seconds paints the word under it, a drag grows the passage from " +
+      "that fixed word, and lifting (or iOS ending the touch) makes the highlight and opens its " +
+      "bubble; a finger that moves first scrolls the day. Enter on a passage marked with v, or " +
+      "on a selection made without Vim, makes a highlight and leaves the bubble closed; y on a " +
+      "passage marked with v copies it and makes no highlight, with Copied shown for a moment. A " +
+      "selection that touches another highlight merges with it, comments stacked; one wholly " +
+      "inside a highlight only opens that highlight's bubble. A highlight is painted in the " +
+      "marker color, with an accent line under it once it has a comment, and a press on it, or " +
+      "Enter with the cursor inside it, opens its bubble: Copy, Copy link, Add to note while " +
+      "Slip-Box is shown, greyed with its reason when it cannot be pressed, Remove with the short " +
+      "notice and Undo, and Comment, a small box that saves the highlight's title and body when " +
+      "it is left. Enter gives the bubble the keyboard: h and l or the arrows move along it, and " +
+      "Escape goes back to the text. With Vim keys on and the cursor inside a highlight, a does " +
+      "Add to note, y Copy link, y y Copy and d d Remove, and u stays the global Undo. Following " +
+      "a link to a journal highlight shows that day, scrolls to the passage and makes it glow " +
+      "for about a second. Today's page takes no highlights.",
     kind: "view",
-    emits: ["day.saved", "day.shown", "book.closed", "passage.selected"],
+    emits: ["day.saved", "day.shown", "book.closed", "passage.selected", "note.saved", "note.discarded", "passage.added", "link.copied", "text.copied"],
     attributes: ["height"],
-    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read", "flags: read", "line-checks: read", "evaluators: list"],
+    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read", "notes: open", "flags: read", "line-checks: read", "evaluators: list"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -532,6 +835,20 @@ export const machine = setup({
     // The account's evaluators the "#" picker offers (evaluatorsOf); none until evaluators
     // answers.
     evaluators: [],
+    // The journal's highlights (highlightsOf), which notes hold which passages, and the note
+    // open in the Notes panel; `openSeen` says a note.opened came before the starting ask's
+    // reply, which is then stale.
+    highlights: [],
+    holding: {},
+    opened: null,
+    openSeen: false,
+    // One-shots for the view, each with a nonce: the highlight whose bubble opens, and the
+    // one a followed link makes glow.
+    reveal: null,
+    glow: null,
+    // A merge waiting for the notes it combines, and the comment box's starting text.
+    merge: null,
+    comment: null,
   }),
   // Asked after any change that shows another day or another text (checksDue), so no
   // state can forget it.
@@ -561,8 +878,21 @@ export const machine = setup({
       input: ({ context }) => ({ ask: context.ask }),
       onDone: {
         guard: ({ event }) => Array.isArray(event.output?.notes),
-        actions: assign({ notes: ({ event }) => event.output.notes.map((n) => n.id) }),
+        actions: assign({
+          notes: ({ event }) => event.output.notes.map((n) => n.id),
+          highlights: ({ event }) => highlightsOf(event.output.notes),
+          holding: ({ event }) => holdingOf(event.output.notes),
+        }),
       },
+    },
+    {
+      src: "openNote",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: {
+        guard: ({ context }) => !context.openSeen,
+        actions: assign({ opened: ({ event }) => event.output?.note?.id ?? null }),
+      },
+      onError: { actions: [] },
     },
     {
       src: "evaluators",
@@ -690,6 +1020,9 @@ export const machine = setup({
         actions: [
           assign({ removed: ({ context, event }) => without(context.removed, event.id) }),
           emit(({ event }) => ({ type: "passage.selected", ...passageOf(event.reply, event.id) })),
+          // The bus never hands an emitter its own event (4.1), so a link to another journal
+          // day is shown from here.
+          enqueueActions(({ event, enqueue }) => enqueue.raise({ type: "_passage", ...passageOf(event.reply, event.id) })),
         ],
       },
       {
@@ -697,18 +1030,75 @@ export const machine = setup({
         actions: assign({ removed: ({ context, event }) => [...without(context.removed, event.id), event.id] }),
       },
     ],
+    // Following a link, from here or from another view, to a highlight on a journal day.
+    "passage.selected": { actions: toPassage },
+    _passage: { actions: toPassage },
+    // The note the Notes panel shows, which Add to note adds a passage to.
+    "note.opened": { actions: assign({ opened: ({ event }) => event.id, openSeen: true }) },
+    _highlight: { actions: makeHighlight },
+    _merged: { actions: finishMerge },
+    // Add to note: the user's gesture, which notes records as one step (4.3, fifth rule; 12).
+    _addToNote: {
+      guard: ({ context, event }) => context.highlights.some((h) => h.id === event.id) && addToNote(context, event.id)?.enabled === true,
+      actions: emit(({ context, event }) => ({ type: "passage.added", note: context.opened, highlight: event.id })),
+    },
+    // A highlight is a note (13), deleted at once, one step with the short notice (12, Undo).
+    _remove: {
+      guard: ({ context, event }) => context.highlights.some((h) => h.id === event.id),
+      actions: emit(({ event }) => ({ type: "note.discarded", id: event.id })),
+    },
+    // Announced whether or not the clipboard took it, so an editor's Vim register still gets
+    // it. The bus never hands an emitter its own event (4.1), so this editor's register is
+    // filled here, for a p on today's page.
+    _copyText: {
+      guard: ({ event }) => typeof event.text === "string" && event.text.trim() !== "",
+      actions: [({ context, event }) => context.pushRegister?.(event.text), emit(({ event }) => ({ type: "text.copied", text: event.text }))],
+    },
+    _copyLink: {
+      guard: ({ context, event }) => context.highlights.some((h) => h.id === event.id),
+      actions: [
+        ({ context, event }) => context.pushRegister?.(sourceLink(event.id, context.highlights.find((h) => h.id === event.id).quote)),
+        emit(({ context, event }) => ({ type: "link.copied", id: event.id, text: sourceLink(event.id, context.highlights.find((h) => h.id === event.id).quote) })),
+      ],
+    },
+    // The comment box: its text comes from notes, and leaving it saves the highlight's title
+    // and body, one step (12, Undo). A comment left as it was saves nothing.
+    _commentOpen: {
+      actions: [
+        stopChild("comment"),
+        spawnChild("readComment", { id: "comment", input: ({ context, event }) => ({ ask: context.ask, id: event.id }) }),
+      ],
+    },
+    _commentRead: {
+      guard: ({ event }) => event.note != null,
+      actions: assign({ comment: ({ event }) => ({ id: event.id, body: event.note.body ?? "", version: event.note.version }) }),
+    },
+    _commentSave: {
+      guard: ({ context, event }) => context.comment != null && event.body !== context.comment.body,
+      actions: [
+        emit(({ context, event }) => ({ type: "note.saved", id: context.comment.id, title: titleOf(event.body), body: event.body, baseVersion: context.comment.version, left: true })),
+        assign({ comment: ({ context, event }) => ({ ...context.comment, body: event.body }) }),
+      ],
+    },
+    _commentClose: { actions: [stopChild("comment"), assign({ comment: null })] },
     // notes' news (4.3, fourth rule): a note made, changed or brought back exists; a
     // deleted one does not.
     "note.changed": {
       actions: assign(({ context, event }) => ({
         notes: context.notes === null || context.notes.includes(event.id) ? context.notes : [...context.notes, event.id],
         removed: without(context.removed, event.id),
+        highlights: foldHighlight(context.highlights, event),
+        holding: foldHolding(context.holding, event),
+        comment: context.comment?.id === event.id && Number.isInteger(event.version) ? { ...context.comment, version: event.version } : context.comment,
       })),
     },
     "note.deleted": {
       actions: assign(({ context, event }) => ({
         notes: context.notes === null ? null : without(context.notes, event.id),
         removed: context.notes === null ? [...without(context.removed, event.id), event.id] : context.removed,
+        highlights: context.highlights.filter((h) => h.id !== event.id),
+        holding: foldHolding(context.holding, { id: event.id }),
+        comment: context.comment?.id === event.id ? null : context.comment,
       })),
     },
     // evaluators' news, for the "#" picker.

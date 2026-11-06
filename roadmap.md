@@ -20,7 +20,6 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Telegram notifications to the owner, for example when a new guest arrives or a limit is reached.
 - One note linked to many books at once.
 - Unlinking a note.
-- Highlights in the journal, made the same way as in any other book (sketch: `~/.claude/plans/journal-book.md`).
 - Evaluators reading the journal, with Jev's answers shown beside a day, as a component of its own: a fact that owns those answers, not something added back into `journal`, which owns only the days (architecture.md 3.1).
 - A jump from a highlight to its passage, with one step back to the reading place.
 - Sending a note's text to the chat as the next message, so a note that holds a useful question can be used again with any book.
@@ -37,7 +36,6 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Hiding an evaluator's mark and its hint on one line of a day that can still be edited, leaving a faint dot that shows them again (sketch: `~/.claude/plans/hints-and-locks.md`).
 - The push gate also covering the phone preview and signed-in and signed-out use in both browsers, run only when the owner pushes by hand, never by a coding session (sketch: `~/.claude/plans/hints-and-locks.md`).
 - Notes and chats kept with the day they were made, so each day shows only its own, with a checkbox on a note or a chat that shows it on every day.
-- Highlights and comments on past journal days.
 - Summaries of journal days, shown to the user beside each day; today the journal summary generator writes one sentence per day, which only the chat reads.
 - Summaries of book chapters, shown to the user beside each chapter.
 - A Wheel of Life sheet, the coaching exercise in which a person rates the areas of their life, on the topic of coaching (see the sheets offered by topic above), which can be added to every journal.
@@ -68,7 +66,6 @@ Self-help reading on the Mac (the roadmap desk, a sketch of each idea: https://c
 Work that is decided but not done yet. Remove a line when its work is done.
 
 - Make CHANGELOG.md the source of each GitHub release's notes, so the release workflow copies that version's section into the release, and fill in the missing versions 0.2.0, 0.2.1 and 0.2.2.
-- Allow selecting and copying text on a past journal day, which is read only, with Vim's visual mode too.
 - Allow selecting read-only text and copying it, or linking it into text that can be edited, in Notes and the Journal only.
 - The status check also reads each Reddit post's upvotes and views, through a Chrome browser driven by Playwright from Python and signed in to the owner's Reddit account, because Reddit shows them only to someone signed in and blocks this server otherwise. Each post's text, links and comments are already read from Reddit's public feeds by `/opt/unblent-site/scripts/reddit.py`.
 - Erase what the server keeps for an Undo (architecture.md 12) when the step can no longer be undone or redone, not only when it is pushed past the last 100 steps: a deleted book's files, a deleted guest's files and spending, and the API keys kept under a step. Today two cases keep them on the server for good. First, when the user undoes a step and then makes a new change, the undone step leaves the redo list, but `undo` emits no `step.dropped` for it. Second, the steps of a browser that never reaches 100 steps, or whose undo list is lost, are never dropped. The first needs `step.dropped` to also be emitted for a step that leaves the redo list (a change to that event's meaning, which needs the owner's approval). The second needs an age limit, such as 30 days, after which the server erases them by itself.

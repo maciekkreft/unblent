@@ -390,6 +390,12 @@ test("segments splits a range per block and drops the empty ones", () => {
   ]);
 });
 
+test("a journal day's highlight is not this reader's, so it is never re-anchored", () => {
+  const place = { chapter: 0, contentVersion: 0, start: { block: 0, offset: 0 }, end: { block: 0, offset: 1 } };
+  const note = { id: "n", title: "", about: [{ kind: "book", id: "jrn", chapter: "2026-10-11", chapterTitle: "Sunday", place, quote: { exact: "x" } }] };
+  assert.deepEqual(highlightsOf([note], "jrn"), []);
+});
+
 test("highlightsOf keeps only the book's placed links, with the comment flag", () => {
   const notes = [
     { id: "n1", title: "", about: [{ kind: "book", id: "bk1", place: { chapter: 0 }, quote: { exact: "a" } }] },

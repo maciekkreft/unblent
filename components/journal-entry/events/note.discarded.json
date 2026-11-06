@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user deleted a note (4.3, fifth rule): notes makes it a tombstone at once, one step Undo takes back (12).",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}

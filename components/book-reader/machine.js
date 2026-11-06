@@ -392,7 +392,11 @@ const links = (note) => (Array.isArray(note.about) ? note.about : []);
 
 // The book link that makes a note a highlight of this book: kind book, this id, and a
 // place (Decision 1). A note without one is not a highlight here.
-const bookPlace = (note, bookId) => links(note).find((l) => l.kind === "book" && l.id === bookId && l.place);
+// A journal day's highlight names its day and counts by the entry's lines, not by this
+// reader's blocks, and the journal's content version moves with every edit, so this reader
+// must never re-anchor it.
+const bookPlace = (note, bookId) =>
+  links(note).find((l) => l.kind === "book" && l.id === bookId && l.place && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(l.chapter ?? ""));
 
 // A highlight has a comment when its title is not empty: the highlights editor sets the
 // title to the first non-empty line of the comment, so a list row, which carries no
