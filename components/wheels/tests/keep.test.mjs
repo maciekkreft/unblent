@@ -14,7 +14,8 @@ import { machine } from "../machine.js";
 // store read answers empty.
 const ACTUAL = [6, null, null, null, null, null, null, null];
 const WANTED = [9, null, null, null, null, null, null, null];
-const LIVE = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", day: "2026-10-01", actual: ACTUAL, wanted: WANTED, version: 3 };
+const ANSWERS = [{ one: "In bed all day" }, {}, {}, {}, {}, {}, {}, { closer: "Call a friend" }];
+const LIVE = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", day: "2026-10-01", actual: ACTUAL, wanted: WANTED, answers: ANSWERS, version: 3 };
 const GONE = { id: "01ARZ3NDEKTSV4RRFFQ69G5FB0", day: "2026-10-01", actual: ACTUAL, wanted: WANTED, version: 2, deleted: true };
 
 const flush = async (n = 40) => {
@@ -121,6 +122,7 @@ test("after the reload into an empty account the mark sends the copy from a curs
   assert.ok(sent.includes(LIVE.id), `sent: ${sent}`);
   assert.equal(queued.find((r) => r.id === LIVE.id).baseVersion, 3, "on the version it holds");
   assert.deepEqual(queued.find((r) => r.id === LIVE.id).actual, ACTUAL, "with its scores");
+  assert.deepEqual(queued.find((r) => r.id === LIVE.id).answers, ANSWERS, "and its answers");
   assert.ok(!sent.includes(GONE.id), "a tombstone is not sent");
   assert.equal(meta.get("adopt"), null);
   assert.equal(meta.get("userId"), "u1");

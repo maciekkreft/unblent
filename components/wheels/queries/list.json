@@ -58,6 +58,38 @@
               },
               "description": "The Wanted score of each area, in the fixed order Health, Work, Money, Family, Love, Friends, Growth, Fun: 1 to 10, or null where there is none."
             },
+            "answers": {
+              "type": "array",
+              "minItems": 8,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "one": {
+                    "type": "string",
+                    "description": "What a 1 looks like for the user in this area."
+                  },
+                  "ten": {
+                    "type": "string",
+                    "description": "What a 10 looks like for the user in this area."
+                  },
+                  "lower": {
+                    "type": "string",
+                    "description": "What makes the Actual score this number and not lower."
+                  },
+                  "higher": {
+                    "type": "string",
+                    "description": "What keeps the Actual score from being higher."
+                  },
+                  "closer": {
+                    "type": "string",
+                    "description": "What would move the Actual score one point closer to Wanted."
+                  }
+                },
+                "additionalProperties": false
+              },
+              "description": "The answers to the questions of each area, in the fixed order Health, Work, Money, Family, Love, Friends, Growth, Fun, an object holding only the questions answered. Every wheel the fact announces carries it, with eight empty objects for a wheel without answers."
+            },
             "version": {
               "type": "integer",
               "minimum": 1

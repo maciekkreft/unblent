@@ -19,6 +19,15 @@ const isScore = (v) => Number.isInteger(v) && v >= 1 && v <= 10;
 const scores = (v) => Array.from({ length: AREAS }, (_, i) => (Array.isArray(v) && isScore(v[i]) ? v[i] : null));
 const areScores = (v) => Array.isArray(v) && v.length === AREAS && v.every((s) => s === null || isScore(s));
 
+const QUESTIONS = ["one", "ten", "lower", "higher", "closer"];
+const isArea = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const area = (v) =>
+  Object.fromEntries(QUESTIONS.filter((q) => typeof v?.[q] === "string" && v[q] !== "").map((q) => [q, v[q]]));
+// One form for every copy: what cannot be read counts as no answer, and an emptied box is
+// the same as one never written, so neither makes a new version.
+const answersOf = (v) => Array.from({ length: AREAS }, (_, i) => area(Array.isArray(v) ? v[i] : null));
+const areAnswers = (v) => Array.isArray(v) && v.length === AREAS && v.every(isArea);
+
 // --- Records --------------------------------------------------------------------------
 
 // One fixed shape and key order, so two copies of the same content compare equal as
@@ -28,6 +37,7 @@ const toRecord = (r) => ({
   day: r.day,
   actual: scores(r.actual),
   wanted: scores(r.wanted),
+  answers: answersOf(r.answers),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
   ...(r.deleted === true ? { deleted: true } : {}),
   // The step that last wrote it in this browser (12, Undo); the server never has it.
@@ -35,7 +45,7 @@ const toRecord = (r) => ({
 });
 
 // What a write carries, and what decides whether a change is a new version.
-const content = (r) => ({ day: r.day, actual: r.actual, wanted: r.wanted });
+const content = (r) => ({ day: r.day, actual: r.actual, wanted: r.wanted, answers: r.answers });
 const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b));
 
 // A tombstone is kept for the sync (5) but never listed or announced as a change.
@@ -46,6 +56,7 @@ const announce = (context, r) => ({
   day: r.day,
   actual: r.actual,
   wanted: r.wanted,
+  answers: r.answers,
   version: r.version,
   pending: context.outbox.has(r.id),
 });
@@ -90,14 +101,15 @@ const outboxRow = (r, baseVersion) => ({ id: r.id, ...content(r), baseVersion, .
 
 // --- Steps (12, Undo) -------------------------------------------------------------------
 
-// A wheel as a step names it: its scores, whether it is deleted, and `prior`, the step
-// that wrote it before this one, so an Undo leaves it as that step left it and the step
-// before can be undone next.
+// A wheel as a step names it: its scores and answers, whether it is deleted, and `prior`,
+// the step that wrote it before this one, so an Undo leaves it as that step left it and
+// the step before can be undone next.
 const entry = (r, prior = r.step) => ({
   kind: "wheel",
   id: r.id,
   actual: r.actual,
   wanted: r.wanted,
+  answers: r.answers,
   deleted: Boolean(r.deleted),
   ...(prior ? { prior } : {}),
 });
@@ -145,6 +157,7 @@ function applyStep(context, event, enqueue) {
   const undoing = event.type === "step.undone";
   const current = isId(p.id) ? context.wheels.get(p.id) : null;
   if (p.kind !== "wheel" || !current || !areScores(p.actual) || !areScores(p.wanted)) return settle("refused", "changed");
+  if (p.answers !== undefined && !areAnswers(p.answers)) return settle("refused", "changed");
   if (current.step !== (undoing ? event.id : before(p, event.id))) return settle("refused", "changed");
   // Wheels are written only while their journal day is (13, Journal).
   if (context.today != null && current.day !== context.today) return settle("refused", "closed");
@@ -153,30 +166,37 @@ function applyStep(context, event, enqueue) {
     ...live,
     actual: p.actual,
     wanted: p.wanted,
+    // A step kept from before answers says nothing about them, so they stay.
+    answers: p.answers === undefined ? current.answers : answersOf(p.answers),
     ...(p.deleted ? { deleted: true } : {}),
     step: undoing ? before(p, event.id) : event.id,
   });
   settle("applied");
 }
 
-const blank = (actual, wanted) => [...actual, ...wanted].every((s) => s === null);
+// Spaces and blank lines alone are not an answer: a box left with them must not keep a
+// wheel the user emptied.
+const hasText = (answers) => answers.some((a) => Object.values(a).some((text) => text.trim() !== ""));
+const blank = (actual, wanted, answers) => [...actual, ...wanted].every((s) => s === null) && !hasText(answers);
 
-// A new id adds a wheel to its day, unless it holds no score at all: that is not a wheel
-// yet. A save to one already kept changes its scores and keeps its day, except that no
-// score at all removes it: that is how the view says it is gone. Its tombstone keeps the
-// scores it had, so it can still be restored. A deleted id stays deleted (5).
+// A new id adds a wheel to its day, unless it holds no score and no answer with text: that
+// is not a wheel yet. A save to one already kept changes its scores and answers and keeps
+// its day, except that holding nothing removes it: that is how the view says it is gone.
+// Its tombstone keeps what it had, so it can still be restored. A save without answers
+// keeps those stored. A deleted id stays deleted (5).
 function applySave(context, event, enqueue) {
   if (!isId(event.id)) return;
   const was = context.wheels.get(event.id);
   if (was?.deleted) return;
   const actual = scores(event.actual);
   const wanted = scores(event.wanted);
+  const answers = event.answers === undefined ? answersOf(was?.answers) : answersOf(event.answers);
   if (!was) {
-    if (!isDay(event.day) || blank(actual, wanted)) return;
-    return recordStep(context, enqueue, null, toRecord({ id: event.id, day: event.day, actual, wanted }), event);
+    if (!isDay(event.day) || blank(actual, wanted, answers)) return;
+    return recordStep(context, enqueue, null, toRecord({ id: event.id, day: event.day, actual, wanted, answers }), event);
   }
-  if (blank(actual, wanted)) return recordStep(context, enqueue, was, { ...was, deleted: true }, event);
-  const next = { ...was, actual, wanted };
+  if (blank(actual, wanted, answers)) return recordStep(context, enqueue, was, { ...was, deleted: true }, event);
+  const next = { ...was, actual, wanted, answers };
   if (same(was, next)) {
     // A fold with nothing new to save still ends the stretch of rating.
     if (event.finished === true && context.stretch?.id === event.id) {
@@ -322,12 +342,16 @@ export const machine = setup({
     description:
       "Owns the Wheels of Life kept with the journal's days. A wheel is eight fixed areas (Health, " +
       "Work, Money, Family, Love, Friends, Growth, Fun), each with an Actual and a Wanted score " +
-      "from 1 to 10 or none. Each one names its journal day by date and keeps that day for good. " +
-      "`wheels: list` answers one day's wheels, or every day's when no day is given, oldest first; " +
-      "the chat does not read it. A new wheel with no score at all is not kept, and a save that " +
-      "leaves a kept wheel with no score at all deletes it at once; its tombstone keeps the " +
-      "scores it had. Every change is a step Undo and Redo reverse (section 12): one stretch of " +
-      "rating one wheel, from its first save until a save says finished, and a delete, which " +
+      "from 1 to 10 or none, and the user's answers to five questions about it (one, ten, lower, " +
+      "higher, closer), each optional text. Each one names its journal day by date and keeps that " +
+      "day for good. `wheels: list` answers one day's wheels, or every day's when no day is given, " +
+      "oldest first; the chat does not read it. Every wheel it announces or lists carries eight " +
+      "answer objects, empty for a wheel without answers, and answers it cannot read count as " +
+      "empty. A save without answers keeps those stored. A new wheel with no score and no answer " +
+      "with text, text being something other than spaces and blank lines, is not kept, and a save " +
+      "that leaves a kept wheel so deletes it at once, so a wheel holding only answers is kept; " +
+      "its tombstone keeps what it had. Every change is a step Undo and Redo reverse (section 12): " +
+      "one stretch of rating or answering one wheel, from its first save until a save says finished, and a delete, which " +
       "asks for the short notice. Undo of a new wheel's first stretch deletes it, and a deleted " +
       "one comes back with a restore write the server accepts. A step is refused when the wheel " +
       "was written since by anything else, and when its journal day has closed, which it learns " +
@@ -573,7 +597,10 @@ function applySync(context, output, enqueue) {
     }
     // A newer edit made during the sync leaves a newer row, which stays pending on the
     // acknowledged version; otherwise the row is drained.
-    const drained = row && JSON.stringify(content(toRecord(row))) === JSON.stringify(content(toRecord(ack)));
+    // A row queued before answers existed carries none and the server kept what it holds,
+    // so that row is drained by what it did carry, and those answers are taken.
+    const unanswered = row && row.answers === undefined;
+    const drained = row && JSON.stringify(content(toRecord({ ...ack, ...row }))) === JSON.stringify(content(toRecord(ack)));
     if (drained) {
       context.outbox.delete(ack.id);
       enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
@@ -583,7 +610,7 @@ function applySync(context, output, enqueue) {
       enqueue(() => context.store.outboxPut(advanced).catch(() => {}));
     }
     // Keep the latest local content (a mid-sync edit), take the server's version.
-    const r = held ? { ...held, version: ack.version } : toRecord(ack);
+    const r = held ? { ...held, version: ack.version, ...(unanswered ? { answers: answersOf(ack.answers) } : {}) } : toRecord(ack);
     context.wheels.set(r.id, r);
     enqueue(() => context.store.put(r).catch(() => {}));
     if (visible(r)) enqueue.emit({ type: "wheel.changed", wheel: announce(context, r) });

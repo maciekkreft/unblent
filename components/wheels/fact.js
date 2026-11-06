@@ -13,17 +13,21 @@ import list from "./queries/list.json" with { type: "json" };
 // treats as a network error and retries on the next trigger (5).
 const store = openWheels();
 
+// keepalive lets a PUT finish after the page is gone, which is what makes the
+// hidden-tab drain reach the server (5); the browser caps keepalive bodies at 64 KiB
+// in total, so it is asked for only while hidden and only for a wheel with short answers.
+const KEEPALIVE_MAX_BYTES = 32 * 1024;
+
 const api = {
   async put(row) {
     const { id, ...payload } = row;
+    const body = JSON.stringify({ ...payload, deleted: Boolean(row.deleted) });
     const res = await fetch(`/api/wheels/${id}`, {
       method: "PUT",
       credentials: "same-origin",
       headers: { "content-type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ ...payload, deleted: Boolean(row.deleted) }),
-      // Lets a PUT finish after the page is gone, which is what makes the hidden-tab drain
-      // reach the server (5); a wheel is far below the browser's 64 KiB cap on such a body.
-      keepalive: document.visibilityState === "hidden",
+      body,
+      keepalive: document.visibilityState === "hidden" && new TextEncoder().encode(body).length <= KEEPALIVE_MAX_BYTES,
     });
     if (res.status === 401) return { error: "unauthorized" };
     if (!res.ok) throw new Error(`wheels put ${res.status}`);

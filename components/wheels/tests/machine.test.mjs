@@ -18,6 +18,8 @@ const ID3 = "01ARZ3NDEKTSV4RRFFQ69G5CP3";
 
 const NONE = Array(8).fill(null);
 const first = (score) => [score, null, null, null, null, null, null, null];
+const EMPTY = Array(8).fill({});
+const said = (answer) => [answer, {}, {}, {}, {}, {}, {}, {}];
 
 const schema = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const changedSchema = new Validator(schema("../events/wheel.changed.json"), "2020-12");
@@ -50,7 +52,8 @@ function fakeStore(initial = [], outboxRows = []) {
 
 const askUser = (userId) => () => Promise.resolve({ userId, registrationOpen: false });
 
-// The server as a fake: last write wins, a delete always wins, versions assigned here.
+// The server as a fake: last write wins, a delete always wins, versions assigned here, and
+// a write without answers keeps those held.
 function fakeApi({ pull } = {}) {
   const server = new Map();
   const puts = [];
@@ -64,7 +67,7 @@ function fakeApi({ pull } = {}) {
       const held = server.get(row.id);
       if (held?.deleted) return held;
       const { baseVersion, ...rest } = row;
-      const r = { ...rest, deleted: Boolean(row.deleted), version: held ? held.version + 1 : (baseVersion || 0) + 1 };
+      const r = { answers: held?.answers, ...rest, deleted: Boolean(row.deleted), version: held ? held.version + 1 : (baseVersion || 0) + 1 };
       server.set(row.id, r);
       return r;
     },
@@ -122,7 +125,7 @@ test("signed out: a new wheel is version 1, announced whole, and listed with its
   await ready(actor);
   actor.send(saved({ wanted: first(9) }));
   assert.equal(changed.length, 1);
-  assert.deepEqual(changed[0], { id: ID, day: DAY, actual: first(6), wanted: first(9), version: 1, pending: false });
+  assert.deepEqual(changed[0], { id: ID, day: DAY, actual: first(6), wanted: first(9), answers: EMPTY, version: 1, pending: false });
   assert.equal((await list(actor)).length, 1);
   assert.deepEqual(await list(actor, { day: DAY2 }), [], "another day has its own list");
   assert.equal(store.rows.get(ID).version, 1, "cached");
@@ -195,6 +198,127 @@ test("a stored copy holding something else than a score reads as no score", asyn
   assert.deepEqual(wheel.wanted, NONE);
 });
 
+// --- Answers ---------------------------------------------------------------------------
+
+test("a save without answers keeps those stored, and a save with answers replaces them", async () => {
+  const { actor, changed } = start(fakeStore());
+  await ready(actor);
+  actor.send(saved({ answers: said({ one: "In bed all day", ten: "Runs a marathon" }) }));
+  actor.send(saved({ actual: first(7) }));
+  assert.deepEqual(changed.at(-1).answers, said({ one: "In bed all day", ten: "Runs a marathon" }));
+  assert.equal(changed.at(-1).actual[0], 7);
+  actor.send(saved({ actual: first(7), answers: said({ closer: "Walk" }) }));
+  assert.deepEqual((await list(actor))[0].answers, said({ closer: "Walk" }));
+});
+
+test("an answer takes part in whether a save is a change; an emptied box is no answer", async () => {
+  const { actor, changed } = start(fakeStore());
+  await ready(actor);
+  actor.send(saved({ answers: said({ one: "a" }) }));
+  actor.send(saved({ answers: said({ one: "a" }) }));
+  assert.equal(changed.length, 1, "the same answers are no change");
+  actor.send(saved({ answers: said({ one: "b" }) }));
+  assert.deepEqual([changed.length, changed.at(-1).version], [2, 2]);
+  actor.send(saved({ answers: said({ one: "b", ten: "" }) }));
+  assert.equal(changed.length, 2, "an empty string is the same as nothing written");
+  actor.send(saved({ answers: said({}) }));
+  assert.deepEqual([changed.length, changed.at(-1).answers], [3, EMPTY]);
+});
+
+test("a wheel holding only answers is kept; with no text left, it goes", async () => {
+  const store = fakeStore();
+  const { actor, changed, deleted } = start(store);
+  await ready(actor);
+  actor.send(saved({ actual: NONE, answers: said({ lower: " \n\n  " }) }));
+  assert.equal(store.rows.size, 0, "spaces and blank lines on a new id keep nothing");
+  actor.send(saved({ actual: NONE, answers: said({ lower: "Sleep" }) }));
+  assert.deepEqual([changed.length, changed[0].actual, changed[0].answers], [1, NONE, said({ lower: "Sleep" })]);
+  actor.send(saved({ actual: NONE, answers: said({ lower: "Sleep" }), wanted: first(9) }));
+  actor.send(saved({ actual: NONE }));
+  assert.deepEqual(deleted, [], "no score, but the answers it keeps still hold text");
+  assert.deepEqual((await list(actor))[0].answers, said({ lower: "Sleep" }));
+  actor.send(saved({ actual: NONE, answers: said({ lower: " \n" }) }));
+  assert.equal(deleted.length, 1, "nothing but spaces left");
+  assert.deepEqual(await list(actor), []);
+  assert.deepEqual(store.rows.get(ID).answers, said({ lower: "Sleep" }), "its tombstone keeps what it had");
+});
+
+test("an old copy has eight empty answers, and answers that cannot be read count as empty", async () => {
+  const old = { id: ID, day: DAY, actual: first(1), wanted: NONE, version: 2 };
+  const bads = [
+    { ...old, id: ID2, answers: "none" },
+    { ...old, id: ID3, answers: [7, null, ["x"], { one: 5, ten: "kept", other: "dropped" }] },
+  ];
+  const { actor } = start(fakeStore([old, ...bads]));
+  await ready(actor);
+  const wheels = await list(actor);
+  assert.deepEqual(wheels[0].answers, EMPTY);
+  assert.deepEqual(wheels[1].answers, EMPTY);
+  assert.deepEqual(wheels[2].answers, [{}, {}, {}, { ten: "kept" }, {}, {}, {}, {}]);
+});
+
+test("signed in: answers are written, coalesced, and acknowledged", async () => {
+  const store = fakeStore();
+  const api = fakeApi();
+  const { actor, changed, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send(saved({ answers: said({ one: "a" }) }));
+  actor.send(saved({ answers: said({ one: "ab" }) }));
+  assert.deepEqual(store.outbox.get(ID).answers, said({ one: "ab" }));
+  await drain(clock);
+  assert.equal(api.puts.length, 1);
+  assert.deepEqual(api.puts[0].answers, said({ one: "ab" }));
+  assert.equal(store.outbox.size, 0, "the acknowledged row is drained");
+  assert.deepEqual([changed.at(-1).pending, changed.at(-1).answers], [false, said({ one: "ab" })]);
+});
+
+test("signed in: a change to answers alone is sent", async () => {
+  const api = fakeApi();
+  const { actor, clock } = start(fakeStore(), { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send(saved());
+  await drain(clock);
+  actor.send(saved({ answers: said({ higher: "Time" }) }));
+  await drain(clock);
+  assert.deepEqual(api.puts.at(-1).answers, said({ higher: "Time" }));
+  assert.equal(api.puts.at(-1).baseVersion, 1);
+});
+
+test("a pull brings answers, and bad ones count as empty", async () => {
+  const remote = { id: ID, day: DAY, actual: first(4), wanted: NONE, answers: said({ ten: "Far" }), version: 4, deleted: false };
+  const bad = { ...remote, id: ID2, answers: { one: "not a list" } };
+  const api = fakeApi({ pull: () => ({ wheels: [remote, bad], cursor: 7 }) });
+  const { actor } = start(fakeStore(), { api, ask: askUser("u1") });
+  await ready(actor);
+  const wheels = await list(actor);
+  assert.deepEqual(wheels[0].answers, said({ ten: "Far" }));
+  assert.deepEqual(wheels[1].answers, EMPTY);
+});
+
+test("an outbox row from before answers drains once, and takes the answers the server kept", async () => {
+  const held = { id: ID, day: DAY, actual: first(3), wanted: NONE, version: 1 };
+  const row = { id: ID, day: DAY, actual: first(3), wanted: NONE, baseVersion: 1 };
+  const api = fakeApi();
+  api.server.set(ID, { ...held, answers: said({ one: "Elsewhere" }), deleted: false });
+  const store = fakeStore([held], [row]);
+  const { actor } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  assert.equal(api.puts.length, 1);
+  assert.equal(store.outbox.size, 0, "it does not come back as unsent");
+  assert.deepEqual((await list(actor))[0].answers, said({ one: "Elsewhere" }));
+});
+
+test("sign-in uploads answers made signed out", async () => {
+  const api = fakeApi();
+  const { actor } = start(fakeStore(), { api });
+  await ready(actor);
+  actor.send(saved({ actual: NONE, answers: said({ one: "Alone" }) }));
+  actor.send({ type: "session.changed", userId: "u1" });
+  await flush();
+  assert.deepEqual(api.puts[0].answers, said({ one: "Alone" }));
+  assert.deepEqual(api.server.get(ID).answers, said({ one: "Alone" }));
+});
+
 test("a gesture or query that lands while the store loads waits for it", async () => {
   let release;
   const store = fakeStore();
@@ -233,7 +357,7 @@ test("signed in: a save is pending, waits out the idle window, then is acknowled
   assert.equal(api.puts.length, 0, "not before the window");
   await drain(clock);
   assert.equal(api.puts.length, 1);
-  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["actual", "baseVersion", "day", "id", "wanted"]);
+  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["actual", "answers", "baseVersion", "day", "id", "wanted"]);
   assert.deepEqual([changed.at(-1).pending, changed.at(-1).version], [false, 1]);
   assert.equal(store.outbox.size, 0);
 });

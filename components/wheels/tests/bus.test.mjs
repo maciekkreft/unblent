@@ -14,6 +14,8 @@ const DAY = "2026-10-14";
 const ID = "01ARZ3NDEKTSV4RRFFQ69G5CP1";
 const NONE = Array(8).fill(null);
 const ACTUAL = [6, null, null, null, null, null, null, null];
+const ANSWERS = [{ one: "In bed all day", closer: "Walk" }, {}, {}, {}, {}, {}, {}, {}];
+const EMPTY = Array(8).fill({});
 
 const memory = () => {
   const rows = new Map();
@@ -63,6 +65,29 @@ test("the view's saves reach wheels, and its list answers what was saved", async
     sheet.actor.send({ type: "go", body: { ...body, actual: NONE } });
     await until(() => heard.at(-1).type === "wheel.deleted");
     assert.equal(store.rows.get(ID).deleted, true);
+  } finally {
+    unmount(sheet.actor);
+    unwire();
+  }
+});
+
+test("answers pass every schema on the bus, and a wheel saved without them lists eight empty ones", async () => {
+  const store = memory();
+  const { actors, unwire } = await wire(["wheels"], { wheels: { store } });
+  const heard = [];
+  const sheet = standIn(heard);
+  try {
+    await until(() => actors.wheels.getSnapshot().matches("ready"));
+    const body = { type: "wheel.saved", id: ID, day: DAY, actual: ACTUAL, wanted: NONE };
+    sheet.actor.send({ type: "go", body });
+    await until(() => heard.length === 1);
+    assert.deepEqual(heard[0].wheel.answers, EMPTY);
+    assert.deepEqual((await sheet.list({ day: DAY })).wheels[0].answers, EMPTY);
+
+    sheet.actor.send({ type: "go", body: { ...body, answers: ANSWERS, finished: true } });
+    await until(() => heard.length === 2);
+    assert.deepEqual(heard[1].wheel.answers, ANSWERS);
+    assert.deepEqual((await sheet.list({})).wheels[0].answers, ANSWERS);
   } finally {
     unmount(sheet.actor);
     unwire();

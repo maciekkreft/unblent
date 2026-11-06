@@ -13,6 +13,8 @@ const ID = "01ARZ3NDEKTSV4RRFFQ69G5CP1";
 const ID2 = "01ARZ3NDEKTSV4RRFFQ69G5CP2";
 const NONE = Array(8).fill(null);
 const first = (score) => [score, null, null, null, null, null, null, null];
+const EMPTY = Array(8).fill({});
+const said = (answer) => [answer, {}, {}, {}, {}, {}, {}, {}];
 
 const schema = (path) => new Validator(JSON.parse(readFileSync(new URL(path, import.meta.url))), "2020-12");
 const recordedSchema = schema("../events/step.recorded.json");
@@ -181,6 +183,58 @@ test("a new wheel with no score, as the view may fold one untouched, records no 
   assert.deepEqual(s.deleted, []);
 });
 
+test("one stretch of answering is one step, and Undo and Redo reverse its answers", async () => {
+  const s = await start();
+  s.save({ actual: first(3), answers: said({ one: "a" }), finished: true });
+  s.save({ actual: first(3), answers: said({ one: "ab" }) });
+  s.save({ actual: first(3), answers: said({ one: "abc" }), finished: true });
+  const edit = s.steps.at(-1);
+  assert.equal(new Set(s.steps.map((x) => x.id)).size, 2);
+  assert.deepEqual(edit.undo.answers, said({ one: "a" }));
+  assert.deepEqual(edit.redo.answers, said({ one: "abc" }));
+  s.actor.send(undo(edit));
+  assert.deepEqual((await s.held()).answers, said({ one: "a" }));
+  s.actor.send(redo(edit));
+  assert.deepEqual((await s.held()).answers, said({ one: "abc" }));
+});
+
+test("Undo of a wheel's first stretch of answers deletes it, and Redo brings them back", async () => {
+  const s = await start();
+  s.save({ answers: said({ ten: "Far" }), finished: true });
+  const add = s.steps.at(-1);
+  assert.equal(add.label, "add Wheel of Life");
+  s.actor.send(undo(add));
+  assert.equal(await s.held(), undefined);
+  s.actor.send(redo(add));
+  assert.deepEqual((await s.held()).answers, said({ ten: "Far" }));
+});
+
+test("a delete keeps the answers in its step and in its tombstone; Undo brings them back", async () => {
+  const s = await start();
+  s.save({ actual: first(3), answers: said({ closer: "Walk" }), finished: true });
+  s.save({ answers: EMPTY, finished: true });
+  const removal = s.steps.at(-1);
+  assert.deepEqual([removal.label, removal.notice], ["delete Wheel of Life", true]);
+  assert.equal(await s.held(), undefined);
+  assert.deepEqual(s.store.rows.get(ID).answers, said({ closer: "Walk" }));
+  s.actor.send(undo(removal));
+  assert.deepEqual((await s.held()).answers, said({ closer: "Walk" }));
+});
+
+test("a step from before answers leaves them as they are; one with bad answers is refused", async () => {
+  const s = await start();
+  s.save({ actual: first(3), answers: said({ one: "a" }), finished: true });
+  s.save({ actual: first(4), finished: true });
+  const step = s.steps.at(-1);
+  s.actor.send({ type: "step.undone", id: step.id, owner: "wheels", payload: { ...step.undo, answers: "nope" } });
+  assert.deepEqual(s.settled.at(-1), { id: step.id, owner: "wheels", outcome: "refused", reason: "changed" });
+  const { answers: _, ...old } = step.undo;
+  s.actor.send({ type: "step.undone", id: step.id, owner: "wheels", payload: old });
+  assert.equal(s.settled.at(-1).outcome, "applied");
+  const wheel = await s.held();
+  assert.deepEqual([wheel.actual, wheel.answers], [first(3), said({ one: "a" })]);
+});
+
 test("a step can be undone after a reload", async () => {
   const store = fakeStore();
   const s = await start({ store });
@@ -236,6 +290,21 @@ test("signed in, Undo of a delete is a restore write naming the tombstone's vers
   assert.deepEqual([api.puts.at(-1).baseVersion, Boolean(api.puts.at(-1).deleted)], [tombstone.version, false]);
   assert.deepEqual([api.server.get(ID).deleted, api.server.get(ID).actual], [false, first(3)]);
   assert.deepEqual((await s.held()).actual, first(3));
+});
+
+test("signed in, a restore write carries the answers back to the server", async () => {
+  const api = fakeApi();
+  const s = await start({ userId: "u1", api });
+  s.save({ actual: first(3), answers: said({ one: "Kept" }), finished: true });
+  s.save({ answers: EMPTY, finished: true });
+  s.actor.send({ type: "_sync", pull: false });
+  await flush();
+  assert.equal(api.server.get(ID).deleted, true);
+  s.actor.send(undo(s.steps.at(-1)));
+  s.actor.send({ type: "_sync", pull: false });
+  await flush();
+  assert.deepEqual(api.puts.at(-1).answers, said({ one: "Kept" }));
+  assert.deepEqual([api.server.get(ID).deleted, api.server.get(ID).answers], [false, said({ one: "Kept" })]);
 });
 
 test("a wheel of a day that has closed cannot be undone or redone: refused as closed", async () => {
