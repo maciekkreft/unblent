@@ -312,6 +312,77 @@ export const passageText = ({ flat }, from, to) =>
     .filter((t) => t !== "")
     .join("\n\n");
 
+// A finger's passage, decided here on flat text and measured boxes, so it is tested
+// in Node. The word holding an index, as [from, to): a word is what lies between blanks, so
+// a full stop comes with its sentence's last word. On a blank, the word before it; with
+// none in the chapter before it, the one after.
+export const wordAround = ({ flat }, i) => {
+  let at = i;
+  while (at > 0 && blank(flat[at])) at -= 1;
+  while (at < flat.length - 1 && blank(flat[at])) at += 1;
+  let from = at;
+  let to = at + 1;
+  while (from > 0 && !blank(flat[from - 1])) from -= 1;
+  while (to < flat.length && !blank(flat[to])) to += 1;
+  return [from, to];
+};
+
+// The passage with the finger over index `i`, from the fixed `word` the hold started on.
+// Which way it runs depends only on `i` against that word, so nothing else can flip it. It
+// grows by whole words as the finger reaches them; the finger on a blank has reached the
+// word behind it, and not yet the one ahead.
+export const fingerPassage = (chapter, [from, to], i) => {
+  const { flat } = chapter;
+  let at = i;
+  if (at >= from) {
+    while (at > from && blank(flat[at])) at -= 1;
+    return passage(chapter, from, Math.max(wordAround(chapter, at)[1], to) - 1, true);
+  }
+  while (at < from && blank(flat[at])) at += 1;
+  return passage(chapter, to - 1, wordAround(chapter, at)[0], true);
+};
+
+// Measured characters, in reading order, gathered into the lines they sit on: a character
+// joins the line before it when their boxes share more than half their height.
+export const linesOf = (chars) => {
+  const lines = [];
+  for (const c of chars) {
+    const line = lines.at(-1);
+    if (line && Math.abs(c.top - line.top) < Math.min(c.bottom - c.top, line.bottom - line.top) / 2) {
+      line.left = Math.min(line.left, c.left);
+      line.right = Math.max(line.right, c.right);
+      line.chars.push(c);
+    } else {
+      lines.push({ top: c.top, bottom: c.bottom, left: c.left, right: c.right, chars: [c] });
+    }
+  }
+  return lines;
+};
+
+// The box of each line a passage [from, to) has characters on, top to bottom.
+export const lineBoxes = (lines, from, to) =>
+  lines.flatMap((line) => {
+    const on = line.chars.filter((c) => c.i >= from && c.i < to);
+    if (on.length === 0) return [];
+    return [{ left: Math.min(...on.map((c) => c.left)), right: Math.max(...on.map((c) => c.right)), top: line.top, bottom: line.bottom }];
+  });
+
+const away = (v, lo, hi) => (v < lo ? lo - v : v > hi ? v - hi : 0);
+
+// The index of the character nearest a point: on the nearest line, then the nearest along
+// it, so a point in a gap, a margin or past the end still names text, and moving it down a
+// page never moves the answer up. Null when there are no lines.
+export const charNear = (lines, x, y) => {
+  let line = null;
+  for (const l of lines) {
+    if (!line || away(y, l.top, l.bottom) < away(y, line.top, line.bottom) || (away(y, l.top, l.bottom) === away(y, line.top, line.bottom) && away(x, l.left, l.right) < away(x, line.left, line.right))) line = l;
+  }
+  if (!line) return null;
+  let best = line.chars[0];
+  for (const c of line.chars) if (away(x, c.left, c.right) < away(x, best.left, best.right)) best = c;
+  return best.i;
+};
+
 // The first shown character at or after an index, where the cursor starts on a page: the page's
 // anchor may sit on white space or on a block with no text (a figure).
 export const nearest = ({ flat }, i) => seek(flat, i - 1, 1, shown) ?? seek(flat, flat.length, -1, shown);
@@ -737,8 +808,14 @@ export const machine = setup({
       "never a page number, because page numbers differ between devices; each device opens the " +
       "page that holds the saved place. The place is saved a short time after page turns stop, " +
       "so a run of turns saves once. It paints the book's highlights and lets the user mark a " +
-      "new passage. On a touch screen, pressing and holding selects the text, and a Highlight " +
-      "button under the selection marks it. After a re-import it finds each highlight's quote " +
+      "new passage. On a touch screen a finger never uses the browser's selection: pressing and " +
+      "holding for about 0.4 seconds paints the word under it, and without lifting, a drag grows " +
+      "the passage by whole words from that word, forward or back only by where the finger is " +
+      "against it, as far as the last character on the page. Lifting shows a Highlight button " +
+      "under the passage's last line, which marks exactly what is painted; a tap elsewhere, a " +
+      "page turn, a new chapter or Escape drops it, a tap there doing nothing else, and holding " +
+      "again starts over. A quick swipe still turns the page, a tap still turns from the outer " +
+      "thirds, and a hold on a picture does nothing. After a re-import it finds each highlight's quote " +
       "again and saves its corrected place; a highlight whose quote is no longer in the book " +
       "stays a note with its quote and its comment. With the \"Vim keys\" preference on and the reader focused, a " +
       "one-character cursor shows, starting at the top of the page and kept while the reader " +

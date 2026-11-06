@@ -97,9 +97,9 @@ for (const engine of ENGINES) {
     // `product` opens the product page, `/`, whose preferences settings keeps under the
     // product profile's name.
     // `before` runs in the page ahead of its own scripts.
-    const open = async (vimKeys, { highlight = false, split = false, touch = false, product = false, before } = {}) => {
+    const open = async (vimKeys, { highlight = false, split = false, product = false, before } = {}) => {
       const problems = [];
-      context = await browser.newContext({ hasTouch: touch });
+      context = await browser.newContext();
       context.setDefaultTimeout(4000);
       await signedIn(context, await seedUser({ highlight, split }));
       const page = await context.newPage();
@@ -234,53 +234,6 @@ for (const engine of ENGINES) {
       assert.ok(Math.abs(b.left + b.width / 2 - (line.left + line.width / 2)) <= 2, `the bubble is centred over the part shown (bubble ${b.left}–${b.right}, line ${line.left}–${line.right})`);
       const gap = b.bottom <= line.top ? line.top - b.bottom : b.top - line.bottom;
       assert.ok(gap >= 0 && gap <= 12, `the bubble sits next to the part shown (bubble ${b.top}–${b.bottom}, line ${line.top}–${line.bottom})`);
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-    });
-
-    // On a touch screen a selection in the text offers a Highlight button under it; a tap
-    // on it makes the highlight and leaves neither the button nor the selection behind.
-    // Playwright cannot press and hold, so the selection the iPhone would make is set from
-    // the page, after a tap in the middle third has made the last pointer a finger.
-    // Browser: a gesture.
-    test(`a finger's selection and the Highlight button make a highlight in ${engine.name}`, async () => {
-      const { page, problems } = await open(false, { touch: true });
-      const box = await page.evaluate(() => {
-        const r = document.querySelector("book-reader").shadowRoot.querySelector(".viewport").getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height - 4 };
-      });
-      await page.touchscreen.tap(box.x, box.y);
-      const words = await page.evaluate(() => {
-        const r = document.querySelector("book-reader").shadowRoot;
-        const p = [...r.querySelectorAll(".strip p")].find((x) => x.firstChild?.nodeType === Node.TEXT_NODE && x.firstChild.data.trim().length > 20);
-        const text = p.firstChild;
-        const end = text.data.indexOf(" ", 12);
-        document.getSelection().setBaseAndExtent(text, 0, text, end);
-        return text.data.slice(0, end).trim();
-      });
-      const make = () => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble.make button.highlight")?.getBoundingClientRect().toJSON() ?? null);
-      await until(async () => (await make()) != null);
-      // Widening the selection moves the finger sideways, as a swipe would; it must not
-      // turn the page. Synthetic touch pointer events, since the touchscreen has only tap().
-      const footer = () => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".footer").textContent.replace(/\s+/g, " "));
-      const before = await footer();
-      await page.evaluate((y) => {
-        const vp = document.querySelector("book-reader").shadowRoot.querySelector(".viewport");
-        const b = vp.getBoundingClientRect();
-        const send = (type, x) => vp.dispatchEvent(new PointerEvent(type, { pointerId: 2, pointerType: "touch", isPrimary: true, button: 0, clientX: x, clientY: y, bubbles: true }));
-        send("pointerdown", b.x + b.width * 0.8);
-        for (let i = 1; i <= 6; i++) send("pointermove", b.x + b.width * 0.8 - i * 28);
-        send("pointerup", b.x + b.width * 0.8 - 6 * 28);
-      }, box.y - 40);
-      assert.equal(await footer(), before, "a finger moving over a selection turns no page");
-      const b = await make();
-      await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2);
-      await until(async () => (await marks(page)).join(" ").trim() === words);
-      assert.equal(await make(), null, "the Highlight button is gone");
-      const selected = await page.evaluate(() => {
-        const r = document.querySelector("book-reader").shadowRoot;
-        return (document.getSelection()?.toString() ?? "") + (r.getSelection?.()?.toString() ?? "");
-      });
-      assert.equal(selected, "", "the selection is collapsed");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

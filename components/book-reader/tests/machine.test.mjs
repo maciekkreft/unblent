@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, NOT_A_COMMAND_MS, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt, textObject, passageText } from "../machine.js";
+import { machine, NOT_A_COMMAND_MS, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt, textObject, passageText, wordAround, fingerPassage, linesOf, charNear, lineBoxes } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -1138,4 +1138,76 @@ test("any other command is named back for a moment, and nothing closes", async (
   clock.increment(1);
   assert.equal(ctx(actor).notACommand, null);
   assert.deepEqual(closed, []);
+});
+
+// A finger's passage: a page of two blocks, with fixed boxes 10 wide and 20 tall.
+const fingerText = chapterText(["one two three", "four five"]);
+const fingerLines = linesOf(
+  [...fingerText.flat].flatMap((c, i) => {
+    if (c === "\u0000") return [];
+    // "one two" on a line, "three" on the next, a paragraph gap, then "four five".
+    const [row, col] = i < 8 ? [0, i] : i < 13 ? [1, i - 8] : [2, i - 14];
+    const top = [0, 24, 60][row];
+    return [{ i, left: col * 10, right: col * 10 + 10, top, bottom: top + 20 }];
+  }),
+);
+
+test("the word around an index runs between blanks, and on a blank is the word before it", () => {
+  const c = chapterText(["one two.", "three"]);
+  assert.deepEqual(wordAround(c, 1), [0, 3]);
+  assert.deepEqual(wordAround(c, 3), [0, 3], "the space belongs to the word before it");
+  assert.deepEqual(wordAround(c, 6), [4, 8], "a full stop comes with its word");
+  assert.deepEqual(wordAround(c, 8), [4, 8], "so does the gap between blocks");
+  assert.deepEqual(wordAround(c, 9), [9, 14]);
+  assert.deepEqual(wordAround(chapterText(["  one"]), 0), [2, 5], "with nothing before it, the word after");
+});
+
+test("a finger's passage keeps its word fixed and runs only by where the finger is", () => {
+  const c = fingerText;
+  const word = wordAround(c, 5); // "two"
+  assert.deepEqual(word, [4, 7]);
+  assert.deepEqual(fingerPassage(c, word, 5), [4, 7], "on the word it is the word");
+  assert.deepEqual(fingerPassage(c, word, 4), [4, 7], "anywhere in the word");
+  assert.deepEqual(fingerPassage(c, word, 7), [4, 7], "the space after it has not reached the next word");
+  assert.deepEqual(fingerPassage(c, word, 9), [4, 13], "forward by whole words");
+  assert.deepEqual(fingerPassage(c, word, 13), [4, 13], "the gap between blocks has not reached the next");
+  assert.deepEqual(fingerPassage(c, word, 15), [4, 18], "across a block");
+  assert.deepEqual(fingerPassage(c, word, 22), [4, 23], "to the chapter's end");
+  assert.deepEqual(fingerPassage(c, word, 3), [4, 7], "the space before it has not reached the word before");
+  assert.deepEqual(fingerPassage(c, word, 1), [0, 7], "back by whole words, the word now its end");
+});
+
+test("the nearest character to a point is on the nearest line, gaps and margins included", () => {
+  const near = (x, y) => charNear(fingerLines, x, y);
+  assert.equal(fingerLines.length, 3);
+  assert.equal(near(15, 5), 1, "on a character");
+  assert.equal(near(15, 21), 1, "the gap between lines, nearer the line above");
+  assert.equal(near(15, 23), 9, "the gap between lines, nearer the line below");
+  assert.equal(near(15, 45), 9, "the gap between paragraphs, nearer the paragraph above");
+  assert.equal(near(15, 58), 15, "the gap between paragraphs, nearer the paragraph below");
+  assert.equal(near(-40, 30), 8, "a margin on the left is the line's first character");
+  assert.equal(near(900, 30), 12, "a margin on the right is its last");
+  assert.equal(near(900, 900), 22, "past the end is the last character");
+  assert.equal(near(15, -900), 1, "before the start is the first line");
+  assert.equal(charNear([], 1, 1), null, "a page with no text has no answer");
+});
+
+test("moving a finger straight down a page never moves its answer back", () => {
+  const word = wordAround(fingerText, 0);
+  let last = -1;
+  for (let y = 0; y < 100; y += 1) {
+    const [from, to] = fingerPassage(fingerText, word, charNear(fingerLines, 5, y));
+    assert.equal(from, 0, `at ${y} the start stays`);
+    assert.ok(to >= last, `at ${y} the end does not go back`);
+    last = to;
+  }
+});
+
+test("a passage's boxes are one per line it touches", () => {
+  assert.deepEqual(lineBoxes(fingerLines, 4, 18), [
+    { left: 40, right: 80, top: 0, bottom: 20 },
+    { left: 0, right: 50, top: 24, bottom: 44 },
+    { left: 0, right: 40, top: 60, bottom: 80 },
+  ]);
+  assert.deepEqual(lineBoxes(fingerLines, 4, 7), [{ left: 40, right: 70, top: 0, bottom: 20 }]);
 });

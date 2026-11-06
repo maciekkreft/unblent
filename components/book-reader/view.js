@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote, slipBoxShown, canRead, wordAt } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText, addToNote, slipBoxShown, canRead, wordAt, wordAround, fingerPassage, linesOf, charNear, lineBoxes } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -60,6 +60,14 @@ class ActorController {
 const SLOP = 6;
 const SWIPE = 40;
 const EDGE = 0.3; // the fraction of the width, each side, that a tap turns from
+// How long a finger rests before it starts a passage, and how far it may wander meanwhile.
+// iOS's own long press takes about half a second and allows ten points of wander: a
+// resting finger is never steadier than that, and the reader acts just before iOS would.
+const HOLD_MS = 400;
+const HOLD_SLOP = 10;
+// How long after a finger's press ends its click is not about the text: iOS may send the
+// click of a long press as it lifts, and of a tap up to a third of a second later.
+const CLICK_AFTER_MS = 700;
 // The gap the bubble keeps from the mark it sits above (or below, when there is no room
 // above): a placement offset computed in JS, not a length that places a box in CSS (7.4).
 const BUBBLE_GAP = 6;
@@ -173,12 +181,16 @@ class BookReader extends LitElement {
       overflow: hidden;
       display: flex;
       justify-content: center;
-      /* A horizontal finger drag is the reader's own turn gesture, so it is not
-         surrendered to the browser as a pan; only a vertical drag scrolls. A press
-         never starts a text selection (the note-list .row idiom). */
-      touch-action: pan-y;
+      /* Every finger move belongs to the reader: a swipe turns, a press and hold grows a
+         passage, and a paginated page has nothing to pan. iOS reads this as the touch
+         begins, before a hold can be told from a drag, so pan-y here would let it take the
+         drag after a hold for a pan and cancel the pointer. A press never starts a text
+         selection (the note-list .row idiom), nor a callout over a word, link or picture. */
+      touch-action: none;
       user-select: none;
       -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
     }
     /* The clip window, exactly one page wide (the reading measure), padded so the text
        sits in from the edge; its overflow hides the columns to either side. */
@@ -192,6 +204,8 @@ class BookReader extends LitElement {
       padding-inline: var(--gutter);
       box-sizing: border-box;
       overflow: hidden;
+      /* Named again because a scroll container may end the chain touch-action is read in. */
+      touch-action: none;
       isolation: isolate;
       /* A size container, so the strip can name the page's width as 100cqw (below) and
          an image its height as 100cqh: a percentage on an image resolves against the
@@ -257,13 +271,26 @@ class BookReader extends LitElement {
         animation: none;
       }
     }
-    /* The text selects for a mouse drag and for a finger's press and hold, which is how a
-       phone makes a highlight (the Highlight button). A touch screen starts a selection
-       only after a long press, so a quick horizontal swipe stays a page turn. The viewport
-       keeps user-select: none (above), so the margins and the footer never select. */
+    /* The text selects for a mouse drag, which becomes a highlight at pointerup. The
+       viewport keeps user-select: none (above), so the margins and the footer never select.
+       A touch screen does not select at all: in this tall multi-column box the browser's
+       selection jumped to everything above its start as the finger crossed a gap, so a
+       finger's passage is the reader's own (#held), and on iOS a long press on a link or
+       a picture would lift it to be dragged and end the touch. Only while a keyboard's
+       passage or a word read aloud shows does it stay selectable, since WebKit paints no
+       ::highlight on text that cannot be selected and spills it on the next text that can. */
     .strip {
       user-select: text;
       -webkit-user-select: text;
+    }
+    @media (hover: none) and (pointer: coarse) {
+      .strip:not(.painted) {
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .strip :is(a, img) {
+        -webkit-user-drag: none;
+      }
     }
     /* The book's own text in the app's type and tokens; the importer dropped its CSS
        (Decision 3). Everything is held to the page so nothing overflows a column. */
@@ -328,6 +355,25 @@ class BookReader extends LitElement {
        the selection colour, so it reads as not yet made beside a finished highlight. */
     ::highlight(reader-pending) {
       background-color: var(--color-accent-selection);
+    }
+    /* A finger's passage (#paintFinger), in the same colour: boxes over its lines, because
+       a touch screen's text cannot be selected and so takes no ::highlight (.strip below).
+       Laid over the text, so it also shows on a word already highlighted. */
+    .passage {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+    .passage i {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--px, 0) var(--py, 0);
+      width: var(--pw, 0);
+      height: var(--ph, 0);
+      background: var(--color-accent-selection);
+      border-radius: var(--radius-sm);
     }
     /* The Vim cursor: a solid block in the accent pair note-editor's Vim cursor uses, so
        Vim has one cursor across the app. A real box placed on its character's own rect and
@@ -860,8 +906,8 @@ class BookReader extends LitElement {
   #lastGlow = 0;
   #glowing = null;
   #glowTimer = 0;
-  // The kind of the last pointer pressed on the page, so a finger's selection offers the
-  // Highlight button while a mouse's becomes a highlight at pointerup, as before.
+  // The kind of the last pointer pressed on the page, so what the system would do with a
+  // finger's press (#noNative) is refused while a mouse keeps its selection and its menu.
   #lastPointer = null;
   // The picture open in the viewer, the view's own UI state like the bubble: its source,
   // the quarter turns so far (only ever counted up), the zoom and the pan. Null while
@@ -874,12 +920,27 @@ class BookReader extends LitElement {
   #lastTap = null;
   #gestureZoom = 1;
   #wheelTimer = 0;
-  // The last line of a finger's selection in the strip (a client rect), while it lasts:
-  // the Highlight button sits under it. Null when no button shows. View UI state (3.1).
+  // The last line of a finger's lifted passage (a client rect): the Highlight button sits
+  // under it. Null when no button shows. View UI state (3.1).
   #pending = null;
-  // A long press hands the gesture to the system, which reports the selection it makes
-  // and every move of its handles only through the document's selectionchange.
-  #followSelection = () => this.#selectionChanged();
+  // A finger's passage, from the hold that starts it until it is made or dropped: the word
+  // it started on, the [from, to) painted, the page's lines as measured at the hold (the
+  // text does not move under a passage), where the finger is, and whether it is still down.
+  #finger = null;
+  #holdTimer = 0;
+  // Until when a click in the text belongs to a finger's press that already did its work.
+  #clickGone = 0;
+  // Both must be on the host before a touch begins: iOS decides at touchstart whether it
+  // waits for a page's touchmove, and only a non-passive listener may refuse the move. A
+  // touch may end with no pointerup, and a passage must not stay down then.
+  #touchmove = (e) => {
+    if (this.#finger?.down && e.cancelable) e.preventDefault();
+  };
+  #touchend = (e) => {
+    if (e.touches?.length) return;
+    this.#cancelHold();
+    if (this.#finger?.down) this.#lift();
+  };
 
   // The fragment element: a bare div with the click handler for in-text chapter links.
   // Made here so #swapStrip can build a second one for a chapter-crossing slide.
@@ -889,6 +950,10 @@ class BookReader extends LitElement {
     // A link inside the text to another chapter (the importer rewrote it to a
     // data-chapter, and a fragment to a data-block): jump rather than navigate.
     strip.addEventListener("click", (e) => {
+      if (Date.now() < this.#clickGone) {
+        e.preventDefault();
+        return;
+      }
       const a = e.target.closest("a[data-chapter]");
       if (!a) return;
       e.preventDefault();
@@ -931,11 +996,16 @@ class BookReader extends LitElement {
     // The web font changes the text's measure once it loads, so a chapter measured
     // before it lands would paginate wrongly; re-measure when it is ready.
     document.fonts?.ready.then(() => this.#relayout());
-    document.addEventListener("selectionchange", this.#followSelection);
+    this.addEventListener("touchmove", this.#touchmove, { passive: false });
+    this.addEventListener("touchend", this.#touchend);
+    this.addEventListener("touchcancel", this.#touchend);
   }
 
   disconnectedCallback() {
-    document.removeEventListener("selectionchange", this.#followSelection);
+    this.removeEventListener("touchmove", this.#touchmove);
+    this.removeEventListener("touchend", this.#touchend);
+    this.removeEventListener("touchcancel", this.#touchend);
+    this.#cancelHold();
     this.#ro?.disconnect();
     this.#ro = null;
     this.#leaving?.remove();
@@ -947,7 +1017,7 @@ class BookReader extends LitElement {
     clearTimeout(this.#slideTimer);
     this.#focused = false;
     this.#visual = null;
-    this.#pending = null;
+    this.#dropPending();
     this.#paintCursor();
     cancelAnimationFrame(this.#speechRaf);
     this.#speechRaf = 0;
@@ -1149,41 +1219,141 @@ class BookReader extends LitElement {
     return this.#sendHighlight(p, q);
   }
 
-  // A finger's selection inside the strip shows the Highlight button under its last line;
-  // anything else hides it. A mouse is left out, its drag being made into a highlight at
-  // pointerup, and so is a selection made before any pointer was pressed (the keyboard).
-  #selectionChanged() {
-    const touch = this.highlights && this.#lastPointer != null && this.#lastPointer !== "mouse";
-    const range = touch ? this.#selectionRange() : null;
-    let line = null;
-    if (range && this.#pointOf(range.startContainer, range.startOffset) && this.#pointOf(range.endContainer, range.endOffset)) {
-      // A composed range is static and has no rects; a live one over the same ends does.
-      const live = document.createRange();
-      live.setStart(range.startContainer, range.startOffset);
-      live.setEnd(range.endContainer, range.endOffset);
-      line = [...live.getClientRects()].filter((r) => r.width > 0 || r.height > 0).at(-1) ?? null;
+  // --- A finger's passage ---------------------------------------------------------------
+  //
+  // A finger never uses the browser's selection, whose idea of where the finger is jumps
+  // in this box. The page's characters are measured once, at the hold, and every move is
+  // then a sum over those boxes (machine.js), the same in every engine; no caret API is
+  // asked, since on iOS those can answer with a node outside this shadow root.
+
+  // Each character shown on this page with its box and its flat index. A block counted by
+  // the measure starts on or before its page, so the one before the first that starts
+  // here may run in from the page before.
+  #pageChars() {
+    const chapter = this.#chapterText();
+    const first = this.#pageOf.findIndex((p) => p >= this.#page);
+    const chars = [];
+    const range = document.createRange();
+    const here = (r) => (r.width > 0 || r.height > 0) && this.#columnOf(r) === this.#page;
+    for (let b = Math.max(0, (first < 0 ? this.#pageOf.length : first) - 1); b < this.#pageOf.length && this.#pageOf[b] <= this.#page; b += 1) {
+      for (const { node, start } of this.#textNodes(b)) {
+        range.selectNodeContents(node);
+        if (![...range.getClientRects()].some(here)) continue;
+        for (let k = 0; k < node.data.length; k += 1) {
+          range.setStart(node, k);
+          range.setEnd(node, k + 1);
+          const r = [...range.getClientRects()].find((rect) => rect.width > 0 && here(rect));
+          if (r) chars.push({ i: chapter.starts[b] + start + k, left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+        }
+      }
     }
-    if (!line && !this.#pending) return;
-    this.#pending = line;
-    if (line) this.#closeBubble();
-    this.requestUpdate();
+    return chars;
   }
 
-  // The selection and its Highlight button go together: a turn, a new chapter or Escape
-  // leaves the passage, so neither stays behind on a page that no longer shows it.
-  #dropPending() {
-    if (!this.#pending) return;
-    this.#pending = null;
+  // The finger has rested: this press is neither a swipe nor a tap any more. On a picture
+  // it does nothing; a page with no text has nothing to start on.
+  #held() {
+    this.#holdTimer = 0;
+    const d = this.#drag;
+    if (!d) return;
+    d.abandoned = true;
+    d.dragging = false;
+    if (d.picture) return;
+    const lines = linesOf(this.#pageChars());
+    const at = charNear(lines, d.x0, d.y0);
+    if (at == null) return;
+    this.#closeBubble();
+    this.#dropPending();
     this.#clearSelection();
+    const chapter = this.#chapterText();
+    const word = wordAround(chapter, at);
+    this.#finger = { word, span: fingerPassage(chapter, word, at), lines, x: d.x0, y: d.y0, down: true, frame: 0 };
+    this.#paintFinger();
     this.requestUpdate();
   }
 
-  // Tapping Highlight makes the finger's selection a highlight, the same message a mouse
-  // drag sends; the new mark's own bubble then offers Remove (Norman: forgiveness).
-  #makePending() {
-    this.#makeHighlight();
-    this.#pending = null;
+  #cancelHold() {
+    clearTimeout(this.#holdTimer);
+    this.#holdTimer = 0;
+  }
+
+  // A move may come many times a frame, and only the last before a frame can be seen.
+  #follow(x, y) {
+    const f = this.#finger;
+    f.x = x;
+    f.y = y;
+    f.frame ||= requestAnimationFrame(() => this.#grow());
+  }
+
+  #grow() {
+    const f = this.#finger;
+    if (!f) return;
+    cancelAnimationFrame(f.frame);
+    f.frame = 0;
+    const span = fingerPassage(this.#chapterText(), f.word, charNear(f.lines, f.x, f.y));
+    if (span[0] === f.span[0] && span[1] === f.span[1]) return;
+    f.span = span;
+    this.#paintFinger();
+  }
+
+  // The passage's lines as boxes in the page, from the boxes measured at the hold. The text
+  // it names is for tests.
+  #paintFinger() {
+    const el = this.renderRoot?.querySelector(".passage");
+    if (!el) return;
+    const f = this.#finger;
+    const origin = el.getBoundingClientRect();
+    el.replaceChildren(
+      ...(f ? lineBoxes(f.lines, f.span[0], f.span[1]) : []).map((line) => {
+        const box = document.createElement("i");
+        box.style.setProperty("--px", `${line.left - origin.left}px`);
+        box.style.setProperty("--py", `${line.top - origin.top}px`);
+        box.style.setProperty("--pw", `${line.right - line.left}px`);
+        box.style.setProperty("--ph", `${line.bottom - line.top}px`);
+        return box;
+      }),
+    );
+    el.dataset.text = f ? this.#rangeOf(f.span[0], f.span[1], this.#chapterText())?.toString() ?? "" : "";
+  }
+
+  // The passage stays as painted, and waits for the Highlight button under its last line
+  // on this page. A cancelled touch ends here too: what it painted is kept.
+  #lift() {
+    const f = this.#finger;
+    this.#grow();
+    f.down = false;
+    this.#drag = null;
+    this.#clickGone = Date.now() + CLICK_AFTER_MS;
+    const line = lineBoxes(f.lines, f.span[0], f.span[1]).at(-1);
+    this.#pending = line ? { left: line.left, width: line.right - line.left, top: line.top, bottom: line.bottom } : null;
     this.requestUpdate();
+  }
+
+  // The passage and its Highlight button go together: a tap elsewhere, a turn, a new chapter
+  // or Escape leaves the passage, so neither stays behind on a page that no longer shows it.
+  #dropPending() {
+    if (!this.#finger) return;
+    cancelAnimationFrame(this.#finger.frame);
+    this.#finger = null;
+    this.#pending = null;
+    this.#paintFinger();
+    this.requestUpdate();
+  }
+
+  // Tapping Highlight makes what is painted, letter for letter, as a keyboard passage is
+  // (12, "Vim keys"); the new mark's own bubble then offers Remove (Norman: forgiveness).
+  #makePending() {
+    const f = this.#finger;
+    if (!f) return;
+    const chapter = this.#chapterText();
+    this.#dropPending();
+    this.#sendHighlight(pointAt(chapter, f.span[0]), pointAt(chapter, f.span[1]), true);
+  }
+
+  // What the system would do with a finger's long press: a selection where the text can
+  // still select (a touch screen with a fine main pointer), a menu (Android), a lifted link.
+  #noNative(e) {
+    if (this.#lastPointer != null && this.#lastPointer !== "mouse") e.preventDefault();
   }
 
   // Two places as the _highlight message, whichever comes first: the tail the mouse and
@@ -1351,6 +1521,7 @@ class BookReader extends LitElement {
 
   #startVisual() {
     this.#closeBubble();
+    this.#dropPending();
     this.#visual = { start: this.#cursor };
     this.#paintCursor();
   }
@@ -1371,6 +1542,7 @@ class BookReader extends LitElement {
   // The cursor and the passage in progress, drawn in the same task as the key that moved
   // them (or the turn, resize or click), so what shows is never a step behind.
   #paintCursor() {
+    this.#strip.classList.toggle("painted", Boolean(this.#visual) || speechMode(this.#actor.snapshot) !== "idle");
     const registry = globalThis.CSS?.highlights;
     if (!this.#cursorShown()) {
       this.#drawCursor(null);
@@ -1826,7 +1998,7 @@ class BookReader extends LitElement {
     this.#active = id;
     this.#copied = false;
     // One overlay at a time: the highlight's bubble replaces the Highlight button.
-    this.#pending = null;
+    this.#dropPending();
     this.requestUpdate();
   }
 
@@ -1919,9 +2091,9 @@ class BookReader extends LitElement {
     bubble.style.setProperty("--by", `${Math.round(y)}px`);
   }
 
-  // Place the Highlight button under the selection's last line, where the system's own
-  // menu (Copy, Look Up), which sits above a selection, does not cover it; above the
-  // selection's last line when there is no room below. Clamped in .page like the bubble.
+  // Place the Highlight button under the passage's last line, where the finger that made
+  // it, coming from above, does not cover it; above that line when there is no room below.
+  // Clamped in .page like the bubble.
   #positionMake() {
     const button = this.renderRoot.querySelector(".bubble.make");
     const page = this.renderRoot.querySelector(".page");
@@ -2096,6 +2268,7 @@ class BookReader extends LitElement {
 
   // A turn: the anchor becomes the top of the page turned to.
   #turn(page) {
+    if (this.#finger?.down) return;
     this.#dropPending();
     // A page turned ends reading aloud: what is read is the page shown.
     this.#hush();
@@ -2126,6 +2299,9 @@ class BookReader extends LitElement {
   // A resize (a dock fold, a rotation, the font loading, the composer): re-measure and
   // keep the place, even when its page number changes (Decision 4, section 12).
   #relayout() {
+    // The boxes a passage in progress was measured in, and the line its button sits under,
+    // are gone with the old layout.
+    this.#dropPending();
     if (!this.#measure()) return;
     this.#keep();
   }
@@ -2166,6 +2342,7 @@ class BookReader extends LitElement {
   // A turn that stays in the chapter shows the neighbouring page; a turn past the edge
   // loads a neighbour chapter, which schedules its own settling afresh.
   #next() {
+    if (this.#finger?.down) return;
     this.#closeBubble();
     if (this.#page + 1 < this.#pages) {
       this.#endSettle();
@@ -2177,6 +2354,7 @@ class BookReader extends LitElement {
   }
 
   #prev() {
+    if (this.#finger?.down) return;
     this.#closeBubble();
     if (this.#page > 0) {
       this.#endSettle();
@@ -2248,12 +2426,19 @@ class BookReader extends LitElement {
   }
 
   #pointerdown(e) {
-    if (e.button != null && e.button !== 0) return;
     this.#lastPointer = e.pointerType;
+    if (e.button != null && e.button !== 0) return;
+    // A second finger during a passage is not a new press.
+    if (this.#finger?.down) return;
+    this.#cancelHold();
     this.#endVisual(false);
+    const img = e.target.closest?.("img");
+    const mouse = e.pointerType === "mouse";
+    if (!mouse && this.highlights) this.#holdTimer = setTimeout(() => this.#held(), HOLD_MS);
     this.#drag = {
       pointerId: e.pointerId,
-      mouse: e.pointerType === "mouse",
+      mouse,
+      picture: Boolean(img && this.#isPicture(img)),
       x0: e.clientX,
       y0: e.clientY,
       width: e.currentTarget.getBoundingClientRect().width,
@@ -2265,12 +2450,18 @@ class BookReader extends LitElement {
   #pointermove(e) {
     this.#hover(e);
     const d = this.#drag;
-    if (!d || d.abandoned || e.pointerId !== d.pointerId) return;
+    if (!d || e.pointerId !== d.pointerId) return;
+    if (this.#finger?.down) {
+      this.#follow(e.clientX, e.clientY);
+      return;
+    }
     const dx = e.clientX - d.x0;
     const dy = e.clientY - d.y0;
+    if (this.#holdTimer && Math.hypot(dx, dy) > HOLD_SLOP) this.#cancelHold();
+    if (d.abandoned) return;
     if (!d.dragging) {
       if (Math.abs(dy) > Math.abs(dx)) {
-        d.abandoned = true; // a vertical drag is a scroll, not a page turn
+        d.abandoned = true; // a vertical drag is not a page turn
         return;
       }
       if (Math.abs(dx) > SLOP) {
@@ -2285,12 +2476,13 @@ class BookReader extends LitElement {
   #pointerup(e) {
     const d = this.#drag;
     if (!d || e.pointerId !== d.pointerId) return;
+    this.#cancelHold();
+    if (this.#finger?.down) {
+      this.#lift();
+      return;
+    }
     this.#drag = null;
     const dx = e.clientX - d.x0;
-    // A finger that leaves text selected was making or widening that selection (a press
-    // and hold, or a handle drag, which iOS still reports as a moving pointer), never a
-    // swipe or a tap: the page stays, and the Highlight button waits under it.
-    if (!d.mouse && this.#selectionRange()) return;
     if (d.dragging && Math.abs(dx) >= SWIPE) {
       if (dx < 0) this.#next();
       else this.#prev();
@@ -2300,6 +2492,14 @@ class BookReader extends LitElement {
     // it is what the abandoned mouse drag left behind, and the native selection was the
     // live feedback. Nothing is copied; the drag never turns the page.
     if (this.highlights && d.mouse && this.#makeHighlight()) return;
+    // A tap that lands anywhere but the Highlight button only drops the passage waiting
+    // there, wherever it lands, so taking back a passage never turns the page or follows a
+    // link (Norman: forgiveness). A resting finger trembles, so this is told by distance.
+    if (this.#finger && Math.hypot(dx, e.clientY - d.y0) <= HOLD_SLOP) {
+      this.#clickGone = Date.now() + CLICK_AFTER_MS;
+      this.#dropPending();
+      return;
+    }
     if (d.dragging || d.abandoned) return; // a drag that is neither a swipe nor a clean tap
     // A click that ends on a selection (a double-click on a word) is about the text.
     if (d.mouse && !(this.renderRoot.getSelection?.() ?? document.getSelection())?.isCollapsed) return;
@@ -2329,6 +2529,14 @@ class BookReader extends LitElement {
     else if (d.mouse) this.#cursorFromClick(e.clientX, e.clientY);
   }
 
+  // A touch the system took: as if lifted, so a passage being dragged keeps what it painted
+  // and offers the button.
+  #pointercancel() {
+    this.#cancelHold();
+    if (this.#finger?.down) this.#lift();
+    this.#drag = null;
+  }
+
   // The fragment and the owed place are the actor's; apply them here after each render,
   // when they change. A new chapter rebuilds the strip and opens its pending block; a
   // pending place in the open chapter re-opens it.
@@ -2341,7 +2549,7 @@ class BookReader extends LitElement {
     const clip = this.renderRoot.querySelector(".page");
     // First in .page: Lit clears every node after the page's last part whenever that part
     // changes, so a strip after it was taken out and put back each time the bubble or the
-    // Highlight button came or went, and a finger's selection in it was lost.
+    // Highlight button came or went.
     if (clip && this.#strip.parentNode !== clip) clip.prepend(this.#strip);
     if (!reading) {
       // Nothing to read: drop the fragment so a return starts clean.
@@ -2494,10 +2702,10 @@ class BookReader extends LitElement {
     this.#flashCopied("note");
   }
 
-  // The Highlight button for a finger's selection. Its press never reaches the page, so
-  // it is never a turn, and is not let move the focus, which could end the selection
-  // before the tap lands. The focus is held at mousedown, not pointerdown: WebKit drops
-  // the click of a touch whose pointerdown was cancelled.
+  // The Highlight button for a finger's passage. Its press never reaches the page, so it
+  // is never a turn, and is not let move the focus, which would take the keyboard off the
+  // page. The focus is held at mousedown, not pointerdown: WebKit drops the click of a
+  // touch whose pointerdown was cancelled.
   #makeButton() {
     if (!this.#pending) return nothing;
     return html`
@@ -2837,9 +3045,12 @@ class BookReader extends LitElement {
           @pointerdown=${(e) => this.#pointerdown(e)}
           @pointermove=${(e) => this.#pointermove(e)}
           @pointerup=${(e) => this.#pointerup(e)}
-          @pointercancel=${() => (this.#drag = null)}
+          @pointercancel=${() => this.#pointercancel()}
+          @selectstart=${(e) => this.#noNative(e)}
+          @contextmenu=${(e) => this.#noNative(e)}
+          @dragstart=${(e) => this.#noNative(e)}
         >
-          <div class="page" @pointerleave=${() => this.#unhover()}><span class="cursor" aria-hidden="true" hidden></span>${this.#sayButtons(snapshot)}${this.#bubble(snapshot)}${this.#makeButton()}</div>
+          <div class="page" @pointerleave=${() => this.#unhover()}><span class="cursor" aria-hidden="true" hidden></span><div class="passage" aria-hidden="true"></div>${this.#sayButtons(snapshot)}${this.#bubble(snapshot)}${this.#makeButton()}</div>
         </div>
         <div class="footer">
           <span class="chap">${title}</span>
