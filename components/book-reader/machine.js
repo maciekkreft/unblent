@@ -566,8 +566,17 @@ const withClip = (context, reply, speech) => ({
   speech: { ...speech, clip: { mime: reply.mime, audio: reply.audio, words: reply.words, n: context.said + 1 } },
 });
 
-// The voice's refusal, said over the footer once (a nonce, like reveal).
-const noticeOf = (context, error) => ({ text: speakMessage(error), n: (context.notice?.n ?? 0) + 1 });
+// A message that sends the user to Settings has to stay long enough to read and to
+// remember what it asks; the view's usual moment is too short for that.
+const TO_ACT_MS = 6000;
+
+// The voice's refusal, said over the footer once (a nonce, like reveal). ms is how long it
+// stays: null where there is nothing to do about it, which leaves the view's usual moment.
+const noticeOf = (context, error) => ({
+  text: speakMessage(error),
+  n: (context.notice?.n ?? 0) + 1,
+  ms: error === "not-downloaded" || error === "no-key" ? TO_ACT_MS : null,
+});
 
 // Reading aloud, the second region of a page that shows (ready): idle; loading, while
 // the voice is asked for the block's audio; speaking, while it plays or is paused, with
@@ -782,8 +791,10 @@ export const machine = setup({
       "sentence is read, as is a footnote's own text where the book places it. A page turn, another chapter or " +
       "another book stops it. With Vim keys on, r reads the cursor's paragraph and R the page " +
       "from it; while anything is read, Space pauses and resumes and Escape stops. A voice that " +
-      "cannot read says why over the footer for a moment: Download the voice in Settings, Add " +
-      "your Inworld key in Settings, or that it is not available now. Listening changes no data, " +
+      "cannot read says why over the footer: Download the voice in Settings or Add your Inworld " +
+      "key in Settings stays about six seconds, so there is time to read what to do, and that it " +
+      "is not available now stays for a moment. A new message replaces the one showing and " +
+      "gets its own full time. Listening changes no data, " +
       "so it is not a step.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "text.copied", "book.closed", "passage.added"],

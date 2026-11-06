@@ -386,8 +386,7 @@ export const machine = setup({
       "has come and Cancel, then Kokoro · ready on this Mac, with the Voice list and Play a " +
       "sample once it is ready; on the website under Your account, after Generating, the " +
       "Inworld key (kept by `voice`, saved, replaced and removed like the API key, each a " +
-      "step with Undo), with the Voice list and Play a sample once a key is saved, and a line " +
-      "on what Inworld charges. Choosing a voice is a step `voice` records. Play a sample " +
+      "step with Undo), with the Voice list and Play a sample once a key is saved. Choosing a voice is a step `voice` records. Play a sample " +
       "reads one short sentence in the voice picked, and a second press stops it. The test " +
       "voice is listed only in the workshop profile. The last line of the sheet, on every page, reads \"Something not working, or an " +
       "idea? Send feedback\": the link opens the project's form chooser for a new issue in a new " +

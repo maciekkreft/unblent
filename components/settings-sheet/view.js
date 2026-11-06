@@ -1072,7 +1072,7 @@ class SettingsSheet extends LitElement {
 
   // Reading aloud on the website (3.4), under Your account, since Inworld reads on the
   // account's own key: the key field the other keys use, then the Voice list and Play a
-  // sample once a key is saved, and what Inworld charges.
+  // sample once a key is saved.
   #readingWeb(reading) {
     if (reading?.here !== "web") return nothing;
     const keySet = reading.keySet && !this.#actor.snapshot.context.removed.includes("inworldKey");
@@ -1088,13 +1088,6 @@ class SettingsSheet extends LitElement {
         remove: () => this.#actor.send({ type: "_removeInworldKey" }),
       })}
       ${keySet ? this.#voiceRow(reading) : nothing}
-      <div class="field">
-        <span></span>
-        <span class="help"
-          >Inworld charges your key about $5 to $25 for each million characters, roughly half a cent to two and a half
-          cents for a long paragraph of 1,000 characters.</span
-        >
-      </div>
     `;
   }
 

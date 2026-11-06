@@ -228,6 +228,35 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
+    test("a message of what to do stays about 6 seconds, a new one restarts the time, and not available stays a moment", async () => {
+      let error = "no-key";
+      const { context, page, problems } = await open({ route: (r) => r.fulfill({ json: { error } }) });
+      try {
+        const says = async (text) => until(async () => (await look(page)).command === text);
+        const read = page.locator("book-reader .speak.page-read");
+        await page.clock.install();
+        await read.click();
+        await says("Add your Inworld key in Settings");
+        await page.clock.fastForward(5000);
+        assert.equal((await look(page)).command, "Add your Inworld key in Settings");
+        await read.click();
+        await says("Add your Inworld key in Settings");
+        await page.clock.fastForward(5000);
+        assert.equal((await look(page)).command, "Add your Inworld key in Settings", "the same message said again has its own full time");
+        await page.clock.fastForward(1500);
+        await says("");
+        error = "unavailable";
+        await read.click();
+        await says("The voice is not available now");
+        await page.clock.fastForward(1500);
+        await says("");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: rendering and layout.
     test("a voice that cannot read says what to do over the footer; a hidden feature shows nothing", async () => {
       const { context, page, problems } = await open({ route: (r) => r.fulfill({ json: { error: "no-key" } }) });
       try {

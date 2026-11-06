@@ -136,7 +136,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await reading(page))?.shown);
         let seen = await reading(page);
         assert.ok(seen.text.startsWith("Inworld key Save"), seen.text);
-        assert.ok(seen.text.includes("Inworld charges your key about $5 to $25"), seen.text);
         assert.deepEqual(seen.voices, [], "no voice to choose before a key is saved");
 
         await page.locator('settings-sheet input[aria-label="Inworld key"]').fill("iw-not-a-real-key");

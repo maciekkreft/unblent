@@ -213,11 +213,11 @@ test("a new _say starts afresh from where it is", async () => {
   assert.equal(atob(ctx(actor).speech.clip.audio), "Five.");
 });
 
-test("a voice that cannot read says why, once, and stops", async () => {
-  for (const [error, text] of [
-    ["not-downloaded", "Download the voice in Settings"],
-    ["no-key", "Add your Inworld key in Settings"],
-    ["unavailable", "The voice is not available now"],
+test("a voice that cannot read says why, once, and stops; what tells the user what to do stays about 6 seconds", async () => {
+  for (const [error, text, ms] of [
+    ["not-downloaded", "Download the voice in Settings", 6000],
+    ["no-key", "Add your Inworld key in Settings", 6000],
+    ["unavailable", "The voice is not available now", null],
   ]) {
     assert.equal(speakMessage(error), text);
     const { actor } = await reader({ speak: () => ({ error }) });
@@ -225,6 +225,7 @@ test("a voice that cannot read says why, once, and stops", async () => {
     await flush();
     assert.equal(speech(actor), "idle");
     assert.equal(ctx(actor).notice.text, text);
+    assert.equal(ctx(actor).notice.ms, ms);
     const n = ctx(actor).notice.n;
     actor.send({ type: "_say", blocks: blocks("One.") });
     await flush();

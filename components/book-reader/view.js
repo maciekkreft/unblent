@@ -1867,14 +1867,14 @@ class BookReader extends LitElement {
     this.#actor.send({ type: "_copyText", text });
   }
 
-  #flashCopied(kind) {
+  #flashCopied(kind, ms = COPIED_MS) {
     clearTimeout(this.#copiedTimer);
     this.#copied = kind;
     this.requestUpdate();
     this.#copiedTimer = setTimeout(() => {
       this.#copied = false;
       this.requestUpdate();
-    }, COPIED_MS);
+    }, ms);
   }
 
   // Remove (Decision 3): the gesture is one message; the highlight goes at once, its mark
@@ -2439,7 +2439,7 @@ class BookReader extends LitElement {
     if (notice && notice.n !== this.#lastNotice) {
       this.#lastNotice = notice.n;
       this.#why = notice.text;
-      this.#flashCopied("why");
+      this.#flashCopied("why", notice.ms ?? COPIED_MS);
     }
   }
 
