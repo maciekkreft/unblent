@@ -109,6 +109,14 @@
                   "minimum": 0,
                   "maximum": 1,
                   "description": "How likely Jev holds the answer to be."
+                },
+                "tone": {
+                  "enum": [
+                    "right",
+                    "wrong",
+                    "plain"
+                  ],
+                  "description": "How the mark is colored: right, wrong or plain. Present only on the one mark an evaluator shown as one mark (combined) gets; left out on every other mark."
                 }
               },
               "required": [

@@ -629,11 +629,11 @@ The architecture document describes the rules; the checks are what make them rea
 - **App**: the page kind that composes components around a purpose.
 - **Subject**: what the user is working on: the thing shown by the view that was last in front on the stage among the views that show a thing, as a kind, an id, a title and the view that shows it; owned by `subject`, a derived fact.
 - **Note** (as the user sees it): one page of writing in the Notes panel.
-- **Highlight**: one marked passage of a book with the user's comment on it, stored as a note whose link carries a place (`notes`); the user sees it only in the book reader.
+- **Highlight**: one marked passage of a book with the user's comment on it, stored as a note whose link carries a place (`notes`); the user sees it in the book reader or on a past journal day.
 - **Link**: one entry of a note's or a chat's `about`, naming something it is about; a link to a book may also name a chapter, which for the Journal is a day (`notes`, `conversations`).
 - **Source link**: a link in a note's text to a highlight or to another note, `[label](note:<id>)`, drawn as a tag. It names its target by the id alone. Following a link to a highlight opens the book at the passage; following a link to a note opens that note. A tag that links to a note shows the note's current title, and the label is kept only so the text reads sensibly outside the app. Not to be confused with a **Link**, which is an entry of a note's `about`.
 - **Slip-Box**: one fixed note, the top of the tree of the user's own notes, opened from the Books shelf. A note may name other notes as its parents, beside the book or Journal day it was written in; a note is in the Slip-Box when its chain of parents reaches the Slip-Box. Shown only while the Slip-Box feature is shown (`notes`, `note-editor`).
-- **Note type**: Fleeting, Literature or Permanent, chosen by the user for each note and stored as `noteType`; a note without one is Fleeting. A Permanent note must be in the Slip-Box (`notes`).
+- **Note type**: Fleeting, Literature or Permanent, chosen by the user for each note and stored as `noteType`; a note without one is Fleeting. A Permanent note must be in the Slip-Box (`notes`). Only a Permanent note or the Slip-Box can have notes under it.
 - **Passage**: a highlight a note holds in its Passages, a link of kind highlight in the note's `about`, added with Add to note in the book reader; a note can hold many (`notes`).
 - **Chat**: a conversation with the language model, owned by `conversations`.
 - **Turn**: one message in a chat, immutable once finished — a user turn (text, and any results answering the tool calls before it) or an assistant turn (text, a status, and any tool calls).
