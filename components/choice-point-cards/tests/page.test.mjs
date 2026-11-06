@@ -49,10 +49,10 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.type("Listened");
         await page.keyboard.press("Escape");
         const card = () => inCards(page, (root) => root.querySelector(".card")?.innerText.replace(/\s+/g, " ").trim() ?? null);
-        await until(async () => (await card()) === "Family dinner AWAY — TOWARDS Listened");
+        await until(async () => (await card()) === "SITUATION Family dinner TOWARDS Listened");
         assert.equal(await inCards(page, (root) => root.activeElement?.className), "card", "the keyboard stays on the folded card");
         await page.reload({ waitUntil: "domcontentloaded" });
-        await until(async () => (await card().catch(() => null)) === "Family dinner AWAY — TOWARDS Listened");
+        await until(async () => (await card().catch(() => null)) === "SITUATION Family dinner TOWARDS Listened");
 
         // A sheet left unfolded is unfolded again after a reload.
         await page.click("choice-point-cards .card");
@@ -119,7 +119,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("End");
         await page.keyboard.type(" too");
         assert.equal(await situation.innerText(), "Second too");
-        assert.match(await cards.locator(".card").innerText(), /^First/);
+        assert.match(await cards.locator(".card").innerText(), /First/);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -130,7 +130,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // here through page.route, so no real request is made, and the account is told it has
     // a key.
     // Browser: rendering and layout.
-    test("checked lines get Jev's marks, the status line says the answer, and the card warns", async () => {
+    test("checked lines get Jev's marks, the status line says the answer, and the card shows them after each line", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
       try {
@@ -176,7 +176,10 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await line("Feel calm").locator(".mark").hover();
         assert.equal(await cards.locator(".status").innerText(), "Therapy Goal: Emotional Goal, you expect Behavioral Goal", "the line the pointer is over");
         await cards.locator(".done").click();
-        await cards.locator(".card .towards .flag").waitFor();
+        const onCard = (text) => cards.locator(".card .towards .line", { hasText: text }).locator(".mark");
+        await onCard("Feel calm").and(cards.locator(".mark.wrong")).waitFor();
+        assert.equal(await onCard("Feel calm").getAttribute("title"), "Therapy Goal: Emotional Goal, you expect Behavioral Goal");
+        assert.equal(await onCard("Call Anna").and(cards.locator(".mark.right")).count(), 1);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -238,7 +241,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await line("work email").locator(".mark").hover();
         assert.equal(await cards.locator(".status").innerText(), "Your values: Goes against Being a present parent", "the line the pointer is over");
         await cards.locator(".done").click();
-        await cards.locator(".card .towards .flag").waitFor();
+        await cards.locator(".card .towards .line", { hasText: "work email" }).locator(".mark.wrong").waitFor();
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -268,6 +271,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await cards.locator(".close").waitFor();
         assert.equal(await cards.locator(".new").count(), 0, "no New choice point on an earlier day");
         assert.equal(await cards.locator(".done").count(), 0);
+        assert.equal(await cards.locator(".delete").count(), 0);
         await cards.locator('.box[data-field="towards"]').click();
         await page.keyboard.type("zzz");
         assert.equal(await cards.locator('.box[data-field="towards"] .cm-content').innerText(), "Paused", "the boxes cannot be typed in");
@@ -305,8 +309,50 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           });
         assert.equal(await box(), "Dinner\n\nLate\nTired");
         await page.keyboard.press("Escape");
-        const card = () => inCards(page, (root) => root.querySelector(".card .sit")?.innerText.trim() ?? null);
-        await until(async () => (await card()) === "Dinner · Late · Tired");
+        const lines = () => inCards(page, (root) => [...root.querySelectorAll(".card .situation .line")].map((l) => l.innerText.trim()));
+        await until(async () => (await lines()).join() === "Dinner,Late,Tired");
+        const tops = await inCards(page, (root) => [...root.querySelectorAll(".card .situation .line")].map((l) => l.getBoundingClientRect().top));
+        assert.ok(tops[0] < tops[1] && tops[1] < tops[2], "each line stands on its own");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Delete sits before Done, so Tab reaches it from the last box; the keyboard moves on to
+    // the row after the sheet, and the notice's Undo brings the card back.
+    // Browser: focus and keys.
+    test("Delete, reached by Tab, moves the keyboard to the next card, and the notice's Undo brings the card back", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 1000 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("choice-points"));
+      try {
+        // Today's journal day: it ends at 2:00 the next night (13, Journal).
+        const now = new Date(Date.now() - 2 * 3600e3);
+        const day = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
+        const put = (id, situation) => context.request.put(`${BASE_URL}/api/choice-points/${id}`, { data: { day, situation, thoughts: "Tired", away: "Left", towards: "Stay" } });
+        assert.ok((await put("01K7TEST00000000000000CPD1", "First")).ok());
+        assert.ok((await put("01K7TEST00000000000000CPD2", "Second")).ok());
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        const cards = page.locator("choice-point-cards");
+        await cards.locator(".card").first().click();
+        await cards.locator('.box[data-field="thoughts"] .cm-content').click();
+        await page.keyboard.press("Tab");
+        const focused = () => inCards(page, (root) => root.activeElement?.className ?? null);
+        assert.equal(await focused(), "delete", "Tab goes from the last box to Delete, then Done");
+        await page.keyboard.press("Tab");
+        assert.equal(await focused(), "done");
+        await page.keyboard.press("Shift+Tab");
+        await page.keyboard.press("Enter");
+        await until(async () => (await cards.locator(".sheet").count()) === 0 && (await cards.locator(".card").count()) === 1);
+        assert.equal(await focused(), "card", "the keyboard is on the next card");
+        assert.match(await cards.locator(".card").innerText(), /Second/);
+        await page.locator("notice-stack .undo").click();
+        await until(async () => (await cards.locator(".card").count()) === 2);
+        const first = (await cards.locator(".card").first().innerText()).replace(/\s+/g, " ").trim();
+        assert.equal(first, "SITUATION First THOUGHTS & FEELINGS Tired AWAY Left TOWARDS Stay");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

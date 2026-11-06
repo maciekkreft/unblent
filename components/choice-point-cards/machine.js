@@ -118,6 +118,17 @@ const edit = assign(({ context, event }) => ({
 const typable = ({ context, event }) =>
   writable(context) && opened(context, event) && FIELDS.includes(event.field) && typeof event.value === "string";
 
+// Delete takes the sheet away whatever it holds, by saving it empty, which `choice-points`
+// makes a step Undo takes back (12, Undo). What was typed and waits goes first, so the Undo
+// brings back all of it; with the draft gone nothing typed is saved after. A new one with
+// nothing written was never kept, so nothing is sent.
+const discard = enqueueActions(({ context, event, enqueue }) => {
+  const draft = draftIn(context, event.id);
+  if (context.dirty.includes(draft.id)) saveOne(enqueue, draft);
+  if (held(context, draft.id) || !isEmpty(draft)) enqueue.emit({ type: "choice-point.saved", ...draft, situation: "", thoughts: "", away: "", towards: "" });
+  enqueue.assign({ drafts: without(context.drafts, event.id), dirty: without(context.dirty, event.id) });
+});
+
 // Done folds the one sheet: it is saved with every line finished. Folded with every box
 // empty, a kept one is deleted, by saving it empty, which `choice-points` makes a step
 // Undo takes back (12, Undo); a new one was never kept, so nothing is sent.
@@ -307,15 +318,16 @@ export function boxMarks(context, id, field) {
     .filter((l) => l.marks.length);
 }
 
-// The folded card's warning: for each move it shows, whether a line written there now is
-// not the answer its evaluator expects.
-export function cardWarnings(context, record) {
-  const out = {};
-  for (const field of ["situation", "away", "towards"]) {
-    const written = new Set(record[field].split("\n"));
-    out[field] = boxMarks(context, record.id, field).some((l) => written.has(l.text) && l.marks.some((m) => m.tone === "wrong"));
-  }
-  return out;
+// The folded card: the boxes that hold text in the order the sheet reads, each with its
+// written lines, a blank one being no item (linesOf), and each line's marks.
+export function cardBoxes(context, record) {
+  return ["situation", "thoughts", "away", "towards"]
+    .map((field) => {
+      const marked = boxMarks(context, record.id, field);
+      const lines = record[field].split("\n").filter((text) => text.trim() !== "");
+      return { field, lines: lines.map((text) => ({ text, marks: marked.find((l) => l.text === text)?.marks ?? [] })) };
+    })
+    .filter((box) => box.lines.length);
 }
 
 // The status line under an open sheet: Jev's answers about the line the pointer is over,
@@ -415,18 +427,25 @@ export const machine = setup({
       "right under it, the cursor moved to another line, the box losing focus, " +
       "or the sheet folding; the line being typed gets no mark until then. Done, or Escape, " +
       "folds that sheet into a card " +
-      "showing the situation and the away and towards moves, one line each; with Vim keys on, " +
+      "that lists the boxes holding text, read only, under their names: Situation, Thoughts & " +
+      "feelings, Away and Towards, in that order, with every line on its own line, whole " +
+      "however long, and its marks after it, as they are in the sheet, with the same hint as a " +
+      "tooltip; a card with nothing written, which only an old record can be, says A choice " +
+      "point. With Vim keys on, " +
       "the first Escape in a box leaves insert mode and the next one folds the sheet. " +
-      "Pressing a card opens it again. Each choice point folds and unfolds on its own, so " +
+      "Pressing anywhere on a card opens it again. Each choice point folds and unfolds on its own, so " +
       "several can be open at once; the ones left open stay open after a reload, kept per day " +
       "in this browser. A choice point folded with all four boxes empty is " +
-      "deleted, also one kept before, at once, with the short notice whose Undo brings it back; " +
-      "there is no Delete button. Undo and Redo also take back a stretch of typing in a choice " +
+      "deleted, also one kept before, at once, with the short notice whose Undo brings it back. " +
+      "Delete, to the left of Done on a day that can be written, does the same whatever the " +
+      "boxes hold, and Undo brings back everything that was written; the sheet goes and the " +
+      "keyboard moves to the next row. A new one with nothing written just goes, with no " +
+      "notice. Undo and Redo also take back a stretch of typing in a choice " +
       "point, and an open sheet follows them while nothing typed in it waits to be saved. Choice points are written exactly while the day's own text " +
       "is, as the journal page says: today's page, also past midnight until the journal's day " +
       "ends at 2:00; then an open sheet becomes read only. On " +
       "an earlier day there is no New choice point row, and a card opens its sheet " +
-      "to be read, with boxes that cannot be typed in and a Close button instead of Done. It " +
+      "to be read, with boxes that cannot be typed in and a Close button instead of Done and Delete. It " +
       "follows the day the journal page shows from day.shown, and shows today until the page " +
       "has said. On a narrow width the V stands above the boxes. When Settings has an " +
       "evaluator check a box, Jev's marks stand at the right end of each checked line, inside " +
@@ -452,8 +471,7 @@ export const machine = setup({
       "The hint is said in the status line under the boxes while the pointer is over a mark, " +
       "after a mark is tapped until something else is pressed, or while the text cursor is " +
       "on a checked line; otherwise the status line says why Jev could not check when it " +
-      "could not, and is empty. A folded card shows a red warning beside the situation, away or towards line " +
-      "when a line there has a red mark, a red compass included. The arrow keys, and with Vim " +
+      "could not, and is empty. The arrow keys, and with Vim " +
       "keys on j, k, gg and G, step through the cards, the open sheets and the New choice " +
       "point row; Enter opens a card, or adds a choice point on the New row, and o adds one. " +
       "An open sheet takes the keyboard in its first box, in Vim's normal mode, or, on an " +
@@ -630,6 +648,7 @@ export const machine = setup({
           actions: finishLines,
         },
         _done: { guard: ({ context, event }) => opened(context, event), actions: fold },
+        _delete: { guard: ({ context, event }) => writable(context) && opened(context, event), actions: discard },
         "choice-point.changed": { actions: follow },
         "choice-point.deleted": { actions: follow },
       },

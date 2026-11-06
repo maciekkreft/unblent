@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec, Annotation, StateField, StateEffect } f
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
-import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable, rowAction, rowTarget, boxEdge } from "./machine.js";
+import { machine, boxMarks, cardBoxes, sayMarks, statusOf, writable, rowAction, rowTarget, boxEdge } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text inside its scrolling page
@@ -85,6 +85,11 @@ const MARK_ICONS = {
   compass: () => icon("compass"),
 };
 
+const markOf = (m) =>
+  m.pending
+    ? html`<span class="mark pending" title=${sayMarks([m])}><i></i></span>`
+    : html`<span class="mark ${m.tone}" title=${sayMarks([m])} style=${`opacity: ${m.sure}`}>${MARK_ICONS[m.icon]?.()}</span>`;
+
 // A box on a day that cannot be written is shown, not edited (writable); it takes no
 // focus, so the sheet's own keydown folds it on Escape.
 const readOnly = (spec) => (spec.read ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [placeholder(spec.hint)]);
@@ -111,12 +116,7 @@ class MarksWidget extends WidgetType {
     span.className = "marks";
     span.setAttribute("role", "img");
     span.setAttribute("aria-label", sayMarks(this.marks));
-    render(
-      this.marks.map((m) =>
-        m.pending ? html`<span class="mark pending" title=${sayMarks([m])}><i></i></span>` : html`<span class="mark ${m.tone}" title=${sayMarks([m])} style=${`opacity: ${m.sure}`}>${MARK_ICONS[m.icon]?.()}</span>`,
-      ),
-      span,
-    );
+    render(this.marks.map(markOf), span);
     span.addEventListener("pointerenter", (e) => {
       if (e.pointerType === "touch") return;
       span.dataset.over = "";
@@ -188,6 +188,9 @@ const vee = html`<svg viewBox="-14 0 168 130" aria-hidden="true">
   <polygon class="towards" points=${TOWARDS}></polygon>
   <circle cx="70" cy="112" r="15"></circle>
 </svg>`;
+
+// The names on a folded card, which has no V for "hooked" and "unhooked" to go with.
+const CARD_LABELS = { situation: "Situation", thoughts: "Thoughts & feelings", away: "Away", towards: "Towards" };
 
 const BOXES = {
   away: { label: "Away · hooked", hint: "What did I do, or want to do, when hooked?" },
@@ -328,9 +331,13 @@ class ChoicePointCards extends LitElement {
       flex-direction: column;
       gap: var(--space-sm);
     }
+    /* The folded card: every line of every box on its own line, whole, so nothing the user
+       wrote is cut off; read, not typed into. The press target is a button, so what it holds
+       is spans, the only content a button may hold, drawn as blocks. */
     .card {
-      display: grid;
-      gap: var(--space-xs);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
       width: 100%;
       box-sizing: border-box;
       text-align: left;
@@ -338,51 +345,24 @@ class ChoicePointCards extends LitElement {
       border-color: var(--color-border);
       border-radius: var(--radius-md);
       color: var(--color-body);
+      overflow-wrap: anywhere;
     }
     .card:hover {
       border-color: var(--color-border-strong);
       background: var(--color-surface-hover);
     }
-    .sit {
-      font-size: var(--text-body);
-      font-weight: var(--weight-semibold);
-      color: var(--color-ink);
+    .card .item {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
     }
-    .sit.none {
+    .card .line {
+      display: block;
+    }
+    .card .none {
       color: var(--color-body-mid);
     }
-    .sit,
-    .move span {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .move {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      align-items: baseline;
-      gap: var(--space-sm);
-    }
-    /* The card's warning joins a row as a third column only when it is there, so a card
-       without one is laid out as before. */
-    .move,
-    .flagged {
-      grid-auto-flow: column;
-    }
-    .flagged {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      align-items: baseline;
-      gap: var(--space-sm);
-    }
-    .flag {
-      align-self: center;
-      display: flex;
-      font-size: var(--text-sm);
-      color: var(--color-danger);
-    }
-    .move b,
+    .card b,
     .field > span {
       font-size: var(--text-caption);
       font-weight: var(--weight-semibold);
@@ -502,7 +482,7 @@ class ChoicePointCards extends LitElement {
       background: var(--color-accent-selection);
     }
     /* Jev's marks at a checked line's right end, as tall as the line, so a box keeps its
-       height. */
+       height; on a card, after the line's text. */
     .marks {
       position: absolute;
       top: 0;
@@ -511,6 +491,12 @@ class ChoicePointCards extends LitElement {
       gap: var(--space-2xs);
       user-select: none;
       -webkit-user-select: none;
+    }
+    .marks.after {
+      position: static;
+      display: inline-flex;
+      vertical-align: top;
+      margin-left: var(--space-xs);
     }
     .mark {
       display: inline-grid;
@@ -623,7 +609,7 @@ class ChoicePointCards extends LitElement {
     this.#focusNext = null;
     const box = [...this.#boxes.values()].find((b) => b.region === target);
     if (box) this.#focusBox(box);
-    else target?.focus();
+    else if (target) this.#focusRow(target);
   }
 
   // A box opened from the New row or a card takes the keyboard in Vim's insert mode when Vim
@@ -861,18 +847,22 @@ class ChoicePointCards extends LitElement {
     this.#send({ type: "_done", id }, `.card[data-id="${id}"]`);
   }
 
+  // The keyboard moves on to the row after the sheet; the New row is always there to take
+  // it, because only a day that can be written offers Delete.
+  #delete(id) {
+    const rows = this.#rows();
+    const next = rows[rows.findIndex((row) => row.dataset.id === id) + 1];
+    this.#send({ type: "_delete", id }, next?.dataset.id ? `[data-id="${next.dataset.id}"]` : ".new");
+  }
+
   #card(context, r) {
-    const warn = cardWarnings(context, r);
-    const flag = (field) =>
-      warn[field] ? html`<span class="flag" role="img" aria-label="A line here is not the answer you expect">${icon("warning")}</span>` : nothing;
-    // A card shows a box on one row, so its lines are kept apart by a dot.
-    const oneRow = (text) => text.split("\n").map((l) => l.trim()).filter(Boolean).join(" · ");
-    const move = (kind, label, text) =>
-      html`<span class="move ${kind}"><b>${label}</b><span>${oneRow(text) || "—"}</span>${flag(kind)}</span>`;
-    const sit = html`<span class="sit ${oneRow(r.situation) ? "" : "none"}">${oneRow(r.situation) || "A choice point"}</span>`;
+    const boxes = cardBoxes(context, r);
+    const line = ({ text, marks }) =>
+      html`<span class="line">${text}${marks.length ? html`<span class="marks after" role="img" aria-label=${sayMarks(marks)}>${marks.map(markOf)}</span>` : nothing}</span>`;
     return html`<button type="button" class="card" data-id=${r.id} @click=${() => this.#open(r.id)}>
-      ${warn.situation ? html`<span class="flagged">${sit}${flag("situation")}</span>` : sit}
-      ${move("away", "Away", r.away)} ${move("towards", "Towards", r.towards)}
+      ${boxes.length
+        ? boxes.map(({ field, lines }) => html`<span class="item ${field}"><b>${CARD_LABELS[field]}</b>${lines.map(line)}</span>`)
+        : html`<span class="none">A choice point</span>`}
     </button>`;
   }
 
@@ -918,6 +908,9 @@ class ChoicePointCards extends LitElement {
       if (!context.pointed.tap || e.composedPath().some((n) => n.classList?.contains("marks"))) return;
       this.#actor.send({ type: "_point", source: "tap", id: draft.id, field: null });
     };
+    // The press keeps the keyboard in the box: leaving it would finish the line being typed
+    // and start a check, paid for, of what is being deleted.
+    const stay = (e) => e.preventDefault();
     return html`<div class="sheet ${read ? "read" : ""}" data-id=${draft.id} role="group" aria-label="Choice point" @keydown=${keydown} @pointerdown=${pointerdown}>
       <div class="grid">
         ${this.#box(context, draft, "away")}
@@ -928,6 +921,7 @@ class ChoicePointCards extends LitElement {
       <div class="foot">
         <span class="status" role="status">${status}</span>
         <div class="buttons">
+          ${read ? nothing : html`<button type="button" class="delete" @mousedown=${stay} @click=${() => this.#delete(draft.id)}>Delete</button>`}
           <button type="button" class=${read ? "close" : "done"} @click=${() => this.#done(draft.id)}>${read ? "Close" : "Done"}</button>
         </div>
       </div>

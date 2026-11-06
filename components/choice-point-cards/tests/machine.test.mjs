@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, ERROR_SENTENCES, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings, writable, rowAction, rowTarget, boxEdge } from "../machine.js";
+import { machine, ERROR_SENTENCES, dateOf, marksOf, sayMarks, sureOf, statusOf, cardBoxes, writable, rowAction, rowTarget, boxEdge } from "../machine.js";
 
 const json = (name) => JSON.parse(readFileSync(new URL(`../events/${name}.json`, import.meta.url), "utf8"));
 const SCHEMAS = { "choice-point.saved": json("choice-point.saved") };
@@ -220,6 +220,50 @@ test("folded with every box empty, a kept one is removed by saving it empty; a n
   assert.equal(saves(emitted).length, 1, "a new one never kept sends nothing");
 });
 
+test("Delete saves the boxes empty after what waited, and nothing typed is saved later", async () => {
+  const { actor, clock, emitted, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner", away: "Left" })] });
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_delete", id: A });
+  const empty = { type: "choice-point.saved", id: A, day: TODAY, situation: "", thoughts: "", away: "", towards: "" };
+  assert.deepEqual(saves(emitted), [empty], "nothing waited, so only the empty save");
+  assert.deepEqual(ctx().drafts, []);
+
+  actor.send({ type: "choice-point.changed", choicePoint: cp(A, TODAY, { situation: "Dinner", away: "Left" }, { version: 2 }) });
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_edit", id: A, field: "towards", value: "Stay" });
+  actor.send({ type: "_delete", id: A });
+  const [typed, last] = saves(emitted).slice(1);
+  assert.equal(typed.towards, "Stay", "what waited goes first, for the Undo to bring back");
+  assert.equal(typed.finished, undefined, "no line is finished, so no check starts");
+  assert.deepEqual(last, empty);
+  actor.send({ type: "_blur", id: A, field: "towards" });
+  clock.increment(400);
+  assert.equal(saves(emitted).length, 3, "no save after the delete");
+  assert.deepEqual(ctx().dirty, []);
+});
+
+test("Delete on a new one with nothing written sends nothing; with text it deletes that text; an earlier day ignores it", async () => {
+  const { actor, clock, emitted, ctx } = await start({ [EARLIER]: [cp(B, EARLIER, { situation: "Old" })] });
+  actor.send({ type: "_add" });
+  actor.send({ type: "_delete", id: only(ctx) });
+  assert.deepEqual(ctx().drafts, []);
+  assert.deepEqual(emitted, []);
+
+  actor.send({ type: "_add" });
+  const id = only(ctx);
+  actor.send({ type: "_edit", id, field: "away", value: "Left" });
+  actor.send({ type: "_delete", id });
+  assert.deepEqual(saves(emitted).map((e) => e.away), ["Left", ""], "typed text is kept for an Undo, then deleted");
+  clock.increment(400);
+
+  actor.send({ type: "day.shown", day: EARLIER, writable: false });
+  await flush();
+  actor.send({ type: "_open", id: B });
+  actor.send({ type: "_delete", id: B });
+  assert.equal(saves(emitted).length, 2);
+  assert.equal(ctx().drafts.length, 1, "the sheet stays, to be read");
+});
+
 test("an earlier day's choice points open to be read: no new one, no typing, no save on fold", async () => {
   const { actor, emitted, ctx } = await start({ [EARLIER]: [cp(B, EARLIER, { situation: "Old" }), cp(A, EARLIER)] });
   actor.send({ type: "day.shown", day: EARLIER });
@@ -423,6 +467,24 @@ test("a hint names what was checked and its answer, and how sure Jev is shows as
   assert.equal(sureOf(0.5), 0.33);
 });
 
+test("a card lists the boxes holding text, in the sheet's order, each line with its own marks", async () => {
+  const record = cp(A, TODAY, { towards: "Call Anna\n\nFeel calm", situation: "Sunday\n  ", thoughts: "Tired" });
+  const { actor, ctx } = await start({ [TODAY]: [record] }, undefined, {
+    evaluators: EVALUATORS,
+    checks: () => ({ settings: SETTINGS, choicePoints: [] }),
+  });
+  await flush();
+  assert.deepEqual(cardBoxes(ctx(), record), [
+    { field: "situation", lines: [{ text: "Sunday", marks: [] }] },
+    { field: "thoughts", lines: [{ text: "Tired", marks: [] }] },
+    { field: "towards", lines: [{ text: "Call Anna", marks: [] }, { text: "Feel calm", marks: [] }] },
+  ]);
+  actor.send({ type: "lines.checked", choicePoint: A, day: TODAY, lines: [done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.96)]), done("Gone since", [ans(Q1, EMO, "Emotional Goal", 0.9)])] });
+  const towards = cardBoxes(ctx(), record).at(-1);
+  assert.deepEqual(towards.lines.map((l) => l.marks.map((m) => m.tone)), [["right"], []], "a line matches by its text");
+  assert.deepEqual(cardBoxes(ctx(), cp(B, TODAY)), [], "nothing written: no box");
+});
+
 test("the checks are asked by day, followed after, and pointed lines fill the status line", async () => {
   const CALM = "Feel calm when she doesn't answer";
   const record = cp(A, TODAY, { situation: "Sunday", towards: "Call Anna\n" + CALM });
@@ -432,14 +494,15 @@ test("the checks are asked by day, followed after, and pointed lines fill the st
     checks: (day) => ({ settings: SETTINGS, choicePoints: day === TODAY ? [report(TODAY, [done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.96)])])] : [] }),
   });
   assert.deepEqual(checksAsked, [TODAY]);
-  assert.deepEqual(cardWarnings(ctx(), record), { situation: false, away: false, towards: false });
+  const towardsTones = () => cardBoxes(ctx(), record).at(-1).lines.map((l) => l.marks.map((m) => m.tone));
+  assert.deepEqual(towardsTones(), [["right"], []]);
 
   actor.send({
     type: "lines.checked",
     ...report(TODAY, [done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.96)]), done(CALM, [ans(Q1, EMO, "Emotional Goal", 0.92)])]),
   });
   actor.send({ type: "lines.checked", ...report(EARLIER, []) });
-  assert.deepEqual(cardWarnings(ctx(), record), { situation: false, away: false, towards: true }, "a red warning on the card's towards");
+  assert.deepEqual(towardsTones(), [["right"], ["wrong"]], "the card shows the line's red mark");
 
   actor.send({ type: "_open", id: A });
   assert.equal(statusOf(ctx(), A), "", "saving is not reported");
@@ -528,7 +591,7 @@ test("Your values draws one compass mark after the box's own marks: green, red o
   );
 });
 
-test("a red values mark warns on the folded card; the shown day's values name the mark", async () => {
+test("a red values mark stands on the folded card's line; the shown day's values name the mark", async () => {
   const record = cp(A, EARLIER, { situation: "Weekend", towards: "Answer every work email" });
   const report = { choicePoint: A, day: EARLIER, lines: [done("Answer every work email", [ans(V1, AGAINST, "Goes against", 0.9)])] };
   const then = yours([[V1, "Family first"]]);
@@ -540,7 +603,7 @@ test("a red values mark warns on the folded card; the shown day's values name th
   await flush();
   assert.deepEqual(evaluatorsAsked, [dateOf(NOW), EARLIER], "the evaluators are asked for the day shown");
   actor.send({ type: "lines.checked", ...report });
-  assert.deepEqual(cardWarnings(ctx(), record), { situation: false, away: false, towards: true });
+  assert.deepEqual(cardBoxes(ctx(), record).at(-1).lines[0].marks.map((m) => [m.icon, m.tone]), [["compass", "wrong"]]);
 
   actor.send({ type: "evaluator.changed", evaluator: { ...VALUES, name: "Your values", on: false } });
   actor.send({ type: "_open", id: A });

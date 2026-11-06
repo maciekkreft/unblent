@@ -173,8 +173,8 @@ const blank = (texts) => TEXTS.every((k) => texts[k].trim() === "");
 // A new id adds a choice point to its day, unless all four texts are empty: the view may
 // save a sheet the user opened and left blank, and that is not a choice point yet. A save
 // to one already kept changes its texts and keeps its day, except that four
-// empty texts remove it: the view has no Delete, and emptying the boxes is how the user
-// says it is gone. Its tombstone keeps the texts it had, so it could still be restored.
+// empty texts remove it: that is how the view says it is gone, for its Delete button and
+// for a sheet folded with every box emptied. Its tombstone keeps the texts it had, so it could still be restored.
 // A deleted id stays deleted (5).
 function applySave(context, event, enqueue) {
   if (!isId(event.id)) return;
