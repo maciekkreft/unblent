@@ -34,7 +34,8 @@ const at = (page) => inSheet(page, (root) => root.activeElement?.dataset?.i ?? r
 const inView = (locator) =>
   locator.evaluate((el) => {
     let up = el;
-    do up = up.parentElement ?? up.getRootNode().host;
+    // Through the slot, because the page that scrolls stands in the shadow of the view around.
+    do up = up.assignedSlot ?? up.parentElement ?? up.getRootNode().host;
     while (up && !(up.scrollHeight > up.clientHeight && /auto|scroll/.test(getComputedStyle(up).overflowY)));
     const box = el.getBoundingClientRect();
     const frame = up?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
@@ -107,6 +108,32 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.ok(one.x + one.width <= two.x);
         assert.equal((await box('.area[data-i="1"]')).y - (await box('.area[data-i="0"]')).y, second.y - first.y, "a tall panel does not spread the rows");
         assert.equal((await box(".sq")).width, square.width);
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: rendering and layout.
+    test("the panel goes beside the rows only where each box still holds a sentence on two lines, and the card takes four columns where they fit", async () => {
+      const { context, problems, sheet } = await open(browser, { viewport: { width: 1600, height: 900 } });
+      try {
+        const width = (w) => sheet.evaluate((el, v) => (el.style.width = v), `${w}px`);
+        const columns = () => sheet.evaluate((el) => getComputedStyle(el.shadowRoot.querySelector(".sum")).gridTemplateColumns.split(" ").length);
+        await sheet.locator(".card").waitFor();
+        await width(832);
+        assert.equal(await columns(), 4);
+        await width(831);
+        assert.equal(await columns(), 2);
+        await sheet.locator(".card").click();
+        await sheet.locator('.area[data-i="0"] .opener').click();
+        const box = (sel) => sheet.locator(sel).first().boundingBox();
+        await width(1056);
+        const area = await box(".area");
+        assert.ok((await box(".qs")).x >= area.x + area.width, "wide: beside the rows");
+        assert.ok((await box(".box")).width >= 200, "a box holds about five words a line");
+        await width(1055);
+        assert.ok((await box(".qs")).y >= (await box('.area[data-i="7"]')).y, "one pixel less: below them");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

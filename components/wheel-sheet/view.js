@@ -28,6 +28,13 @@ const boxTheme = EditorView.theme({
   ".cm-line": { fontSize: "var(--text-sm)" },
 });
 
+// An answer on a day that can no longer be written: drawn by the kit like a box, so a list stays a
+// list rather than showing its stored "- ", but as plain text with no frame and no keyboard stop.
+const readTheme = EditorView.theme({
+  ".cm-content": { padding: "0 var(--space-sm)", minHeight: "0", color: "var(--color-body)" },
+});
+const readOnly = [EditorState.readOnly.of(true), EditorView.editable.of(false), readTheme];
+
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();
 
@@ -440,13 +447,6 @@ class WheelSheet extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-ink);
     }
-    .q-read {
-      padding: 0 var(--space-sm);
-      font-size: var(--text-sm);
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      color: var(--color-body);
-    }
     /* CodeMirror owns everything inside .box; the frame is drawn here, around it. */
     .box {
       display: flex;
@@ -532,10 +532,18 @@ class WheelSheet extends LitElement {
         gap: var(--space-lg);
       }
     }
+    /* Four columns of scores with the small wheel beside them need this much of the card. */
+    @container (width >= 52rem) {
+      .sum {
+        grid-template-columns: repeat(4, calc(var(--space-2xl) * 2 + var(--space-lg)));
+        gap: 0 var(--space-lg);
+      }
+    }
     /* A wide page has room for the panel beside the wheel and the rows: from this width each
-       group is wide enough for its boxes. The last row track is flexible so a tall panel does not
-       spread the rows. */
-    @container (width >= 60rem) {
+       box holds about five words a line, and narrower ones wrap a sentence over four lines, where
+       the panel below the rows reads better. The last row track is flexible so a tall panel does
+       not spread the rows. */
+    @container (width >= 66rem) {
       .wbody {
         grid-template-rows: auto auto repeat(8, auto) minmax(0, 1fr);
       }
@@ -550,10 +558,6 @@ class WheelSheet extends LitElement {
       }
       .q-hint {
         display: block;
-      }
-      .sum {
-        grid-template-columns: repeat(4, calc(var(--space-2xl) * 2 + var(--space-lg)));
-        gap: 0 var(--space-lg);
       }
     }
     /* A narrow page (a phone, or a narrow stage): the wheel stands above the rows, and the
@@ -754,6 +758,7 @@ class WheelSheet extends LitElement {
       ...baseExtensions({ vim: vimOn }),
       paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       boxTheme,
+      ...(spec.read ? readOnly : []),
       ...(spec.hint ? [placeholder(spec.hint)] : []),
       this.#boxes.get(key).label.of(EditorView.contentAttributes.of({ "aria-label": spec.text })),
       EditorView.updateListener.of((update) => {
@@ -773,7 +778,7 @@ class WheelSheet extends LitElement {
   // rather than being made again.
   #syncBoxes() {
     const vimOn = this.#actor.snapshot?.context.vimKeys === true;
-    const regions = new Map([...this.renderRoot.querySelectorAll(".box[data-key]")].map((r) => [r.dataset.key, r]));
+    const regions = new Map([...this.renderRoot.querySelectorAll("[data-key]")].map((r) => [r.dataset.key, r]));
     for (const [key, box] of this.#boxes) {
       const region = regions.get(key);
       if (!region) {
@@ -790,19 +795,22 @@ class WheelSheet extends LitElement {
       let box = this.#boxes.get(key);
       if (!box) {
         region.replaceChildren();
-        box = { region, vimOn, label: new Compartment(), labelOn: spec.text };
+        const vim = vimOn && !spec.read;
+        box = { region, vimOn: vim, label: new Compartment(), labelOn: spec.text };
         this.#boxes.set(key, box);
         box.view = new EditorView({
           parent: region,
           // Shadow DOM: CodeMirror reads the selection through the root and mounts its
           // stylesheet there, so it must know the shadow root.
           root: this.renderRoot,
-          state: EditorState.create({ doc: spec.value, extensions: this.#extensions(key, spec, vimOn) }),
+          state: EditorState.create({ doc: spec.value, extensions: this.#extensions(key, spec, vim) }),
         });
         continue;
       }
-      box.vimOn = vimOn;
-      setVim(box.view, vimOn);
+      if (!spec.read) {
+        box.vimOn = vimOn;
+        setVim(box.view, vimOn);
+      }
       const effects = [];
       // "What makes it a 6" follows the score.
       if (box.labelOn !== spec.text) {
@@ -936,6 +944,12 @@ class WheelSheet extends LitElement {
     this.#byPress = true;
   };
 
+  // A press on the sheet's own text or blank part puts the keyboard on the section, outside the
+  // keyboard path, where j would leave the sheet; it stays with the area the keys act on.
+  #keepPath = () => {
+    if (this.renderRoot.activeElement?.tagName === "SECTION") this.#focusArea(this.#actor.snapshot.context.cursor, { preventScroll: true });
+  };
+
   // The sheet folds only once the panel is closed; then the keyboard goes to the card.
   #escape() {
     const { draft, panel } = this.#actor.snapshot.context;
@@ -1027,12 +1041,15 @@ class WheelSheet extends LitElement {
   }
 
   // A day that can be written has a box, its editor made in updated(); a press on the question
-  // puts the keyboard in it, as a label does for a field. An earlier day's answer is text.
+  // puts the keyboard in it, as a label does for a field. An earlier day's answer is only read,
+  // under a key of its own, so at 2:00 the editor that took typing goes.
   #question(spec, write) {
     if (!write) {
+      const key = `read:${spec.area}:${spec.question}`;
+      this.#wanted.set(key, { ...spec, read: true });
       return html`<div class="q">
         <span class="q-text">${spec.text}</span>
-        <span class="q-read">${spec.value}</span>
+        <div class="q-read" data-key=${key}></div>
       </div>`;
     }
     const key = `${spec.area}:${spec.question}`;
@@ -1071,7 +1088,7 @@ class WheelSheet extends LitElement {
     const write = writable(context);
     const choice = (mode, label) =>
       html`<button type="button" class=${context.mode === mode ? "on" : ""} data-mode=${mode} aria-pressed=${context.mode === mode ? "true" : "false"} @click=${() => this.#actor.send({ type: "_mode", mode })}>${label}</button>`;
-    return html`<div class="sheet ${write ? "" : "read"}" data-id=${draft.id} role="group" aria-label="Wheel of Life">
+    return html`<div class="sheet ${write ? "" : "read"}" data-id=${draft.id} role="group" aria-label="Wheel of Life" @click=${this.#keepPath}>
       <div class="wbody">
         ${write ? html`<div class="modes" role="group" aria-label="Which score a click sets">${choice("actual", "Actual")}${choice("wanted", "Wanted")}</div>` : nothing}
         <p class="caption say">${caption(context)}</p>

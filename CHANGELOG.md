@@ -13,6 +13,12 @@ All notable changes to Unblent for Mac are listed here. The format follows
   see where the gap is biggest. A new wheel starts with Wanted taken from your last one. Done
   folds it into a card with a small wheel and each area's gap. It works by mouse or by
   keyboard, with Vim keys if you have them on, works offline, and costs nothing.
+- Five optional questions behind each score of the Wheel of Life. Press an area's arrow, or
+  Enter on it, to say what a 1 and a 10 look like for you, what makes it this number and not
+  lower, what keeps it from being higher, and what would move it one point closer to Wanted.
+  Your answers about the scale carry to your next wheel with Wanted. An area with an answer
+  shows a filled arrow, and on an earlier day you read what you wrote. Delete and Undo keep
+  the answers. The answers stay in your journal; neither the chat nor an evaluator reads them.
 
 ### Changed
 

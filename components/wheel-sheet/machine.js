@@ -523,8 +523,8 @@ export const machine = setup({
       "in one box is one Undo step, apart from any stretch of rating. A change from another device " +
       "or from Undo reaches a box only while it holds nothing unsaved. With Vim keys on a box takes " +
       "the keyboard in insert mode from Enter and in normal mode from j or k, and p pastes what was " +
-      "copied in the reader. An earlier day's panel lists only what was written, as text, and says " +
-      "so when nothing was. " +
+      "copied in the reader. An earlier day's panel lists only what was written, as text, with a " +
+      "list drawn as a list, and says so when nothing was. " +
       "The up and down arrows, and with Vim keys on j, k, gg and G, move along the keyboard path: " +
       "the tabs are its first row, above the first area. On the tabs left and right, or h and l, " +
       "switch the tab. On an area they change the score of the chosen tab, and from any area " +
@@ -536,7 +536,8 @@ export const machine = setup({
       "goes in again. Escape takes one step at a time: out of Vim's insert mode, out of the box " +
       "onto its area, closing the panel, and folding the sheet; Done folds it too. Tab goes from " +
       "Actual to Wanted, to that area, to the open panel's boxes and to the buttons; the squares " +
-      "and the arrows take no Tab, so a sheet is not eighty stops long. Folded, a sheet is a card " +
+      "and the arrows take no Tab, so a sheet is not eighty stops long. A press on the sheet's own " +
+      "text or blank part leaves the keyboard on the area the keys act on. Folded, a sheet is a card " +
       "with a small wheel and, per area, its Actual, " +
       "its Wanted and the gap between them; the gap is empty when the scores match or one is " +
       "missing. Pressing the card opens it again, with Actual chosen. One sheet is open at a time: " +
@@ -549,14 +550,14 @@ export const machine = setup({
       "tabs and past the last area, j and k go on to the card next to the sheet or the page around, " +
       "and coming back they land on the tabs from above and on the last area from below. A wheel " +
       "is written exactly while the day's own text is, as the journal page says: until 2:00 the " +
-      "next night, when an open sheet becomes read only, what was typed saved and the keyboard " +
-      "moved from a box onto its area; an earlier day is read only, with no tabs " +
+      "next night, when a sheet open on a day the page stays on becomes read only, what was typed " +
+      "saved and the keyboard moved from a box onto its area; an earlier day is read only, with no tabs " +
       "and with Close, its areas taking j, k, gg, G and Enter, with Close after the last. The sheet " +
       "and the card fill the page. On a wide page the wheel and the rows stay at a fixed size on " +
       "the left, so the squares do not stretch, with the panel on the right, its two groups side " +
-      "by side, or a muted line saying to press an arrow while it is closed, and the card's scores " +
-      "stand in four columns. On a normal page the panel stands below the wheel and the rows, its " +
-      "groups side by side when there is room. A " +
+      "by side, or a muted line saying to press an arrow while it is closed. On a normal page the " +
+      "panel stands below the wheel and the rows, its groups side by side when there is room, and " +
+      "the card's scores stand in four columns once they fit. A " +
       "narrow page, such as a phone, stacks the wheel above the rows, with larger targets, and the " +
       "panel opens directly under its row, which stays in view when moving; narrower still, each " +
       "area's name and score stand above its squares.",
