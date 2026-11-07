@@ -118,6 +118,112 @@ test("clearing the last score holds the save, and the fold deletes the kept whee
   }
 });
 
+const EMPTY = Array(8).fill({});
+const carrying = { ...old, answers: [{ one: "Tired", ten: "Rested", lower: "Mine alone", higher: "Mine", closer: "Mine" }, ...EMPTY.slice(1)] };
+
+test("a second wheel carries only the scale, is not kept untouched, and is kept with an answer of its own", async () => {
+  const { sheet, store, steps, ctx, unwire } = await both([carrying]);
+  try {
+    sheet.send({ type: "add" });
+    assert.deepEqual(ctx().draft.answers[0], { one: "Tired", ten: "Rested" });
+    sheet.send({ type: "_done" });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(store.held.has(ID), false);
+    assert.deepEqual(steps(), []);
+
+    sheet.send({ type: "add" });
+    sheet.send({ type: "_edit", area: 3, question: "ten", value: "We talk" });
+    sheet.send({ type: "_boxOut" });
+    await until(() => store.held.has(ID));
+    assert.deepEqual(store.held.get(ID).actual, NONE);
+    assert.deepEqual(store.held.get(ID).wanted, WANTED);
+    assert.deepEqual(store.held.get(ID).answers[0], { one: "Tired", ten: "Rested" });
+    assert.deepEqual(store.held.get(ID).answers[3], { ten: "We talk" });
+    sheet.send({ type: "_done" });
+    assert.equal(steps().length, 1);
+  } finally {
+    unwire();
+  }
+});
+
+test("one stretch of typing in one box is one step, another box another, and a rating another", async () => {
+  const { sheet, store, steps, unwire } = await both([today]);
+  const distinct = () => new Set(steps().map((s) => s.id)).size;
+  try {
+    sheet.send({ type: "_open", id: ID });
+    sheet.send({ type: "_press", area: 0, value: 2 });
+    await until(() => store.held.get(ID).actual[0] === 2);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(distinct(), 1, "the rating");
+
+    sheet.send({ type: "_boxIn" });
+    sheet.send({ type: "_edit", area: 0, question: "one", value: "T" });
+    await until(() => store.held.get(ID).answers[0].one === "T");
+    await new Promise((r) => setTimeout(r, 0));
+    sheet.send({ type: "_edit", area: 0, question: "one", value: "Tired" });
+    sheet.send({ type: "_boxOut" });
+    await until(() => store.held.get(ID).answers[0].one === "Tired");
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(distinct(), 2, "the first box, in two saves");
+
+    sheet.send({ type: "_boxIn" });
+    sheet.send({ type: "_edit", area: 0, question: "ten", value: "Rested" });
+    sheet.send({ type: "_boxOut" });
+    await until(() => store.held.get(ID).answers[0].ten === "Rested");
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(distinct(), 3, "the second box");
+
+    sheet.send({ type: "_press", area: 1, value: 2 });
+    sheet.send({ type: "_done" });
+    await until(() => store.held.get(ID).actual[1] === 2);
+    assert.equal(distinct(), 4, "the next rating");
+  } finally {
+    unwire();
+  }
+});
+
+test("Undo of a stretch of typing puts the box back; Delete empties the wheel and its Undo brings the answers back", async () => {
+  const kept = { ...today, answers: [{ one: "Tired" }, { lower: "Hidden at no score" }, ...EMPTY.slice(2)] };
+  const { actors, sheet, store, steps, ctx, unwire } = await both([kept]);
+  const answers = kept.answers;
+  try {
+    sheet.send({ type: "_open", id: ID });
+    sheet.send({ type: "_edit", area: 0, question: "one", value: "Worn out" });
+    sheet.send({ type: "_boxOut" });
+    await until(() => store.held.get(ID).answers[0].one === "Worn out");
+    await new Promise((r) => setTimeout(r, 0));
+    const typing = steps().at(-1);
+    actors.wheels.send({ type: "step.undone", id: typing.id, owner: "wheels", payload: typing.undo });
+    await until(() => ctx().draft.answers[0].one === "Tired");
+    assert.equal(ctx().dirty, false);
+
+    sheet.send({ type: "_delete" });
+    await until(() => store.held.get(ID)?.deleted === true);
+    const removal = steps().at(-1);
+    assert.equal(removal.notice, true);
+    actors.wheels.send({ type: "step.undone", id: removal.id, owner: "wheels", payload: removal.undo });
+    await until(() => ctx().wheels.length === 1);
+    assert.deepEqual(ctx().wheels[0].answers, answers);
+    assert.deepEqual(ctx().wheels[0].actual, ACTUAL);
+  } finally {
+    unwire();
+  }
+});
+
+test("a score change keeps an answer hidden by it, through the real fact", async () => {
+  const kept = { ...today, answers: [{ lower: "Walking" }, ...EMPTY.slice(1)] };
+  const { sheet, store, unwire } = await both([kept]);
+  try {
+    sheet.send({ type: "_open", id: ID });
+    sheet.send({ type: "_press", area: 0, value: 1 });
+    sheet.send({ type: "_done" });
+    await until(() => store.held.get(ID).actual[0] === 1);
+    assert.equal(store.held.get(ID).answers[0].lower, "Walking");
+  } finally {
+    unwire();
+  }
+});
+
 test("the add command reaches the sheet through the bus with the schema the view passes at mount, from a sender that declares it", async () => {
   const { machine } = await import("../machine.js");
   const schema = JSON.parse(readFileSync(new URL("../commands/add.json", import.meta.url), "utf8"));

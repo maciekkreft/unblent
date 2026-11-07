@@ -6,12 +6,13 @@ import { setup, assign, enqueueActions, fromPromise } from "xstate";
 // a change waits to be saved —
 // and points at one fact: it asks wheels: list once, for every day, and follows wheel.changed
 // and wheel.deleted after (4.3, fourth rule), because the shown day's wheels and the wheel
-// Wanted carries over from are both read from that one list. The day comes from day.shown,
-// so the rule for which day the journal shows stays in journal-entry; `wheels` does not refuse
-// a closed day, so read only is decided here. Writing leaves as wheel.saved, at a throttle
-// while rating and at once on fold (4.3, third rule). It also asks settings: read for the
-// "Vim keys" preference (12) and follows settings.changed. The ask, the id minting, the clock
-// and the throttle arrive through input, so the machine is importable in Node.
+// Wanted and the scale carry over from are all read from that one list. The day comes from
+// day.shown, so the rule for which day the journal shows stays in journal-entry; `wheels` does
+// not refuse a closed day, so read only is decided here. Writing leaves as wheel.saved, at a
+// throttle while rating or typing and at once on fold or when a box loses the keyboard (4.3,
+// third rule). It also asks settings: read for the "Vim keys" preference (12) and follows
+// settings.changed. The ask, the id minting, the clock and the throttle arrive through input,
+// so the machine is importable in Node.
 
 // The fixed order of wheel.saved's two lists.
 export const AREAS = ["Health", "Work", "Money", "Family", "Love", "Friends", "Growth", "Fun"];
@@ -50,9 +51,15 @@ const held = (context, id) => context.wheels.find((w) => w.id === id);
 const same = (a, b) => a.every((v, i) => v === b[i]);
 const allNull = (scores) => scores.every((v) => v === null);
 
-// The answers ride along only to be shown: saved() below leaves them out, so a save keeps what
-// `wheels` holds.
-const draftOf = (w) => ({ id: w.id, day: w.day, actual: [...w.actual], wanted: [...w.wanted], answers: w.answers ?? [], rated: false });
+// Announced objects are shared by reference, so the draft holds its own copy.
+const draftOf = (w) => ({
+  id: w.id,
+  day: w.day,
+  actual: [...w.actual],
+  wanted: [...w.wanted],
+  answers: AREAS.map((_, i) => ({ ...w.answers?.[i] })),
+  rated: false,
+});
 
 // The wheels of the shown day, oldest first.
 export const dayWheels = (context) => context.wheels.filter((w) => w.day === context.day);
@@ -67,13 +74,35 @@ export function carriedFrom(context, day) {
   return newest;
 }
 
-// Whether a wheel holds anything of the user's own: not with no score at all, and not with
-// no Actual and Wanted exactly as carried over.
-export const ownScores = (context, { day, actual, wanted }) =>
-  !allNull(actual) ? true : !allNull(wanted) && !same(wanted, carriedFrom(context, day)?.wanted ?? NONE);
+// The two questions whose answers carry to the next wheel, as Wanted does.
+const SCALE = ["one", "ten"];
 
-const saved = ({ id, day, actual, wanted }, finished) => ({ type: "wheel.saved", id, day, actual, wanted, ...(finished ? { finished: true } : {}) });
-const emptied = ({ id, day }) => ({ type: "wheel.saved", id, day, actual: NONE, wanted: NONE, finished: true });
+// The scale as the wheel before it left it, one object per area, for a new wheel to start from.
+const carriedScale = (from) =>
+  AREAS.map((_, area) => Object.fromEntries(SCALE.map((q) => [q, answerOf(from?.answers, area, q)]).filter(([, text]) => hasText(text))));
+
+// An answer of this wheel's own: text that is not what the scale carried over. Emptying a carried
+// answer adds nothing of the user's own, as emptying a carried Wanted does not.
+const ownAnswers = (answers, from) =>
+  AREAS.some((_, area) =>
+    QUESTIONS.some((q) => {
+      const text = answerOf(answers, area, q);
+      return hasText(text) && !(SCALE.includes(q) && text === answerOf(from?.answers, area, q));
+    }),
+  );
+
+// Whether a wheel holds anything of the user's own: not with no score and no answer at all, and
+// not with no Actual, and Wanted and the scale exactly as carried over.
+export function holdsOwn(context, { day, actual, wanted, answers }) {
+  const from = carriedFrom(context, day);
+  if (!allNull(actual) || ownAnswers(answers, from)) return true;
+  return !allNull(wanted) && !same(wanted, from?.wanted ?? NONE);
+}
+
+// Every save names all eight areas' answers, because a list replaces what is stored and a new
+// wheel's first save must carry its scale; a hidden answer stays in it.
+const saved = ({ id, day, actual, wanted, answers }, finished) => ({ type: "wheel.saved", id, day, actual, wanted, answers, ...(finished ? { finished: true } : {}) });
+const emptied = ({ id, day }) => ({ type: "wheel.saved", id, day, actual: NONE, wanted: NONE, answers: AREAS.map(() => ({})), finished: true });
 
 // What folding the sheet sends, or null. A wheel never kept is sent only once it holds
 // something of the user's own. A kept one the user just emptied is deleted, and the save held
@@ -82,7 +111,7 @@ const emptied = ({ id, day }) => ({ type: "wheel.saved", id, day, actual: NONE, 
 function foldSave(context) {
   const { draft, dirty } = context;
   if (!draft || !writable(context)) return null;
-  const own = ownScores(context, draft);
+  const own = holdsOwn(context, draft);
   if (!held(context, draft.id)) return own ? saved(draft, true) : null;
   if (dirty && !own) return emptied(draft);
   return dirty || draft.rated ? saved(draft, true) : null;
@@ -94,34 +123,45 @@ const settle = enqueueActions(({ context, enqueue }) => {
   enqueue.assign({ draft: null, dirty: false });
 });
 
-// The throttle's end. A wheel emptied while rating is not saved: to `wheels` that save removes
-// it, and the user may be clearing a score only to set another. It stays waiting, so a change
-// from the fact does not refill what was cleared.
+// The throttle's end. A wheel emptied while rating or typing is not saved: to `wheels` that save
+// removes it, and the user may be clearing a score or an answer only to write another. It stays
+// waiting, so a change from the fact does not refill what was cleared.
 const saveWaiting = enqueueActions(({ context, enqueue }) => {
   const { draft } = context;
-  if (!context.dirty || !draft || !ownScores(context, draft)) return;
+  if (!context.dirty || !draft || !holdsOwn(context, draft)) return;
   enqueue.emit(saved(draft));
   enqueue.assign({ dirty: false, draft: { ...draft, rated: true } });
+});
+
+// A box taking or losing the keyboard ends the stretch so far: a save that says finished, so
+// `wheels` starts a new Undo step for what comes next (12, Undo). A stretch there is per wheel,
+// so without this a rating and a typing, or two boxes, would merge. An emptied wheel waits for
+// the fold, as at the throttle's end.
+const endStretch = enqueueActions(({ context, enqueue }) => {
+  const { draft, dirty } = context;
+  if (!(dirty || draft.rated) || !holdsOwn(context, draft)) return;
+  enqueue.emit(saved(draft, true));
+  enqueue.assign({ dirty: false, draft: { ...draft, rated: false } });
 });
 
 // Delete takes the wheel away whatever it holds. What waits goes first, so the Undo brings
 // back all of it; a wheel with nothing of the user's own that was never kept sends nothing.
 const discard = enqueueActions(({ context, enqueue }) => {
   const { draft, dirty } = context;
-  const own = ownScores(context, draft);
+  const own = holdsOwn(context, draft);
   if (dirty && own) enqueue.emit(saved(draft));
   if (held(context, draft.id) || own) enqueue.emit(emptied(draft));
   enqueue.assign({ draft: null, dirty: false });
 });
 
-// The day closing to writing (the journal's day ends at 2:00) keeps what was rated while it
-// was open, and the open sheet stays, now to be read. A wheel held back empty goes back to
+// The day closing to writing (the journal's day ends at 2:00) keeps what was rated or typed while
+// it was open, and the open sheet stays, now to be read. A wheel held back empty goes back to
 // what was last saved, and one never kept has nothing to read, so it goes.
 const closeDay = enqueueActions(({ context, event, enqueue }) => {
   const { draft, dirty } = context;
   if (draft && writable(context) && event.writable === false) {
     const record = held(context, draft.id);
-    if ((dirty || draft.rated) && ownScores(context, draft)) {
+    if ((dirty || draft.rated) && holdsOwn(context, draft)) {
       enqueue.emit(saved(draft, true));
       enqueue.assign({ draft: { ...draft, rated: false } });
     } else enqueue.assign({ draft: record ? draftOf(record) : null });
@@ -130,8 +170,8 @@ const closeDay = enqueueActions(({ context, event, enqueue }) => {
   enqueue.assign({ dayWritable: typeof event.writable === "boolean" ? event.writable : null });
 });
 
-// The open sheet follows a change only while nothing rated waits to be saved, so a change
-// never overwrites what is on screen; an Undo or Redo arrives this way. An older version
+// The open sheet follows a change only while nothing rated or typed waits to be saved, so a
+// change never overwrites what is on screen; an Undo or Redo arrives this way. An older version
 // than the one held is stale (4.3), and an equal one may carry a new pending flag, so it is
 // taken. Undo brings a deleted wheel back under its own id, so this also shows it again.
 const follow = assign(({ context, event }) => {
@@ -181,10 +221,33 @@ const stepScore = assign(({ context, event }) => ({
   dirty: true,
 }));
 
-// The handlers that change a score: the same in both states of rating, except that only
-// idle starts the throttle. A throttle, not a debounce, so the targetless changes while it
+// An emptied box leaves no key, as `wheels` keeps none, so what is compared later is the same.
+const setAnswer = (draft, area, question, text) => {
+  const answers = draft.answers.map((a, i) => (i === area ? { ...a } : a));
+  if (text === "") delete answers[area][question];
+  else answers[area][question] = text;
+  return { ...draft, answers };
+};
+
+const typeAnswer = assign(({ context, event }) => ({
+  draft: setAnswer(context.draft, event.area, event.question, event.value),
+  dirty: true,
+}));
+
+// The handlers that change a score or an answer: the same in both states of rating, except that
+// only idle starts the throttle. A throttle, not a debounce, so the targetless changes while it
 // runs never restart the timer.
 const scoring = (next) => ({
+  _edit: {
+    guard: ({ context, event }) =>
+      rating({ context }) &&
+      isArea(event.area) &&
+      QUESTIONS.includes(event.question) &&
+      typeof event.value === "string" &&
+      event.value !== answerOf(context.draft.answers, event.area, event.question),
+    actions: typeAnswer,
+    ...next,
+  },
   _press: {
     guard: ({ context, event }) => rating({ context }) && isArea(event.area) && Number.isInteger(event.value) && event.value >= 1 && event.value <= 10,
     actions: press,
@@ -391,6 +454,17 @@ export function rowKey(e, vimKeys, afterG = false) {
   return { j: { move: "down" }, k: { move: "up" }, G: { move: "last" } }[e.key] ?? null;
 }
 
+// A move out of a box, as the other sheets decide it: j on its last line or k on its first, in
+// Vim's normal mode, with no operator or count waiting, so dj and 2k stay Vim's.
+export function boxEdge(e, vim, line, { first, last }) {
+  if (!vim || vim.insertMode || vim.visualMode || !plain(e)) return null;
+  const s = vim.inputState;
+  if (s && (s.operator || s.keyBuffer?.length || s.prefixRepeat?.length || s.motionRepeat?.length)) return null;
+  if (e.key === "j" && line >= last) return "down";
+  if (e.key === "k" && line <= first) return "up";
+  return null;
+}
+
 // The keyboard goes back to the row under the sheets (4.3, one view instructing another).
 const handBack = ({ context }) => context.send?.("sheet-picker", "focus", {});
 
@@ -430,7 +504,8 @@ export const machine = setup({
       "the rows the filled squares are Actual and the dark outlined square is Wanted. A small key " +
       "says so. A new wheel starts with Actual empty and Wanted taken from the previous wheel, as " +
       "it stood, and the key names that wheel's day until a Wanted score is changed; the first " +
-      "wheel starts with both empty. The add command opens a new wheel on a day that can be " +
+      "wheel starts with both empty. The answers about what a 1 and a 10 look like carry over the " +
+      "same way, and the other three questions start empty. The add command opens a new wheel on a day that can be " +
       "written, with the keyboard on the first area, or the wheel the day already has; nothing is " +
       "saved until a score changes. Clicking the current score clears it. " +
       "Each area's name has an arrow, one button with the name, that opens one panel of questions " +
@@ -441,28 +516,41 @@ export const machine = setup({
       "question is hidden, at 10 the higher one, and with Actual at or above Wanted, or no Wanted, " +
       "the closer one; with no Actual the Your score group says to give one first. A hidden answer " +
       "stays stored and comes back when its question applies again. An area with an answer to a " +
-      "question that applies shows its arrow white on a filled accent circle. Answers are shown " +
-      "as text. An earlier day's panel lists only what was written, and says so when nothing was. " +
+      "question that applies shows its arrow white on a filled accent circle. Each question has " +
+      "its own text box, which can hold several lines, with a faint example under the scale's two " +
+      "until something is written, and the panel's boxes follow the area. What is typed is saved a " +
+      "short time into typing and at once when the box loses the keyboard; one stretch of typing " +
+      "in one box is one Undo step, apart from any stretch of rating. A change from another device " +
+      "or from Undo reaches a box only while it holds nothing unsaved. With Vim keys on a box takes " +
+      "the keyboard in insert mode from Enter and in normal mode from j or k, and p pastes what was " +
+      "copied in the reader. An earlier day's panel lists only what was written, as text, and says " +
+      "so when nothing was. " +
       "The up and down arrows, and with Vim keys on j, k, gg and G, move along the keyboard path: " +
       "the tabs are its first row, above the first area. On the tabs left and right, or h and l, " +
       "switch the tab. On an area they change the score of the chosen tab, and from any area " +
       "Shift+Left or Shift+H chooses Actual and Shift+Right or Shift+L chooses Wanted, changing no " +
       "score. These keys also work with the keyboard on Delete or Done, and up or down from one " +
-      "first goes to the area the keys act on. Enter on an area opens its panel. Escape closes the " +
-      "panel first, then folds the sheet; Done folds it too. Tab goes from Actual to Wanted, to " +
-      "that area, and to the buttons; the squares and the arrows take no Tab, so a sheet is not " +
-      "eighty stops long. Folded, a sheet is a card with a small wheel and, per area, its Actual, " +
+      "first goes to the area the keys act on. Enter on an area opens its panel, and Enter again " +
+      "goes into its first box. In a box j on the last line and k on the first, in Vim's normal " +
+      "mode, go to the next or the previous box, and past either end back to the area, where Enter " +
+      "goes in again. Escape takes one step at a time: out of Vim's insert mode, out of the box " +
+      "onto its area, closing the panel, and folding the sheet; Done folds it too. Tab goes from " +
+      "Actual to Wanted, to that area, to the open panel's boxes and to the buttons; the squares " +
+      "and the arrows take no Tab, so a sheet is not eighty stops long. Folded, a sheet is a card " +
+      "with a small wheel and, per area, its Actual, " +
       "its Wanted and the gap between them; the gap is empty when the scores match or one is " +
       "missing. Pressing the card opens it again, with Actual chosen. One sheet is open at a time: " +
       "opening another card folds the first. Delete takes the wheel away with the short notice " +
-      "whose Undo shows it again; a wheel left untouched, with no Actual and Wanted as carried " +
-      "over, is not kept and shows no notice, and one emptied while rating is deleted only when " +
-      "the sheet folds, so a score can be cleared and set again. After a key, a wheel that goes " +
+      "whose Undo shows it again with its answers; a wheel left untouched, with no Actual, with " +
+      "Wanted and the scale as carried over, and no answer of its own, is not kept and shows no " +
+      "notice, and one emptied while rating or typing is deleted only when the sheet folds, so a " +
+      "score or an answer can be cleared and set again. After a key, a wheel that goes " +
       "this way puts the keyboard on the + Add sheet row; after a press nothing moves. Past the " +
       "tabs and past the last area, j and k go on to the card next to the sheet or the page around, " +
       "and coming back they land on the tabs from above and on the last area from below. A wheel " +
       "is written exactly while the day's own text is, as the journal page says: until 2:00 the " +
-      "next night, when an open sheet becomes read only; an earlier day is read only, with no tabs " +
+      "next night, when an open sheet becomes read only, what was typed saved and the keyboard " +
+      "moved from a box onto its area; an earlier day is read only, with no tabs " +
       "and with Close, its areas taking j, k, gg, G and Enter, with Close after the last. The sheet " +
       "and the card fill the page. On a wide page the wheel and the rows stay at a fixed size on " +
       "the left, so the squares do not stretch, with the panel on the right, its two groups side " +
@@ -483,14 +571,15 @@ export const machine = setup({
     send: input.send,
     mint: input.mint,
     now: input.now,
+    pushRegister: input.pushRegister,
     throttleMs: input.throttleMs ?? 400,
     day: dateOf(input.now()),
     // Whether the journal page says the shown day can be written; null until it has.
     dayWritable: null,
     // Every wheel of every day as the fact last said it, oldest first.
     wheels: [],
-    // The one open sheet: { id, day, actual, wanted, rated }, rated being whether this
-    // opening has saved anything; null when none is open.
+    // The one open sheet: { id, day, actual, wanted, answers, rated }, rated being whether
+    // the stretch still open has saved anything; null when none is open.
     draft: null,
     dirty: false,
     // Which score a click or a key sets, the area the keys act on, and whether that area's
@@ -516,6 +605,10 @@ export const machine = setup({
   initial: "loading",
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    // Text or a link copied in the reader: Vim's p reads Vim's own register, not the system
+    // clipboard, so it goes there too.
+    "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     // What held the keyboard went: the row after the sheets is its natural place (4.3, one view
     // instructing another).
     _handBack: { actions: handBack },
@@ -566,7 +659,7 @@ export const machine = setup({
           actions: assign(({ context }) => {
             const kept = dayWheels(context).at(-1);
             const carried = carriedFrom(context, context.day);
-            const fresh = () => ({ id: context.mint(), day: context.day, actual: [...NONE], wanted: [...(carried?.wanted ?? NONE)], answers: [], rated: false });
+            const fresh = () => ({ id: context.mint(), day: context.day, actual: [...NONE], wanted: [...(carried?.wanted ?? NONE)], answers: carriedScale(carried), rated: false });
             return {
               draft: context.draft ?? (kept ? draftOf(kept) : fresh()),
               mode: "actual",
@@ -597,6 +690,8 @@ export const machine = setup({
         ],
         _done: { guard: ({ context }) => Boolean(context.draft), actions: settle },
         _delete: { guard: rating, actions: discard },
+        _boxIn: { guard: rating, actions: endStretch },
+        _boxOut: { guard: rating, actions: endStretch },
         "wheel.changed": { actions: follow },
         "wheel.deleted": { actions: gone },
       },

@@ -1,14 +1,35 @@
-import { LitElement, html, svg, css, nothing } from "lit";
+import { LitElement, html, svg, css, nothing, render } from "lit";
 import { mount, unmount, ask, send } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, AREAS, writable, dayWheels, summaryOf, scoreLine, wheelLabel, caption, wantedLabel, sheetKey, sheetTarget, rowKey, hasAnswer, panelOf, panelHint } from "./machine.js";
+import { EditorState, Compartment, Prec, Annotation } from "@codemirror/state";
+import { EditorView, placeholder } from "@codemirror/view";
+import { Vim, getCM } from "@replit/codemirror-vim";
+import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
+import { machine, AREAS, writable, dayWheels, summaryOf, scoreLine, wheelLabel, caption, wantedLabel, sheetKey, sheetTarget, rowKey, boxEdge, hasAnswer, panelOf, panelHint } from "./machine.js";
 import saved from "./events/wheel.saved.json" with { type: "json" };
 import add from "./commands/add.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text inside its scrolling page (the
 // product page nests it), so it scrolls with the day it is about. It is drawn like
 // choice-point-cards: the same section, card, sheet and buttons.
+
+// The answers are CodeMirror editors, one per question, built on the editor kit (10), so they
+// take Vim's keys when the "Vim keys" preference (12) is on and make paragraphs on Enter.
+
+// The box grows with what is written, from two lines; its frame is drawn around it by .box, so
+// the theme draws none. Only what differs from the kit's theme, which yields.
+const boxTheme = EditorView.theme({
+  "&": { flex: "1" },
+  ".cm-content": {
+    padding: "var(--space-xs) var(--space-sm)",
+    minHeight: "calc(var(--text-sm) * var(--leading-normal) * 2)",
+  },
+  ".cm-line": { fontSize: "var(--text-sm)" },
+});
+
+// A box's text set from the draft rather than typed, which is not sent back as an edit.
+const fromDraft = Annotation.define();
 
 // The wheel's drawing, in its own 200 by 200 units: eight areas, each ten rings out.
 const CENTER = 100;
@@ -56,11 +77,13 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
+      // Vim's registers are one per page, so text put there is what any editor's p pastes.
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         send: (target, name, payload) => send(machine, target, name, payload),
         mint: ulid,
         now: () => Date.now(),
+        pushRegister: toRegister,
       },
       events: { "wheel.saved": saved },
       commands: { add },
@@ -424,8 +447,20 @@ class WheelSheet extends LitElement {
       overflow-wrap: anywhere;
       color: var(--color-body);
     }
-    .q-read.example {
-      color: var(--color-body-mid);
+    /* CodeMirror owns everything inside .box; the frame is drawn here, around it. */
+    .box {
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      width: 100%;
+      min-width: 0;
+      color: var(--color-ink);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+    }
+    .box:focus-within {
+      box-shadow: var(--focus-ring);
     }
     .q-hint {
       display: none;
@@ -612,6 +647,14 @@ class WheelSheet extends LitElement {
   // up on a phone.
   #holding = false;
   #byPress = false;
+  // Whether a box had the keyboard before this render: when the render takes that box away (the
+  // day closed at 2:00) the keyboard stays with the sheet, on the area the box was about.
+  #inBox = false;
+  // The panel's editors by key ("<area>:<question>"), each with the region it is drawn in, and
+  // what the last render asked of each. Keyed by area, so a box's history never holds another
+  // area's text.
+  #boxes = new Map();
+  #wanted = new Map();
 
   #rows() {
     return [...(this.renderRoot?.querySelectorAll(".list > *") ?? [])];
@@ -625,11 +668,13 @@ class WheelSheet extends LitElement {
 
   willUpdate() {
     this.#holding = this.matches(":focus-within");
+    this.#inBox = Boolean(this.renderRoot?.activeElement?.closest?.(".box"));
     const snapshot = this.#actor.snapshot;
     this.toggleAttribute("idle", !snapshot || !(snapshot.matches("failed") || this.#items(snapshot.context).length));
   }
 
   updated() {
+    this.#syncBoxes();
     const context = this.#actor.snapshot?.context;
     if (context && context.landing !== this.#landed) {
       this.#landed = context.landing;
@@ -640,8 +685,140 @@ class WheelSheet extends LitElement {
       this.#focusNext = null;
     }
     if (context) this.#keepInView(context);
+    if (this.matches(":focus-within")) return;
+    if (this.#inBox && context?.draft) this.#focusArea(context.cursor);
     // What held the keyboard went (a wheel not kept, a delete, an Undo).
-    if (this.#holding && !this.#byPress && !this.matches(":focus-within")) this.#actor.send({ type: "_handBack" });
+    else if (this.#holding && !this.#byPress) this.#actor.send({ type: "_handBack" });
+  }
+
+  // A box given the keyboard by Enter takes it in Vim's insert mode when Vim keys is on, so the
+  // first key typed is text. The editor takes focus without scrolling, and the box may stand
+  // below the fold.
+  #focusBox(box) {
+    box.view.focus();
+    box.region.scrollIntoView({ block: "nearest" });
+    const cm = box.vimOn ? getCM(box.view) : null;
+    if (cm && cm.state?.vim?.insertMode !== true) Vim.handleKey(cm, "i", "user");
+  }
+
+  // Escape (12): with Vim on, an Escape in insert or visual mode is Vim's, back to normal mode;
+  // any other leaves the box onto its area. A keydown handler at Prec.highest, not a keymap,
+  // because the Vim plugin's handler runs before every keymap and would take it. The key never
+  // reaches what is around the box, so nothing there acts on it too.
+  #keys(key) {
+    return Prec.highest(
+      EditorView.domEventHandlers({
+        keydown: (event, view) => {
+          if (this.#leaveAtEdge(event, view, key)) return true;
+          if (event.key !== "Escape" || event.isComposing) return false;
+          event.stopPropagation();
+          const mode = this.#boxes.get(key)?.vimOn ? getCM(view)?.state?.vim : null;
+          if (mode?.insertMode || mode?.visualMode) return false;
+          event.preventDefault();
+          this.#focusArea(this.#actor.snapshot.context.cursor);
+          return true;
+        },
+      }),
+    );
+  }
+
+  // j on a box's last line or k on its first (boxEdge) goes to the next or the previous box of
+  // the panel, and past either end to the area, where j and k go on through the areas.
+  #leaveAtEdge(event, view, key) {
+    const box = this.#boxes.get(key);
+    if (!box?.vimOn) return false;
+    const line = view.state.doc.lineAt(view.state.selection.main.head).number;
+    const step = boxEdge(event, getCM(view)?.state?.vim, line, { first: 1, last: view.state.doc.lines });
+    if (!step) return false;
+    const regions = [...this.renderRoot.querySelectorAll(".box[data-key]")];
+    const next = regions[regions.indexOf(box.region) + (step === "down" ? 1 : -1)];
+    const to = next && this.#boxes.get(next.dataset.key);
+    if (to) this.#landIn(to, step === "down" ? "first" : "last");
+    else this.#focusArea(this.#actor.snapshot.context.cursor);
+    event.preventDefault();
+    return true;
+  }
+
+  // A box takes the keyboard in Vim's normal mode, at the start of its first line or of its last.
+  #landIn(box, edge) {
+    const { doc } = box.view.state;
+    box.view.focus();
+    const n = edge === "first" ? 1 : doc.lines;
+    box.view.dispatch({ selection: { anchor: doc.line(n).from }, scrollIntoView: true });
+  }
+
+  #extensions(key, spec, vimOn) {
+    const { area, question } = spec;
+    return [
+      this.#keys(key),
+      ...baseExtensions({ vim: vimOn }),
+      paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
+      boxTheme,
+      ...(spec.hint ? [placeholder(spec.hint)] : []),
+      this.#boxes.get(key).label.of(EditorView.contentAttributes.of({ "aria-label": spec.text })),
+      EditorView.updateListener.of((update) => {
+        if (!update.docChanged || update.transactions.every((t) => t.annotation(fromDraft))) return;
+        this.#actor.send({ type: "_edit", area, question, value: update.state.doc.toString() });
+      }),
+      EditorView.domEventHandlers({
+        focus: () => this.#actor.send({ type: "_boxIn" }),
+        blur: () => this.#actor.send({ type: "_boxOut" }),
+      }),
+    ];
+  }
+
+  // Editors are made when the panel draws a question and dropped when it goes; one kept follows
+  // its draft text (a change from the fact while nothing waits to save), its wording, and Vim.
+  // Lit draws the questions by position, so an editor moves to the region now drawn for it
+  // rather than being made again.
+  #syncBoxes() {
+    const vimOn = this.#actor.snapshot?.context.vimKeys === true;
+    const regions = new Map([...this.renderRoot.querySelectorAll(".box[data-key]")].map((r) => [r.dataset.key, r]));
+    for (const [key, box] of this.#boxes) {
+      const region = regions.get(key);
+      if (!region) {
+        box.view.destroy();
+        this.#boxes.delete(key);
+      } else if (region !== box.region || box.view.dom.parentNode !== region) {
+        region.replaceChildren(box.view.dom);
+        box.region = region;
+      }
+    }
+    for (const [key, region] of regions) {
+      const spec = this.#wanted.get(key);
+      if (!spec) continue;
+      let box = this.#boxes.get(key);
+      if (!box) {
+        region.replaceChildren();
+        box = { region, vimOn, label: new Compartment(), labelOn: spec.text };
+        this.#boxes.set(key, box);
+        box.view = new EditorView({
+          parent: region,
+          // Shadow DOM: CodeMirror reads the selection through the root and mounts its
+          // stylesheet there, so it must know the shadow root.
+          root: this.renderRoot,
+          state: EditorState.create({ doc: spec.value, extensions: this.#extensions(key, spec, vimOn) }),
+        });
+        continue;
+      }
+      box.vimOn = vimOn;
+      setVim(box.view, vimOn);
+      const effects = [];
+      // "What makes it a 6" follows the score.
+      if (box.labelOn !== spec.text) {
+        box.labelOn = spec.text;
+        effects.push(box.label.reconfigure(EditorView.contentAttributes.of({ "aria-label": spec.text })));
+      }
+      const doc = box.view.state.doc.toString();
+      const changes = doc === spec.value ? undefined : { from: 0, to: doc.length, insert: spec.value };
+      if (changes || effects.length) box.view.dispatch({ changes, effects, annotations: changes ? fromDraft.of(true) : undefined });
+    }
+  }
+
+  disconnectedCallback() {
+    for (const box of this.#boxes.values()) box.view.destroy();
+    this.#boxes.clear();
+    super.disconnectedCallback();
   }
 
   // Moving with the panel open under a row shifts the rows after the focus has scrolled, so the
@@ -693,10 +870,11 @@ class WheelSheet extends LitElement {
 
   #gAt = 0;
   #key = (event) => {
-    if (event.defaultPrevented) return;
     this.#byPress = false;
-    const { context } = this.#actor.snapshot;
     const target = event.composedPath()[0];
+    // A box decides its own keys (#keys), so j, h and l stay text.
+    if (event.defaultPrevented || target.closest?.(".box")) return;
+    const { context } = this.#actor.snapshot;
     const rows = this.#rows();
     const at = rows.findIndex((r) => r.contains(target));
     if (at < 0) return;
@@ -710,10 +888,15 @@ class WheelSheet extends LitElement {
       take();
       return this.#escape();
     }
-    // Enter on a button is the button's.
+    // Enter on a button is the button's. On an area it opens the panel, then goes into its first
+    // box; a panel only read has none, and nothing moves.
     if (onSheet && event.key === "Enter" && onArea) {
       take();
-      return this.#actor.send({ type: "_enter" });
+      if (!context.panel) return this.#actor.send({ type: "_enter" });
+      const first = this.renderRoot.querySelector(".box[data-key]");
+      const box = first && this.#boxes.get(first.dataset.key);
+      if (box) this.#focusBox(box);
+      return;
     }
     const write = onSheet && writable(context);
     const afterG = event.key === "g" && Date.now() - this.#gAt < 1000;
@@ -843,15 +1026,30 @@ class WheelSheet extends LitElement {
     </div>`;
   }
 
-  #question({ text, value, hint }) {
+  // A day that can be written has a box, its editor made in updated(); a press on the question
+  // puts the keyboard in it, as a label does for a field. An earlier day's answer is text.
+  #question(spec, write) {
+    if (!write) {
+      return html`<div class="q">
+        <span class="q-text">${spec.text}</span>
+        <span class="q-read">${spec.value}</span>
+      </div>`;
+    }
+    const key = `${spec.area}:${spec.question}`;
+    this.#wanted.set(key, spec);
+    const focus = () => {
+      const box = this.#boxes.get(key);
+      if (box) this.#focusBox(box);
+    };
     return html`<div class="q">
-      <span class="q-text">${text}</span>
-      ${value.trim() ? html`<span class="q-read">${value}</span>` : hint ? html`<span class="q-read example">${hint}</span>` : nothing}
+      <span class="q-text" aria-hidden="true" @click=${focus}>${spec.text}</span>
+      <div class="box" data-key=${key}></div>
     </div>`;
   }
 
   #panel(context, draft) {
     const { name, score, label, groups, emptyLine } = panelOf(context, draft);
+    const write = writable(context);
     return html`<div class="qs" style="order: ${context.cursor * 2 + 1}" role="group" aria-label=${label}>
       <div class="q-title"><span>${name}</span><span class="score">${score}</span></div>
       ${emptyLine ? html`<p class="caption">${emptyLine}</p>` : nothing}
@@ -861,7 +1059,7 @@ class WheelSheet extends LitElement {
               (g) => html`<div class="q-group">
                 <h4>${g.title}</h4>
                 ${g.note ? html`<p class="caption">${g.note}</p>` : nothing}
-                ${g.items.map((q) => this.#question(q))}
+                ${g.items.map((q) => this.#question({ ...q, area: context.cursor }, write))}
               </div>`,
             )}
           </div>`
@@ -909,6 +1107,7 @@ class WheelSheet extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
+    this.#wanted.clear();
     const { context } = snapshot;
     const items = this.#items(context);
     const failed = snapshot.matches("failed");
