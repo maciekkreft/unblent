@@ -885,7 +885,9 @@ export const machine = setup({
       "note, such as an Undo, shows at once while nothing typed would be lost. With Vim keys on, a new " +
       "note picked in the list (its New note row, or o or O there) starts in insert mode when " +
       "the keyboard arrives, so the user types at once; an existing note, the empty page " +
-      "waiting for a subject and a note tab on the stage start in normal mode. With `subject` it opens " +
+      "waiting for a subject and a note tab on the stage start in normal mode. What is typed in a new " +
+      "note while the notes are still loading is kept, and the keyboard handed to the editor before it " +
+      "is drawn lands in it once it is, unless it has moved on. With `subject` it opens " +
       "the most recently edited note about the subject whenever the subject changes, or an " +
       "empty page that a note about the subject arriving later fills. While a chapter is open " +
       "(the Journal's open day), it opens the most recently edited note linked to that chapter, " +
@@ -1488,11 +1490,17 @@ export const machine = setup({
             target: "choosing",
             actions: assign({ restoreId: null, restoring: false, id: null }),
           },
+          // A new note written while notes was still loading (it holds the read until then):
+          // what was typed is the note's text, the same as typing in blank.
+          { guard: ({ context, event }) => event.output.error === "not-found" && context.body !== "", target: "editing.dirty" },
           { guard: ({ event }) => event.output.error === "not-found", target: "blank" },
           { target: "failed" },
         ],
         onError: "failed",
       },
+      // The box takes keys before the read replies. Kept in body so the view does not put
+      // the box back to the empty text it last had; a note that turns out to exist replaces it.
+      on: { _typed: { actions: assignTyped } },
     },
     // The subject changed under a following editor that does not keep its note: fetch the notes
     // afresh and open the newest about the new subject, else the empty page. A keystroke

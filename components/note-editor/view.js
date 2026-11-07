@@ -1198,6 +1198,12 @@ class NoteEditor extends LitElement {
       return;
     }
     if (!this.#view) this.#build(region);
+    if (this.#focusWhenBuilt) {
+      this.#focusWhenBuilt = false;
+      // Only from where the keyboard waited: the page, or the Back button of the panel around.
+      const held = document.activeElement;
+      if (held?.localName === "body" || held === this.parentElement) this.focusEditor();
+    }
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !this.#view) return;
     const { body, vimKeys, notes, removed, checks } = snapshot.context;
@@ -1252,6 +1258,8 @@ class NoteEditor extends LitElement {
 
   // The note picked before it is written, for which updated() last started typing.
   #typingFor = null;
+  // Whether the keyboard was handed here before the editor existed.
+  #focusWhenBuilt = false;
 
   // A new note picked from the list (startsTyping, 12): the keyboard here starts in Vim's
   // insert mode, so the first letter is text, not a Vim command.
@@ -1675,8 +1683,11 @@ class NoteEditor extends LitElement {
   // dock-desk's Ctrl+h/j/k/l (12) and list-then-item focus a panel by its host: land
   // in the editor, where the typing goes.
   focus(options) {
-    if (this.#view) this.focusEditor();
-    else super.focus(options);
+    if (this.#view) return this.focusEditor();
+    // Nothing is drawn until session answers, and a list can hand the keyboard over just
+    // before that; it follows once the editor exists.
+    this.#focusWhenBuilt = true;
+    super.focus(options);
   }
 
   render() {

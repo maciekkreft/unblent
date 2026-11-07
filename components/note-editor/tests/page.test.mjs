@@ -577,6 +577,42 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
+    test("the keyboard handed over before the editor is drawn lands in it once it is", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      await signedIn(context, forgeCookie("focus-early"));
+      // The sign-in answer held, so nothing is drawn yet. The list that hands the keyboard over
+      // also waits for this answer, by a moment too short for keys to hit, so here the panel
+      // shows the editor by hand and the keyboard is handed the same way list-then-item does.
+      let release;
+      const held = new Promise((r) => (release = r));
+      await context.route(/\/api\/session\/me/, async (route) => {
+        await held;
+        await route.continue();
+      });
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      const inBox = () =>
+        page.evaluate(() => {
+          const editor = document.querySelector("#notes note-editor");
+          return editor.shadowRoot.activeElement?.classList.contains("cm-content") === true;
+        });
+      await page.waitForFunction(() => document.querySelector("#notes")?.shadowRoot?.querySelector("slot") && document.querySelector("#notes note-editor")?.shadowRoot);
+      await page.evaluate(() => {
+        const editor = document.querySelector("#notes note-editor");
+        document.querySelector("#notes").shadowRoot.querySelector("slot").assign(editor);
+        editor.focus();
+      });
+      assert.equal(await inBox(), false, "no box yet");
+      release();
+      await until(inBox);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    // Browser: focus and keys.
     test("with Vim keys o under a Heading opens a Body line, and dd on blank lines above a Heading keeps its level", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

@@ -389,6 +389,33 @@ test("typing in blank saves under the loaded id with a null base", async () => {
   assert.deepEqual(saved, [{ type: "note.saved", id: ID2, title: "made", body: "made\nhere", baseVersion: null }]);
 });
 
+test("what is typed while notes still holds the read is kept: a new note saves it, a note that exists replaces it", async () => {
+  let answer;
+  const { actor, clock, saved } = await started({
+    follows: true,
+    ask: (target, name) => (name === "read" ? new Promise((r) => (answer = r)) : Promise.resolve(name === "list" ? { notes: [] } : {})),
+  });
+  actor.send({ type: "note.selected", id: ID2 });
+  await tick();
+  assert.equal(actor.getSnapshot().value, "loading");
+  actor.send({ type: "_typed", body: "early" });
+  assert.equal(actor.getSnapshot().context.body, "early", "the view does not put the box back to empty");
+  answer({ error: "not-found" });
+  await tick();
+  assert.deepEqual(actor.getSnapshot().value, { editing: "dirty" });
+  clock.increment(THROTTLE_MS);
+  assert.deepEqual(saved, [{ type: "note.saved", id: ID2, title: "early", body: "early", baseVersion: null }]);
+
+  actor.send({ type: "note.selected", id: ID });
+  await tick();
+  actor.send({ type: "_typed", body: "early" });
+  answer({ note: NOTE });
+  await tick();
+  assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+  assert.equal(actor.getSnapshot().context.body, NOTE.body);
+  assert.deepEqual(saved.filter((s) => s.id === ID), [], "nothing of it is saved over the note");
+});
+
 test("the open note being deleted falls back to the empty page", async () => {
   const { actor } = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
   actor.send({ type: "load", id: ID });

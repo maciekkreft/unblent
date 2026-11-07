@@ -29,6 +29,11 @@ All notable changes to Unblent for Mac are listed here. The format follows
 - A Choice Point or Your values box that takes the keyboard below the fold now scrolls into
   sight.
 
+### Fixed
+
+- What you type in a new note right after the app opens is no longer lost while your notes
+  are still loading, and pressing Enter on New note that early puts you in the note.
+
 ## [0.6.0] — 2026-11-06
 
 ### Added
