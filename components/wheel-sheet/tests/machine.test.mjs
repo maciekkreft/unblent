@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, AREAS, QUESTIONS, EXAMPLES, writable, carriedFrom, holdsOwn, boxEdge, pressed, stepped, gapOf, scoreLine, summaryOf, wheelLabel, caption, wantedLabel, dayName, sheetKey, sheetTarget, rowKey, applies, wording, answerOf, hasAnswer, panelOf, panelHint } from "../machine.js";
+import { machine, AREAS, QUESTIONS, EXAMPLES, writable, carriedFrom, holdsOwn, boxEdge, pressed, stepped, gapOf, scoreLine, summaryOf, wheelLabel, caption, wantedLabel, dayName, sheetKey, sheetTarget, rowKey, applies, wording, answerOf, hasAnswer, panelOf, panelHint, panelTarget, pastLastBox } from "../machine.js";
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../events/wheel.saved.json", import.meta.url), "utf8"));
 const recorded = [];
@@ -775,8 +775,9 @@ test("the keys of a sheet: arrows always, with Shift choosing the tab; letters o
   assert.deepEqual(sheetKey(key("ArrowRight", true), false), { choose: "wanted" });
   assert.deepEqual(sheetKey(key("ArrowLeft", true), false), { choose: "actual" });
   for (const k of ["j", "k", "g", "G", "h", "l", "H", "L"]) assert.equal(sheetKey(key(k), false), null, k);
-  assert.deepEqual(sheetKey(key("j"), true), { move: "down" });
-  assert.deepEqual(sheetKey(key("k"), true), { move: "up" });
+  assert.deepEqual(sheetKey(key("j"), true), { move: "down", walk: true });
+  assert.deepEqual(sheetKey(key("k"), true), { move: "up", walk: true });
+  assert.deepEqual(sheetKey(key("ArrowDown"), true), { move: "down" }, "an arrow does not walk into a box");
   assert.deepEqual(sheetKey(key("G"), true), { move: "last" });
   assert.deepEqual(sheetKey(key("g"), true), { wait: true });
   assert.deepEqual(sheetKey(key("g"), true, true), { move: "first" });
@@ -817,6 +818,16 @@ test("a move along an earlier day's sheet: the areas, then Close, with no tabs",
   assert.equal(go("down", "close", 7), "leave");
   assert.equal(go("first", "close", 7), 0);
   assert.equal(go("last", "area", 0), 7);
+});
+
+test("j and k through an open panel: into its boxes, on to the next area, and back the same way", () => {
+  assert.deepEqual(panelTarget("down", 0), { area: 0, edge: "first" });
+  assert.deepEqual(panelTarget("down", 7), { area: 7, edge: "first" });
+  assert.deepEqual(panelTarget("up", 3), { area: 2, edge: "last" }, "k takes back the j past that box");
+  assert.equal(panelTarget("up", 0), null, "above the first area the tabs come, as without a panel");
+  assert.equal(pastLastBox(0), 1);
+  assert.equal(pastLastBox(6), 7);
+  assert.equal(pastLastBox(7), "leave");
 });
 
 test("the scores step and clear", () => {

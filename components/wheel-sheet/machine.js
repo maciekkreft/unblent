@@ -413,8 +413,10 @@ export function sheetKey(e, vimKeys, afterG = false) {
   if (e.key === "g") return afterG ? { move: "first" } : { wait: true };
   return (
     {
-      j: { move: "down" },
-      k: { move: "up" },
+      // Only j and k walk through an open panel's boxes (panelTarget): an arrow in a box moves
+      // its cursor and cannot leave it, so an arrow must not lead in.
+      j: { move: "down", walk: true },
+      k: { move: "up", walk: true },
       G: { move: "last" },
       l: { step: true, more: true },
       h: { step: true, more: false },
@@ -442,6 +444,17 @@ export function sheetTarget(move, on, cursor, write) {
   if (down) return write ? "leave" : "close";
   return write ? "tabs" : "leave";
 }
+
+// Where j or k on an area lands while its panel is open on a day that can be written: its first
+// box, or the last box of the area before, so that k takes back the j past that box (12, "Vim
+// keys"). Null above the first area, where the path goes on to the tabs as sheetTarget says.
+export function panelTarget(step, cursor) {
+  if (step === "down") return { area: cursor, edge: "first" };
+  return isArea(cursor - 1) ? { area: cursor - 1, edge: "last" } : null;
+}
+
+// Where j past an area's last box lands: the next area, or "leave" past the last one.
+export const pastLastBox = (cursor) => (isArea(cursor + 1) ? cursor + 1 : "leave");
 
 // The keys between the cards, and on a sheet only read: the arrows always, and with Vim keys
 // on j, k, gg and G. Enter needs nothing here: a card and Close are buttons, and an area takes
@@ -531,9 +544,13 @@ export const machine = setup({
       "Shift+Left or Shift+H chooses Actual and Shift+Right or Shift+L chooses Wanted, changing no " +
       "score. These keys also work with the keyboard on Delete or Done, and up or down from one " +
       "first goes to the area the keys act on. Enter on an area opens its panel, and Enter again " +
-      "goes into its first box. In a box j on the last line and k on the first, in Vim's normal " +
-      "mode, go to the next or the previous box, and past either end back to the area, where Enter " +
-      "goes in again. Escape takes one step at a time: out of Vim's insert mode, out of the box " +
+      "goes into its first box. With Vim keys on and the panel open on a day that can be written, " +
+      "j and k walk through the panel, and the arrows still move from area to area: j on an area " +
+      "goes into its first box, and in a box j on the last line and k on the first, in Vim's normal " +
+      "mode, go to the next or the previous box. k on the first box goes back onto the area, j on " +
+      "the last box goes on to the next area, whose panel then shows, and k on an area goes to the " +
+      "last box of the area before. Past the last area's last box j leaves the sheet, and k comes " +
+      "back into that box. With the panel closed j and k go from area to area. Escape takes one step at a time: out of Vim's insert mode, out of the box " +
       "onto its area, closing the panel, and folding the sheet; Done folds it too. Tab goes from " +
       "Actual to Wanted, to that area, to the open panel's boxes and to the buttons; the squares " +
       "and the arrows take no Tab, so a sheet is not eighty stops long. A press on the sheet's own " +
@@ -548,7 +565,8 @@ export const machine = setup({
       "score or an answer can be cleared and set again. After a key, a wheel that goes " +
       "this way puts the keyboard on the + Add sheet row; after a press nothing moves. Past the " +
       "tabs and past the last area, j and k go on to the card next to the sheet or the page around, " +
-      "and coming back they land on the tabs from above and on the last area from below. A wheel " +
+      "and coming back they land on the tabs from above and from below on the last area, or with " +
+      "the panel open and Vim keys on in its last box. A wheel " +
       "is written exactly while the day's own text is, as the journal page says: until 2:00 the " +
       "next night, when a sheet open on a day the page stays on becomes read only, what was typed " +
       "saved and the keyboard moved from a box onto its area; an earlier day is read only, with no tabs " +

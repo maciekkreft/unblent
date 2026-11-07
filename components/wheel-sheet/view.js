@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec, Annotation } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
-import { machine, AREAS, writable, dayWheels, summaryOf, scoreLine, wheelLabel, caption, wantedLabel, sheetKey, sheetTarget, rowKey, boxEdge, hasAnswer, panelOf, panelHint } from "./machine.js";
+import { machine, AREAS, writable, dayWheels, summaryOf, scoreLine, wheelLabel, caption, wantedLabel, sheetKey, sheetTarget, rowKey, boxEdge, hasAnswer, panelOf, panelHint, panelTarget, pastLastBox } from "./machine.js";
 import saved from "./events/wheel.saved.json" with { type: "json" };
 import add from "./commands/add.json" with { type: "json" };
 
@@ -654,6 +654,9 @@ class WheelSheet extends LitElement {
   // Whether a box had the keyboard before this render: when the render takes that box away (the
   // day closed at 2:00) the keyboard stays with the sheet, on the area the box was about.
   #inBox = false;
+  // Which box of the panel the keyboard lands in once the next render has made it: "first",
+  // "last", or null.
+  #landNext = null;
   // The panel's editors by key ("<area>:<question>"), each with the region it is drawn in, and
   // what the last render asked of each. Keyed by area, so a box's history never holds another
   // area's text.
@@ -689,6 +692,14 @@ class WheelSheet extends LitElement {
       this.#focusNext = null;
     }
     if (context) this.#keepInView(context);
+    // After keepInView, so on a phone the box ends in sight rather than the area above it.
+    if (this.#landNext) {
+      const regions = [...this.renderRoot.querySelectorAll(".box[data-key]")];
+      const region = this.#landNext === "first" ? regions[0] : regions.at(-1);
+      const box = region && this.#boxes.get(region.dataset.key);
+      if (box) this.#landIn(box, this.#landNext);
+      this.#landNext = null;
+    }
     if (this.matches(":focus-within")) return;
     if (this.#inBox && context?.draft) this.#focusArea(context.cursor);
     // What held the keyboard went (a wheel not kept, a delete, an Undo).
@@ -727,7 +738,7 @@ class WheelSheet extends LitElement {
   }
 
   // j on a box's last line or k on its first (boxEdge) goes to the next or the previous box of
-  // the panel, and past either end to the area, where j and k go on through the areas.
+  // the panel. Past the first box k goes back onto the area, and past the last j goes on.
   #leaveAtEdge(event, view, key) {
     const box = this.#boxes.get(key);
     if (!box?.vimOn) return false;
@@ -737,18 +748,43 @@ class WheelSheet extends LitElement {
     const regions = [...this.renderRoot.querySelectorAll(".box[data-key]")];
     const next = regions[regions.indexOf(box.region) + (step === "down" ? 1 : -1)];
     const to = next && this.#boxes.get(next.dataset.key);
+    const { cursor } = this.#actor.snapshot.context;
     if (to) this.#landIn(to, step === "down" ? "first" : "last");
-    else this.#focusArea(this.#actor.snapshot.context.cursor);
+    else if (step === "up") this.#focusArea(cursor);
+    else this.#pastLast(cursor);
     event.preventDefault();
     return true;
+  }
+
+  // Past the last box: the next area, or past the last area what follows the sheet. The page
+  // around ignores a key whose target is a box, where a letter is text, so the key is sent on
+  // from the host, where nothing has used it.
+  #pastLast(cursor) {
+    const to = pastLastBox(cursor);
+    if (to !== "leave") return this.#focusArea(to);
+    const rows = this.#rows();
+    const next = rows[rows.findIndex((r) => r.classList.contains("sheet")) + 1];
+    if (next) return this.#focusRow(next, "first");
+    this.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, composed: true, cancelable: true }));
+  }
+
+  // The area's panel has to render before the box exists.
+  #walkTo({ area, edge }) {
+    this.#landNext = edge;
+    this.#actor.send({ type: "_cursor", to: area });
+    this.requestUpdate();
   }
 
   // A box takes the keyboard in Vim's normal mode, at the start of its first line or of its last.
   #landIn(box, edge) {
     const { doc } = box.view.state;
     box.view.focus();
+    // A box left in insert mode, by a press outside it, would take the next j as text.
+    const cm = box.vimOn ? getCM(box.view) : null;
+    if (cm?.state?.vim?.insertMode) Vim.handleKey(cm, "<Esc>", "user");
     const n = edge === "first" ? 1 : doc.lines;
     box.view.dispatch({ selection: { anchor: doc.line(n).from }, scrollIntoView: true });
+    box.region.scrollIntoView({ block: "nearest" });
   }
 
   #extensions(key, spec, vimOn) {
@@ -862,7 +898,12 @@ class WheelSheet extends LitElement {
     const read = row.classList.contains("read");
     if (edge === "last") {
       this.#actor.send({ type: "_cursor", to: AREAS.length - 1 });
-      return this.#focusPlace(read ? "close" : AREAS.length - 1);
+      this.#focusPlace(read ? "close" : AREAS.length - 1);
+      // The area takes the keyboard at once, because the page around asks right after this
+      // whether the view took it; the box follows once it is drawn.
+      const { vimKeys, panel } = this.#actor.snapshot.context;
+      if (!read && vimKeys && panel) this.#walkTo({ area: AREAS.length - 1, edge: "last" });
+      return;
     }
     this.#focusPlace(read ? 0 : "tabs");
   }
@@ -926,6 +967,11 @@ class WheelSheet extends LitElement {
     }
     const { move } = key;
     if (onSheet) {
+      const into = key.walk && onArea && write && context.panel ? panelTarget(move, context.cursor) : null;
+      if (into) {
+        take();
+        return this.#walkTo(into);
+      }
       const on = onArea ? "area" : onTabs ? "tabs" : target.classList?.contains("close") ? "close" : "button";
       const to = sheetTarget(move, on, context.cursor, write);
       if (to !== "leave") {

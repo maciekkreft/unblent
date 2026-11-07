@@ -17,8 +17,9 @@ All notable changes to Unblent for Mac are listed here. The format follows
   Enter on it, to say what a 1 and a 10 look like for you, what makes it this number and not
   lower, what keeps it from being higher, and what would move it one point closer to Wanted.
   Your answers about the scale carry to your next wheel with Wanted. An area with an answer
-  shows a filled arrow, and on an earlier day you read what you wrote. Delete and Undo keep
-  the answers. The answers stay in your journal; neither the chat nor an evaluator reads them.
+  shows a filled arrow, and on an earlier day you read what you wrote. With Vim keys on and
+  the questions open, j and k walk from an area through its boxes to the next area and back.
+  Delete and Undo keep the answers. The answers stay in your journal; neither the chat nor an evaluator reads them.
 
 ### Changed
 

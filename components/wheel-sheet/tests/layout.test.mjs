@@ -256,7 +256,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await sheet.locator('.area[data-i="0"] .opener').click();
         await under(0);
         assert.equal(await sheet.locator(".q-title").isVisible(), false, "the row names it already");
-        for (const [key, i] of [["j", 1], ["j", 2], ["j", 3], ["k", 2], ["k", 1]]) {
+        for (const [key, i] of [["ArrowDown", 1], ["ArrowDown", 2], ["ArrowDown", 3], ["ArrowUp", 2], ["ArrowUp", 1]]) {
           await page.keyboard.press(key);
           await until(async () => (await at(page)) === String(i));
           await under(i);

@@ -127,14 +127,69 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("Escape");
         await until(async () => (await at(page)) === "0");
         assert.equal(await sheet.locator(".qs").count(), 1, "out of the box, the panel stays");
-        await page.keyboard.press("j");
-        await until(async () => (await at(page)) === "1");
-        assert.equal(await sheet.locator(".q-title span").first().innerText(), "Work", "j moves on to the next area, with the panel");
         await page.keyboard.press("Escape");
         await until(async () => (await sheet.locator(".qs").count()) === 0);
         await page.keyboard.press("Escape");
         await sheet.locator(".card").waitFor();
         assert.equal(await at(page), "card");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: focus and keys.
+    test("with Vim keys on and the panel open, j and k walk from an area through its boxes to the next area and back, and past the last area and back", async () => {
+      const { context, page, problems, sheet } = await open(browser, { vim: true });
+      try {
+        const LAST = "What would move it one point closer to Wanted?";
+        const onRow = () => page.evaluate(() => document.querySelector("sheet-picker").shadowRoot.activeElement?.className === "new");
+        const title = () => sheet.locator(".q-title span").first().innerText();
+        const press = async (key, want) => {
+          await page.keyboard.press(key);
+          await until(async () => (await inBox(page)) === want);
+        };
+        const pressOnto = async (key, area) => {
+          await page.keyboard.press(key);
+          await until(async () => (await at(page)) === area);
+        };
+
+        await press("j", ONE);
+        await press("k", null);
+        assert.equal(await at(page), "0");
+        await press("j", ONE);
+        await press("j", TEN);
+        for (let n = 0; n < 3; n += 1) await page.keyboard.press("j");
+        await until(async () => (await inBox(page)) === LAST);
+        await pressOnto("j", "1");
+        assert.equal(await title(), "Work", "the next area, with its questions");
+        await press("k", LAST);
+        assert.equal(await title(), "Health", "back in the last box of the area before");
+
+        // The arrows keep moving from area to area.
+        await pressOnto("Escape", "0");
+        await pressOnto("ArrowDown", "1");
+        await pressOnto("ArrowUp", "0");
+
+        // Past the last area's last box, and back into it.
+        await pressOnto("G", "7");
+        await press("j", ONE);
+        for (let n = 0; n < 4; n += 1) await page.keyboard.press("j");
+        await until(async () => (await inBox(page)) === LAST);
+        await page.keyboard.press("j");
+        await until(onRow);
+        await press("k", LAST);
+        assert.equal(await title(), "Fun");
+
+        // A box left typing by a press outside it takes the j as a move, not as text.
+        await pressOnto("Escape", "7");
+        await page.keyboard.press("Enter");
+        await until(async () => (await inBox(page)) === ONE);
+        await sheet.locator('.area[data-i="7"] .sq').nth(4).click();
+        await until(async () => (await at(page)) === "7");
+        await press("j", ONE);
+        await press("j", TEN);
+        assert.equal(await sheet.locator(".arrow.marked").count(), 0, "every j and k moved, and none was typed");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -167,12 +222,16 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: a gesture.
-    test("a press on the sheet's own text keeps the keyboard on the area, so j goes on through the areas rather than out of the sheet", async () => {
+    test("a press on the sheet's own text keeps the keyboard on the area, so j goes on along the sheet rather than out of it", async () => {
       const { context, page, problems, sheet } = await open(browser, { vim: true });
       try {
         await sheet.locator(".q-title").click();
         assert.equal(await at(page), "0");
         await page.keyboard.press("j");
+        await until(async () => (await inBox(page)) === ONE);
+        await page.keyboard.press("Escape");
+        await until(async () => (await at(page)) === "0");
+        await page.keyboard.press("ArrowDown");
         await until(async () => (await at(page)) === "1");
         await sheet.locator(".legend").click();
         assert.equal(await at(page), "1");
