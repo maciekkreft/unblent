@@ -19,6 +19,8 @@ const ID3 = "01ARZ3NDEKTSV4RRFFQ69G5CP3";
 const NONE = Array(8).fill(null);
 const first = (score) => [score, null, null, null, null, null, null, null];
 const EMPTY = Array(8).fill({});
+const NOFOCUS = Array(8).fill(false);
+const chose = (...areas) => NOFOCUS.map((_, i) => areas.includes(i));
 const said = (answer) => [answer, {}, {}, {}, {}, {}, {}, {}];
 
 const schema = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
@@ -67,7 +69,7 @@ function fakeApi({ pull } = {}) {
       const held = server.get(row.id);
       if (held?.deleted) return held;
       const { baseVersion, ...rest } = row;
-      const r = { answers: held?.answers, ...rest, deleted: Boolean(row.deleted), version: held ? held.version + 1 : (baseVersion || 0) + 1 };
+      const r = { answers: held?.answers, focus: held?.focus, ...rest, deleted: Boolean(row.deleted), version: held ? held.version + 1 : (baseVersion || 0) + 1 };
       server.set(row.id, r);
       return r;
     },
@@ -125,7 +127,7 @@ test("signed out: a new wheel is version 1, announced whole, and listed with its
   await ready(actor);
   actor.send(saved({ wanted: first(9) }));
   assert.equal(changed.length, 1);
-  assert.deepEqual(changed[0], { id: ID, day: DAY, actual: first(6), wanted: first(9), answers: EMPTY, version: 1, pending: false });
+  assert.deepEqual(changed[0], { id: ID, day: DAY, actual: first(6), wanted: first(9), answers: EMPTY, focus: NOFOCUS, version: 1, pending: false });
   assert.equal((await list(actor)).length, 1);
   assert.deepEqual(await list(actor, { day: DAY2 }), [], "another day has its own list");
   assert.equal(store.rows.get(ID).version, 1, "cached");
@@ -196,6 +198,30 @@ test("a stored copy holding something else than a score reads as no score", asyn
   const [wheel] = await list(actor);
   assert.deepEqual(wheel.actual, [null, null, null, null, null, 4, null, null]);
   assert.deepEqual(wheel.wanted, NONE);
+});
+
+// --- Focus -----------------------------------------------------------------------------
+
+test("the areas chosen to focus on are kept, a save without them keeps them, and they count as a change", async () => {
+  const { actor, changed } = start(fakeStore());
+  await ready(actor);
+  actor.send(saved({ focus: chose(5, 7) }));
+  assert.deepEqual(changed.at(-1).focus, chose(5, 7));
+  actor.send(saved({ actual: first(7) }));
+  assert.deepEqual(changed.at(-1).focus, chose(5, 7), "a save without focus keeps it");
+  const before = changed.length;
+  actor.send(saved({ actual: first(7), focus: chose(7) }));
+  assert.equal(changed.length, before + 1, "a new choice alone is a change");
+  assert.deepEqual((await list(actor))[0].focus, chose(7));
+});
+
+test("choosing alone keeps no wheel, and a choice that cannot be read counts as none", async () => {
+  const { actor, changed } = start(fakeStore());
+  await ready(actor);
+  actor.send(saved({ actual: NONE, focus: chose(1) }));
+  assert.equal(changed.length, 0, "no score and no answer is not a wheel, whatever is chosen");
+  actor.send(saved({ focus: ["yes", 1, null] }));
+  assert.deepEqual(changed.at(-1).focus, NOFOCUS);
 });
 
 // --- Answers ---------------------------------------------------------------------------
@@ -357,7 +383,7 @@ test("signed in: a save is pending, waits out the idle window, then is acknowled
   assert.equal(api.puts.length, 0, "not before the window");
   await drain(clock);
   assert.equal(api.puts.length, 1);
-  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["actual", "answers", "baseVersion", "day", "id", "wanted"]);
+  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["actual", "answers", "baseVersion", "day", "focus", "id", "wanted"]);
   assert.deepEqual([changed.at(-1).pending, changed.at(-1).version], [false, 1]);
   assert.equal(store.outbox.size, 0);
 });

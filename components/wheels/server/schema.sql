@@ -5,7 +5,8 @@
 -- since its cursor without a clock. deleted marks a tombstone, kept and pulled like a
 -- change, never purged. day is set when the row is born and never changes. answers is a
 -- JSON array of eight objects, read and written whole; NULL, for a row from before it,
--- reads as no answers.
+-- reads as no answers. focus is a JSON array of eight booleans, the areas the user chose to
+-- focus on; NULL, for a row from before it, reads as none chosen.
 CREATE TABLE IF NOT EXISTS wheels (
     id      TEXT PRIMARY KEY,
     day     TEXT NOT NULL,
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS wheels (
     version INTEGER NOT NULL,
     seq     INTEGER NOT NULL,
     deleted INTEGER NOT NULL DEFAULT 0,
-    answers TEXT
+    answers TEXT,
+    focus   TEXT
 );
 CREATE INDEX IF NOT EXISTS wheels_seq ON wheels(seq);

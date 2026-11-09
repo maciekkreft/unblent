@@ -9,17 +9,20 @@ All notable changes to Unblent for Mac are listed here. The format follows
 ### Added
 
 - The Wheel of Life, a new journal sheet. Rate eight areas of your life (Health, Work, Money,
-  Family, Love, Friends, Growth and Fun) with an Actual and a Wanted score from 1 to 10, and
-  see where the gap is biggest. A new wheel starts with Wanted taken from your last one. Done
-  folds it into a card with a small wheel and each area's gap. It works by mouse or by
-  keyboard, with Vim keys if you have them on, works offline, and costs nothing.
+  Family, Love, Friends, Growth and Fun) for how they are and how you want them, on a scale
+  from 1 to 9 in three sections of three: first decide low, middle or high, then the step.
+  Each area is a bar, filled up to Actual, lighter up to Wanted, with a line at Wanted. Then
+  choose the areas you will focus on. Done folds it into a card with the wheel, the areas you
+  chose, and the next step you wrote for each. A new wheel starts as a copy of your last one,
+  so you can fill it in over several days; Reset empties it. It works by mouse or by keyboard,
+  with Vim keys if you have them on, works offline, and costs nothing.
 - Five optional questions behind each score of the Wheel of Life. Press an area's arrow, or
-  Enter on it, to say what a 1 and a 10 look like for you, what makes it this number and not
+  Enter on it, to say what a 1 and a 9 look like for you, what makes it this number and not
   lower, what keeps it from being higher, and what would move it one point closer to Wanted.
-  Your answers about the scale carry to your next wheel with Wanted. An area with an answer
-  shows a filled arrow, and on an earlier day you read what you wrote. With Vim keys on and
-  the questions open, j and k walk from an area through its boxes to the next area and back.
-  Delete and Undo keep the answers. The answers stay in your journal; neither the chat nor an evaluator reads them.
+  An area with an answer shows a filled arrow, and on an earlier day you read what you wrote.
+  With Vim keys on and the questions open, j and k walk from an area through its boxes to the
+  next area and back. Delete, Reset and Undo keep the answers. The answers stay in your
+  journal; neither the chat nor an evaluator reads them.
 
 ### Changed
 

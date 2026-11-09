@@ -45,6 +45,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     columns = {row["name"] for row in connection.execute("PRAGMA table_info(wheels)")}
     if "answers" not in columns:
         connection.executescript("ALTER TABLE wheels ADD COLUMN answers TEXT")
+    if "focus" not in columns:
+        connection.executescript("ALTER TABLE wheels ADD COLUMN focus TEXT")
     try:
         with connection:
             yield connection
@@ -89,6 +91,19 @@ def _clean_answers(value) -> list[dict]:
     return cleaned
 
 
+def _is_focus(value) -> bool:
+    return isinstance(value, list) and len(value) == _AREAS and all(isinstance(chosen, bool) for chosen in value)
+
+
+# What cannot be read counts as nothing chosen, as for answers.
+def _stored_focus(text: str | None) -> list[bool]:
+    try:
+        value = json.loads(text) if text else None
+    except ValueError:
+        value = None
+    return value if _is_focus(value) else [False] * _AREAS
+
+
 def _stored_answers(text: str | None) -> list[dict]:
     try:
         return _clean_answers(json.loads(text) if text else None)
@@ -103,6 +118,7 @@ def _record(row: sqlite3.Row) -> dict:
         "actual": json.loads(row["actual"]),
         "wanted": json.loads(row["wanted"]),
         "answers": _stored_answers(row["answers"]),
+        "focus": _stored_focus(row["focus"]),
         "version": row["version"],
         "deleted": bool(row["deleted"]),
     }
@@ -134,6 +150,7 @@ async def put_wheel(wheel_id: str, request: Request, user_id: str = Depends(requ
         and (base is None or (isinstance(base, int) and not isinstance(base, bool) and base >= 1))
         and isinstance(deleted, bool)
         and ("answers" not in payload or _are_answers(payload["answers"]))
+        and ("focus" not in payload or _is_focus(payload["focus"]))
     )
     if not valid:
         return JSONResponse(_BAD, status_code=400)
@@ -144,13 +161,16 @@ async def put_wheel(wheel_id: str, request: Request, user_id: str = Depends(requ
         # answers must not erase those written elsewhere.
         held = _stored_answers(row["answers"] if row else None)
         answers = _clean_answers(payload["answers"]) if "answers" in payload else held
+        # Focus is kept the same way: a write without it leaves what was chosen.
+        held_focus = _stored_focus(row["focus"] if row else None)
+        focus = payload["focus"] if "focus" in payload else held_focus
         if row is None:
             # A new id is an idempotent upsert of the browser's own ULID (5): it continues
             # from the base the client held, or 1, so a wheel made signed out arrives with
             # its history. A tombstone can be born here, for one deleted before upload.
             connection.execute(
-                "INSERT INTO wheels (id, day, actual, wanted, answers, version, seq, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (wheel_id, day, *scores, json.dumps(answers), (base or 0) + 1, _next_seq(connection), int(deleted)),
+                "INSERT INTO wheels (id, day, actual, wanted, answers, focus, version, seq, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (wheel_id, day, *scores, json.dumps(answers), json.dumps(focus), (base or 0) + 1, _next_seq(connection), int(deleted)),
             )
             return _reread(connection, wheel_id)
         # A restore write (5, Undo in 12) names the tombstone's own version as its base and
@@ -159,18 +179,18 @@ async def put_wheel(wheel_id: str, request: Request, user_id: str = Depends(requ
         if row["deleted"]:
             if not deleted and base == row["version"]:
                 connection.execute(
-                    "UPDATE wheels SET actual = ?, wanted = ?, answers = ?, version = ?, seq = ?, deleted = 0 WHERE id = ?",
-                    (*scores, json.dumps(answers), row["version"] + 1, _next_seq(connection), wheel_id),
+                    "UPDATE wheels SET actual = ?, wanted = ?, answers = ?, focus = ?, version = ?, seq = ?, deleted = 0 WHERE id = ?",
+                    (*scores, json.dumps(answers), json.dumps(focus), row["version"] + 1, _next_seq(connection), wheel_id),
                 )
                 return _reread(connection, wheel_id)
             return _record(row)
         # What the server already holds is not a change: no new version and no new seq,
         # so a resend of a write already applied is harmless.
-        if not deleted and json.loads(row["actual"]) == actual and json.loads(row["wanted"]) == wanted and held == answers:
+        if not deleted and json.loads(row["actual"]) == actual and json.loads(row["wanted"]) == wanted and held == answers and held_focus == focus:
             return _record(row)
         connection.execute(
-            "UPDATE wheels SET actual = ?, wanted = ?, answers = ?, version = ?, seq = ?, deleted = ? WHERE id = ?",
-            (*scores, json.dumps(answers), row["version"] + 1, _next_seq(connection), int(deleted), wheel_id),
+            "UPDATE wheels SET actual = ?, wanted = ?, answers = ?, focus = ?, version = ?, seq = ?, deleted = ? WHERE id = ?",
+            (*scores, json.dumps(answers), json.dumps(focus), row["version"] + 1, _next_seq(connection), int(deleted), wheel_id),
         )
         return _reread(connection, wheel_id)
 

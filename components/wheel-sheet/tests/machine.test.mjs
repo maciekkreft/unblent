@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, AREAS, QUESTIONS, EXAMPLES, writable, carriedFrom, holdsOwn, boxEdge, pressed, stepped, gapOf, scoreLine, summaryOf, wheelLabel, caption, wantedLabel, dayName, sheetKey, sheetTarget, rowKey, applies, wording, answerOf, hasAnswer, panelOf, panelHint, panelTarget, pastLastBox } from "../machine.js";
+import { machine, AREAS, QUESTIONS, EXAMPLES, STEPS, shown, writable, carriedFrom, holdsAny, boxEdge, pressed, stepped, chosenOf, nextSteps, wheelLabel, caption, copiedLabel, dayName, sheetKey, sheetTarget, rowKey, applies, wording, answerOf, hasAnswer, panelOf, panelHint, panelTarget, pastLastBox } from "../machine.js";
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../events/wheel.saved.json", import.meta.url), "utf8"));
 const recorded = [];
@@ -80,18 +80,28 @@ test("a fact that cannot answer is an honest failure", async () => {
   assert.equal(actor.getSnapshot().matches("failed"), true);
 });
 
-test("add opens a new wheel with Actual empty and Wanted as the newest wheel before the day left it, and sends nothing", async () => {
+test("add opens a whole copy of the newest wheel before the day and saves it at once, as one finished step", async () => {
   const partly = with1(NONE, 0, 5);
-  const { actor, emitted, ctx } = await start([wheel(OLD, LONG_AGO, ACTUAL, WANTED), wheel(A, EARLIER, ACTUAL, partly)]);
+  const answers = with1(Array(8).fill({}), 7, { one: "Errands", closer: "The gym" });
+  const focus = with1(Array(8).fill(false), 7, true);
+  const { actor, emitted, ctx } = await start([wheel(OLD, LONG_AGO, ACTUAL, WANTED), { ...wheel(A, EARLIER, ACTUAL, partly), answers, focus }]);
   actor.send({ type: "add" });
   assert.equal(ctx().draft.id, NEW);
   assert.equal(ctx().draft.day, TODAY);
-  assert.deepEqual(ctx().draft.actual, NONE);
-  assert.deepEqual(ctx().draft.wanted, partly, "a partly filled wheel carries over as it stood");
+  assert.deepEqual(ctx().draft.actual, ACTUAL, "Actual is copied too");
+  assert.deepEqual(ctx().draft.wanted, partly, "a partly filled wheel is copied as it stood");
+  assert.deepEqual(ctx().draft.answers, answers, "every answer is copied");
+  assert.deepEqual(ctx().draft.focus, focus, "and the areas chosen");
   assert.equal(ctx().mode, "actual");
   assert.equal(ctx().cursor, 0);
   assert.equal(ctx().landing, 1);
-  assert.deepEqual(emitted, []);
+  assert.equal(emitted.length, 1);
+  assert.deepEqual([emitted[0].id, emitted[0].day, emitted[0].actual, emitted[0].focus, emitted[0].finished], [NEW, TODAY, ACTUAL, focus, true]);
+
+  const first = await start([]);
+  first.actor.send({ type: "add" });
+  assert.deepEqual([first.ctx().draft.actual, first.ctx().draft.wanted], [NONE, NONE], "the first wheel starts empty");
+  assert.deepEqual(first.emitted, [], "and is saved once something is set");
 });
 
 test("the first wheel starts with both empty", async () => {
@@ -153,12 +163,19 @@ test("add opens the wheel the day has instead of a second, the one open stays, a
   assert.equal(closed.ctx().landing, 0);
 });
 
-test("an untouched new wheel folds to nothing and sends nothing", async () => {
+test("an untouched first wheel folds to nothing; an untouched copy stays as it was added", async () => {
+  const first = await start([]);
+  first.actor.send({ type: "add" });
+  first.actor.send({ type: "_done" });
+  assert.equal(first.ctx().draft, null);
+  assert.deepEqual(first.emitted, []);
+
   const { actor, emitted, ctx } = await start([wheel(OLD, EARLIER)]);
   actor.send({ type: "add" });
+  actor.send({ type: "wheel.changed", wheel: wheel(NEW, TODAY) });
   actor.send({ type: "_done" });
   assert.equal(ctx().draft, null);
-  assert.deepEqual(emitted, []);
+  assert.equal(emitted.length, 1, "only the save of the add");
 });
 
 test("a click sets the chosen score, the current score clears, saves are throttled, and the fold says finished", async () => {
@@ -219,19 +236,29 @@ test("a score set again after clearing the last one saves as usual", async () =>
   assert.deepEqual(emitted.map((e) => e.actual), [with1(NONE, 1, 3)]);
 });
 
-test("a wheel with Wanted changed and no Actual is kept; changed back to as carried it is not, and the fold deletes it", async () => {
-  const { actor, emitted, tick, ctx } = await start([wheel(OLD, EARLIER, ACTUAL, WANTED)]);
+test("Reset empties the whole wheel; the fold deletes it, and rating again keeps only what is new", async () => {
+  const focus = with1(Array(8).fill(false), 2, true);
+  const { actor, emitted, tick, ctx } = await start([{ ...wheel(OLD, EARLIER), focus, answers: with1(Array(8).fill({}), 0, { one: "Tired" }) }]);
   actor.send({ type: "add" });
+  actor.send({ type: "wheel.changed", wheel: { ...wheel(NEW, TODAY), focus } });
   actor.send({ type: "_mode", mode: "wanted" });
-  actor.send({ type: "_press", area: 0, value: 3 });
+  actor.send({ type: "_reset" });
+  assert.deepEqual([ctx().draft.actual, ctx().draft.wanted, ctx().draft.focus, ctx().mode], [NONE, NONE, Array(8).fill(false), "actual"]);
+  assert.deepEqual(ctx().draft.answers, Array(8).fill({}));
   await tick();
-  assert.equal(emitted.length, 1, "Wanted changed is enough to keep it");
-  actor.send({ type: "wheel.changed", wheel: wheel(ctx().draft.id, TODAY, NONE, with1(WANTED, 0, 3)) });
-  actor.send({ type: "_press", area: 0, value: 9 });
-  await tick();
-  assert.equal(emitted.length, 1, "as carried over again, it is not saved while rating");
+  assert.equal(emitted.length, 1, "an emptied wheel is not saved while rating");
   actor.send({ type: "_done" });
-  assert.deepEqual([emitted[1].actual, emitted[1].wanted, emitted[1].finished], [NONE, NONE, true]);
+  assert.deepEqual([emitted[1].actual, emitted[1].wanted, emitted[1].focus, emitted[1].finished], [NONE, NONE, Array(8).fill(false), true], "the fold deletes it");
+
+  const again = await start([wheel(OLD, EARLIER)]);
+  again.actor.send({ type: "add" });
+  again.actor.send({ type: "_reset" });
+  again.actor.send({ type: "_press", area: 1, value: 4 });
+  await again.tick();
+  assert.deepEqual(again.emitted.at(-1).actual, with1(NONE, 1, 4));
+  again.actor.send({ type: "_reset" });
+  again.actor.send({ type: "_reset" });
+  assert.equal(again.ctx().dirty, true, "a blank wheel has nothing more to reset");
 });
 
 test("a wheel looked at and not changed sends nothing, also one that holds only what was carried", async () => {
@@ -253,7 +280,7 @@ test("a fold after the throttle already saved still says finished, so the next c
   assert.deepEqual(emitted[1].actual, emitted[0].actual);
 });
 
-test("Delete sends what waits first, then nothing at all; a new wheel left untouched sends nothing", async () => {
+test("Delete sends what waits first, then the delete; a first wheel left untouched sends nothing", async () => {
   const { actor, emitted, ctx } = await start([wheel(A, TODAY)]);
   actor.send({ type: "_open", id: A });
   actor.send({ type: "_press", area: 0, value: 1 });
@@ -266,21 +293,30 @@ test("Delete sends what waits first, then nothing at all; a new wheel left untou
   fresh.actor.send({ type: "add" });
   fresh.actor.send({ type: "_delete" });
   assert.equal(fresh.ctx().draft, null);
-  assert.deepEqual(fresh.emitted, []);
+  assert.deepEqual(
+    fresh.emitted.map((e) => e.actual),
+    [ACTUAL, NONE],
+    "the copy saved at the add, then its delete",
+  );
+
+  const first = await start([]);
+  first.actor.send({ type: "add" });
+  first.actor.send({ type: "_delete" });
+  assert.deepEqual(first.emitted, [], "a first wheel left untouched sends nothing");
 });
 
 test("a key changes the score of the chosen tab and never moves the choice; the end of the scale changes nothing", async () => {
-  const { actor, ctx, emitted, tick } = await start([wheel(A, TODAY, with1(ACTUAL, 0, 10), with1(WANTED, 0, 1))]);
+  const { actor, ctx, emitted, tick } = await start([wheel(A, TODAY, with1(ACTUAL, 0, 9), with1(WANTED, 0, 1))]);
   actor.send({ type: "_open", id: A });
   actor.send({ type: "_step", more: true });
-  assert.equal(ctx().draft.actual[0], 10, "Actual is at the end of the scale");
+  assert.equal(ctx().draft.actual[0], 9, "Actual is at the end of the scale");
   assert.equal(ctx().dirty, false);
   actor.send({ type: "_mode", mode: "wanted" });
   assert.equal(ctx().dirty, false, "choosing a tab changes no score");
   actor.send({ type: "_step", more: true });
   assert.equal(ctx().draft.wanted[0], 2);
   assert.equal(ctx().mode, "wanted", "the choice stays");
-  assert.equal(ctx().draft.actual[0], 10);
+  assert.equal(ctx().draft.actual[0], 9);
   actor.send({ type: "_mode", mode: "actual" });
   actor.send({ type: "_cursor", to: 1 });
   actor.send({ type: "_step", more: false });
@@ -390,30 +426,27 @@ test("the draft is the sheet's own copy, so typing never changes what the fact a
   assert.equal(record.answers[0].one, "Low");
 });
 
-test("a new wheel carries the scale of the newest earlier wheel with Wanted, and nothing else", async () => {
+test("a new wheel copies every answer of the newest earlier wheel, and the panel says nothing of where they came from", async () => {
   const answers = with1(EMPTY, 2, { one: "Worried", ten: "Calm", lower: "Paid off", higher: "Rent", closer: "Budget" });
   const { actor, ctx, emitted } = await start([{ ...wheel(OLD, LONG_AGO), answers: with1(EMPTY, 2, { one: "Older" }) }, { ...wheel(A, EARLIER), answers }]);
   actor.send({ type: "add" });
-  assert.deepEqual(ctx().draft.answers, with1(EMPTY, 2, { one: "Worried", ten: "Calm" }));
-  assert.equal(panelOf({ ...ctx(), cursor: 2 }, ctx().draft).groups[0].note, `From your wheel of 12 October. A change here carries to your next wheel.`);
-  assert.deepEqual(emitted, []);
+  assert.deepEqual(ctx().draft.answers, answers);
+  assert.equal(panelOf({ ...ctx(), cursor: 2 }, ctx().draft).groups[0].note, null);
+  assert.deepEqual(emitted[0].answers, answers, "saved with the copy");
 });
 
-test("an untouched new wheel is not kept, whatever carried over", async () => {
-  const answers = with1(EMPTY, 0, { one: "Low", ten: "High" });
-  const { actor, ctx, emitted, tick } = await start([{ ...wheel(OLD, EARLIER), answers }]);
+test("a first wheel holding only spaces, or an answer typed and emptied, is not kept", async () => {
+  const { actor, ctx, emitted, tick } = await start([]);
   actor.send({ type: "add" });
   actor.send({ type: "_boxIn" });
   actor.send({ type: "_boxOut" });
   actor.send({ type: "_done" });
   assert.deepEqual(emitted, []);
 
-  // Typed and put back, or a carried answer emptied, or only spaces: still nothing of its own.
   actor.send({ type: "add" });
   actor.send({ type: "_edit", area: 0, question: "one", value: "Lower" });
-  actor.send({ type: "_edit", area: 0, question: "one", value: "Low" });
+  actor.send({ type: "_edit", area: 0, question: "one", value: "" });
   await tick();
-  actor.send({ type: "_edit", area: 0, question: "ten", value: "" });
   actor.send({ type: "_edit", area: 1, question: "lower", value: "   " });
   actor.send({ type: "_boxOut" });
   actor.send({ type: "_done" });
@@ -421,16 +454,14 @@ test("an untouched new wheel is not kept, whatever carried over", async () => {
   assert.deepEqual(emitted, []);
 });
 
-test("a wheel holding only an answer is its own, and is saved with the scale it carried", async () => {
-  const answers = with1(EMPTY, 0, { one: "Low" });
-  const { actor, emitted, tick } = await start([{ ...wheel(OLD, EARLIER), answers }]);
+test("a first wheel holding only an answer is kept", async () => {
+  const { actor, emitted, tick } = await start([]);
   actor.send({ type: "add" });
   actor.send({ type: "_edit", area: 1, question: "ten", value: "A job I like" });
   await tick();
   assert.equal(emitted.length, 1);
-  assert.deepEqual(emitted[0].actual, NONE);
-  assert.deepEqual(emitted[0].wanted, WANTED);
-  assert.deepEqual(emitted[0].answers.slice(0, 2), [{ one: "Low" }, { ten: "A job I like" }]);
+  assert.deepEqual([emitted[0].actual, emitted[0].wanted], [NONE, NONE]);
+  assert.deepEqual(emitted[0].answers.slice(0, 2), [{}, { ten: "A job I like" }]);
   assert.equal(emitted[0].finished, undefined);
 });
 
@@ -568,14 +599,14 @@ test("j on a box's last line and k on its first leave it, only in Vim's normal m
   assert.equal(boxEdge(e("j"), null, 3, ends), null);
 });
 
-test("which questions apply: the scale always; not lower above 1, higher below 10, closer only below Wanted", () => {
+test("which questions apply: the scale always; not lower above 1, higher below 9, closer only below Wanted", () => {
   const live = (actual, wanted) => QUESTIONS.filter((q) => applies(q, actual, wanted));
   assert.deepEqual(live(null, 8), ["one", "ten"], "no Actual");
   assert.deepEqual(live(1, 8), ["one", "ten", "higher", "closer"], "at 1");
-  assert.deepEqual(live(10, 10), ["one", "ten", "lower"], "at 10");
+  assert.deepEqual(live(9, 9), ["one", "ten", "lower"], "at 9, the top");
   assert.deepEqual(live(5, 8), QUESTIONS);
   assert.deepEqual(live(8, 8), ["one", "ten", "lower", "higher"], "Actual at Wanted");
-  assert.deepEqual(live(9, 8), ["one", "ten", "lower", "higher"], "Actual above Wanted");
+  assert.deepEqual(live(7, 6), ["one", "ten", "lower", "higher"], "Actual above Wanted");
   assert.deepEqual(live(5, null), ["one", "ten", "lower", "higher"], "Wanted empty");
 });
 
@@ -598,7 +629,7 @@ test("the mark counts only an answer with text to a question that applies, and a
 });
 
 test("the panel's wording, examples and notes", async () => {
-  const { actor, ctx } = await start([wheel(OLD, EARLIER, ACTUAL, WANTED)]);
+  const { actor, ctx } = await start([]);
   actor.send({ type: "add" });
   const panelAt = (i) => {
     actor.send({ type: "_cursor", to: i });
@@ -606,18 +637,20 @@ test("the panel's wording, examples and notes", async () => {
   };
   const unrated = panelAt(7);
   assert.equal(unrated.name, "Fun");
-  assert.equal(unrated.score, "–/6");
   assert.equal(unrated.label, "Questions about Fun");
   assert.deepEqual(unrated.groups.map((g) => g.title), ["The scale", "Your score"]);
-  assert.deepEqual(unrated.groups[0].items.map((q) => q.text), ["What does a 1 look like for you?", "What does a 10 look like for you?"]);
+  assert.deepEqual(unrated.groups[0].items.map((q) => q.text), ["What does a 1 look like for you?", "What does a 9 look like for you?"]);
   assert.deepEqual(unrated.groups[0].items.map((q) => q.hint), EXAMPLES[7]);
-  assert.equal(unrated.groups[0].note, "Carries to your next wheel.");
+  assert.equal(unrated.groups[0].note, null);
   assert.equal(unrated.groups[1].note, "Give Fun an Actual score to answer these.");
   assert.deepEqual(unrated.groups[1].items, []);
 
+  actor.send({ type: "_mode", mode: "wanted" });
+  actor.send({ type: "_press", area: 1, value: 8 });
+  actor.send({ type: "_mode", mode: "actual" });
   actor.send({ type: "_press", area: 1, value: 6 });
   const rated = panelOf(ctx(), ctx().draft);
-  assert.equal(rated.groups[1].note, "For this wheel only.");
+  assert.equal(rated.groups[1].note, null);
   assert.deepEqual(rated.groups[1].items.map((q) => q.text), [
     "What makes it a 6, and not lower?",
     "What keeps it from being higher?",
@@ -628,17 +661,6 @@ test("the panel's wording, examples and notes", async () => {
   assert.equal(wording("lower", 3), "What makes it a 3, and not lower?");
 });
 
-test("the scale's note names the wheel it came from only while both answers are as that wheel said them", async () => {
-  const answers = atFirst({ one: "Low", ten: "High" });
-  const { actor, ctx } = await start([{ ...wheel(OLD, LONG_AGO), answers }, { ...wheel(A, TODAY), answers }, { ...wheel(B, TODAY), answers: atFirst({ one: "Low", ten: "Changed" }) }]);
-  const note = () => panelOf(ctx(), ctx().draft).groups[0].note;
-  actor.send({ type: "_open", id: A });
-  assert.equal(note(), "From your wheel of 6 October. A change here carries to your next wheel.");
-  actor.send({ type: "_cursor", to: 1 });
-  assert.equal(note(), "Carries to your next wheel.", "the wheel before said nothing here");
-  actor.send({ type: "_open", id: B });
-  assert.equal(note(), "Carries to your next wheel.");
-});
 
 test("an earlier day's panel lists only what was written, and says so when nothing was", async () => {
   const answers = with1(atFirst({ one: "Low", ten: "  ", lower: "Because", closer: "Hidden at Wanted" }), 2, { higher: "Only this" });
@@ -792,7 +814,7 @@ test("the keys of a sheet: arrows always, with Shift choosing the tab; letters o
   assert.equal(rowKey(key("ArrowLeft"), true), null, "an earlier day takes no score");
 });
 
-test("a move along a sheet you can write: the tabs, the areas, and out past either end", () => {
+test("a move along a sheet you can write: the tabs, the areas, the areas to focus on, and out past either end", () => {
   const go = (move, on, cursor) => sheetTarget(move, on, cursor, true);
   assert.equal(go("up", "area", 0), "tabs", "k from the first area lands on the tabs");
   assert.equal(go("down", "tabs", 0), 0, "and j goes back");
@@ -800,8 +822,10 @@ test("a move along a sheet you can write: the tabs, the areas, and out past eith
   assert.equal(go("up", "tabs", 0), "leave", "past the tabs");
   assert.equal(go("down", "area", 0), 1);
   assert.equal(go("up", "area", 3), 2);
-  assert.equal(go("down", "area", 7), "leave", "past the last area");
-  for (const on of ["tabs", "area", "button"]) {
+  assert.equal(go("down", "area", 7), "choose", "past the last area, the areas to focus on");
+  assert.equal(go("up", "choose", 3), 7, "and k goes back to the last area");
+  assert.equal(go("down", "choose", 3), "leave", "past the areas to focus on");
+  for (const on of ["tabs", "area", "button", "choose"]) {
     assert.equal(go("first", on, 5), 0, on);
     assert.equal(go("last", on, 5), 7, on);
   }
@@ -827,49 +851,51 @@ test("j and k through an open panel: into its boxes, on to the next area, and ba
   assert.equal(panelTarget("up", 0), null, "above the first area the tabs come, as without a panel");
   assert.equal(pastLastBox(0), 1);
   assert.equal(pastLastBox(6), 7);
-  assert.equal(pastLastBox(7), "leave");
+  assert.equal(pastLastBox(7), "choose", "past the last area's last box, the areas to focus on");
 });
 
 test("the scores step and clear", () => {
   assert.equal(pressed(6, 6), null);
   assert.equal(pressed(6, 7), 7);
   assert.equal(stepped(null, true), 1);
-  assert.equal(stepped(10, true), 10);
+  assert.equal(stepped(STEPS, true), 9, "9 is the top of the scale");
+  assert.equal(stepped(8, true), 9);
   assert.equal(stepped(1, false), null);
   assert.equal(stepped(null, false), null);
   assert.equal(stepped(5, false), 4);
 });
 
-test("a card says each area's scores and the gap, empty when they match or one is missing", () => {
-  assert.equal(gapOf(6, 9), "−3");
-  assert.equal(gapOf(9, 6), "+3");
-  assert.equal(gapOf(6, 6), "");
-  assert.equal(gapOf(null, 6), "");
-  assert.equal(gapOf(6, null), "");
-  assert.equal(scoreLine(null, 6), "–/6");
-  const summary = summaryOf({ actual: with1(NONE, 0, 6), wanted: with1(NONE, 0, 9) });
-  assert.deepEqual(summary[0], { name: "Health", score: "6/9", gap: "−3" });
-  assert.deepEqual(summary[7], { name: "Fun", score: "–/–", gap: "" });
-  assert.equal(summary.length, AREAS.length);
-  assert.match(wheelLabel({ actual: with1(NONE, 0, 6), wanted: NONE }), /^Health: actual 6, wanted not rated; Work: actual not rated/);
+test("a card names the areas chosen and the next steps written for them, and a 10 from before reads as 9", () => {
+  const focus = with1(with1(Array(8).fill(false), 5, true), 7, true);
+  const answers = with1(with1(Array(8).fill({}), 7, { closer: "Book the gym" }), 5, { one: "No one" });
+  assert.equal(chosenOf({ focus }), "Friends and Fun");
+  assert.equal(chosenOf({ focus: with1(focus, 0, true) }), "Health, Friends and Fun");
+  assert.equal(chosenOf({ focus: Array(8).fill(false) }), "");
+  assert.equal(chosenOf({}), "", "a wheel from before choosing");
+  assert.deepEqual(nextSteps({ focus, answers }), [{ name: "Fun", text: "Book the gym" }], "Friends has no closer answer");
+  assert.deepEqual(nextSteps({ focus: Array(8).fill(false), answers }), [], "an answer of an area not chosen is no next step");
+  assert.equal(shown(10), 9);
+  assert.equal(shown(null), null);
+  assert.match(wheelLabel({ actual: with1(NONE, 0, 6), wanted: with1(NONE, 0, 10) }), /^Health: actual 6, wanted 9; Work: actual not rated/);
 });
 
-test("the key names the wheel Wanted came from until a Wanted score is changed, and only where it can be", async () => {
+test("the sheet names the wheel it was copied from while it reads the same, and only where it can be", async () => {
   const { actor, ctx } = await start([wheel(OLD, LONG_AGO, ACTUAL, WANTED)]);
   actor.send({ type: "add" });
-  assert.equal(wantedLabel(ctx(), ctx().draft), "Wanted, from your wheel of 6 October");
-  actor.send({ type: "_mode", mode: "wanted" });
+  assert.equal(copiedLabel(ctx(), ctx().draft), "Copied from your wheel of 6 October.");
   actor.send({ type: "_press", area: 0, value: 1 });
-  assert.equal(wantedLabel(ctx(), ctx().draft), "Wanted");
-  actor.send({ type: "_press", area: 0, value: 9 });
-  assert.equal(wantedLabel(ctx(), ctx().draft), "Wanted, from your wheel of 6 October", "the same again is as carried");
+  assert.equal(copiedLabel(ctx(), ctx().draft), "", "any change");
+  actor.send({ type: "_press", area: 0, value: ACTUAL[0] });
+  assert.equal(copiedLabel(ctx(), ctx().draft), "Copied from your wheel of 6 October.", "the same again reads as copied");
+  actor.send({ type: "_choose", area: 3 });
+  assert.equal(copiedLabel(ctx(), ctx().draft), "", "a choice is a change too");
 
   const context = { ...ctx(), dayWritable: false };
-  assert.equal(wantedLabel(context, ctx().draft), "Wanted", "an earlier day is only read");
+  assert.equal(copiedLabel(context, ctx().draft), "", "an earlier day is only read");
 
-  const blank = await start([wheel(OLD, LONG_AGO, ACTUAL, NONE)]);
-  blank.actor.send({ type: "add" });
-  assert.equal(wantedLabel(blank.ctx(), blank.ctx().draft), "Wanted", "nothing was carried");
+  const first = await start([]);
+  first.actor.send({ type: "add" });
+  assert.equal(copiedLabel(first.ctx(), first.ctx().draft), "", "the first wheel is copied from nothing");
 
   assert.equal(dayName("2025-10-06", TODAY), "6 October 2025");
 });
@@ -883,20 +909,29 @@ test("the caption says what a click sets, and on a closed day that the scores ar
   assert.equal(caption({ ...ctx(), dayWritable: false }), "Your scores on this day.");
 });
 
-test("a wheel holds something of its own by Actual, by Wanted or the scale other than as carried, or by an answer", async () => {
-  const carried = [{ one: "Low", ten: "High" }, ...Array(7).fill({})];
-  const { ctx } = await start([{ ...wheel(OLD, EARLIER, ACTUAL, WANTED), answers: carried }]);
+test("a wheel holds something by a score or an answer with text; the areas chosen alone keep nothing", async () => {
+  const { ctx } = await start([wheel(OLD, EARLIER, ACTUAL, WANTED)]);
   assert.equal(carriedFrom(ctx(), TODAY).id, OLD);
   assert.equal(carriedFrom(ctx(), EARLIER), null);
-  const own = (actual, wanted, answers = carried) => holdsOwn(ctx(), { day: TODAY, actual, wanted, answers });
-  assert.equal(own(NONE, WANTED), false);
-  assert.equal(own(NONE, NONE), false);
-  assert.equal(own(NONE, with1(WANTED, 0, 1)), true);
-  assert.equal(own(with1(NONE, 0, 1), WANTED), true);
-  const change = (fields) => with1(carried, 0, { ...carried[0], ...fields });
-  assert.equal(own(NONE, WANTED, change({ one: "Lower" })), true, "the scale changed");
-  assert.equal(own(NONE, WANTED, with1(carried, 0, { ten: "High" })), false, "a carried answer emptied");
-  assert.equal(own(NONE, WANTED, change({ higher: "Rent" })), true, "another question answered");
-  assert.equal(own(NONE, WANTED, change({ higher: " \n " })), false, "only spaces");
-  assert.equal(own(NONE, NONE, with1(Array(8).fill({}), 1, { closer: "Call" })), true, "only an answer");
+  const empty = Array(8).fill({});
+  assert.equal(holdsAny({ actual: NONE, wanted: NONE, answers: empty }), false);
+  assert.equal(holdsAny({ actual: NONE, wanted: with1(NONE, 0, 1), answers: empty }), true, "a Wanted score");
+  assert.equal(holdsAny({ actual: with1(NONE, 0, 1), wanted: NONE, answers: empty }), true, "an Actual score");
+  assert.equal(holdsAny({ actual: NONE, wanted: NONE, answers: with1(empty, 1, { closer: "Call" }) }), true, "only an answer");
+  assert.equal(holdsAny({ actual: NONE, wanted: NONE, answers: with1(empty, 1, { closer: " \n " }) }), false, "only spaces");
+  assert.equal(holdsAny({ actual: NONE, wanted: NONE, answers: empty, focus: Array(8).fill(true) }), false, "only areas chosen");
+});
+
+test("choosing an area toggles it, is saved with the scores, and an earlier day takes no choice", async () => {
+  const { actor, ctx, emitted, tick } = await start([wheel(A, TODAY)]);
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_choose", area: 5 });
+  actor.send({ type: "_choose", area: 7 });
+  actor.send({ type: "_choose", area: 5 });
+  assert.deepEqual(ctx().draft.focus, with1(Array(8).fill(false), 7, true));
+  await tick();
+  assert.deepEqual(emitted.at(-1).focus, with1(Array(8).fill(false), 7, true));
+  actor.send({ type: "day.shown", day: TODAY, writable: false });
+  actor.send({ type: "_choose", area: 0 });
+  assert.equal(ctx().draft.focus[0], false, "read only");
 });

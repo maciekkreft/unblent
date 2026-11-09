@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec, Annotation } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
-import { machine, AREAS, writable, dayWheels, summaryOf, scoreLine, wheelLabel, caption, wantedLabel, sheetKey, sheetTarget, rowKey, boxEdge, hasAnswer, panelOf, panelHint, panelTarget, pastLastBox } from "./machine.js";
+import { machine, AREAS, STEPS, shown, writable, dayWheels, holdsAny, chosenOf, nextSteps, wheelLabel, caption, copiedLabel, sheetKey, sheetTarget, rowKey, boxEdge, hasAnswer, panelOf, panelHint, panelTarget, pastLastBox } from "./machine.js";
 import saved from "./events/wheel.saved.json" with { type: "json" };
 import add from "./commands/add.json" with { type: "json" };
 
@@ -38,10 +38,10 @@ const readOnly = [EditorState.readOnly.of(true), EditorView.editable.of(false), 
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();
 
-// The wheel's drawing, in its own 200 by 200 units: eight areas, each ten rings out.
+// The wheel's drawing, in its own 200 by 200 units: eight areas, each nine rings out.
 const CENTER = 100;
 const INNER = 10;
-const RING = 8.8;
+const RING = 88 / STEPS;
 const point = (r, a) => `${(CENTER + r * Math.cos(a)).toFixed(2)} ${(CENTER + r * Math.sin(a)).toFixed(2)}`;
 const angle = (i) => -Math.PI / 2 + (i * Math.PI) / 4;
 
@@ -58,7 +58,7 @@ const arc = (i, score) => {
   return `M${point(r, angle(i) + 0.04)} A${r} ${r} 0 0 1 ${point(r, angle(i + 1) - 0.04)}`;
 };
 
-const RINGS = Array.from({ length: 10 }, (_, n) => n + 1);
+const RINGS = Array.from({ length: STEPS }, (_, n) => n + 1);
 
 // The cells of the wheel and the Wanted line over them. Without `pick` the wheel only shows.
 const wheelPaths = ({ actual, wanted }, { cursor = -1, pick } = {}) => svg`
@@ -66,13 +66,25 @@ const wheelPaths = ({ actual, wanted }, { cursor = -1, pick } = {}) => svg`
     RINGS.map(
       (ring) =>
         svg`<path
-          class="w-cell ${(actual[i] ?? 0) >= ring ? "on" : ""} ${i === cursor ? "cur" : ""} ${pick ? "" : "ro"}"
+          class="w-cell ${(shown(actual[i]) ?? 0) >= ring ? "on" : ""} ${i === cursor ? "cur" : ""} ${pick ? "" : "ro"}"
           d=${sector(i, ring)}
           @click=${pick ? () => pick(i, ring) : nothing}
         ></path>`,
     ),
   )}
-  ${wanted.map((v, i) => (v === null ? nothing : svg`<path class="w-last" d=${arc(i, v)}></path>`))}
+  ${wanted.map((v, i) => (v === null ? nothing : svg`<path class="w-last" d=${arc(i, shown(v))}></path>`))}
+`;
+
+// The card's wheel names its areas around it, the chosen ones in bold in the accent color.
+const NAMED = 106;
+const wheelNames = (wheel) => svg`
+  ${AREAS.map((name, i) => {
+    const middle = (angle(i) + angle(i + 1)) / 2;
+    const x = CENTER + NAMED * Math.cos(middle);
+    const y = CENTER + NAMED * Math.sin(middle);
+    const anchor = Math.abs(x - CENTER) < 20 ? "middle" : x > CENTER ? "start" : "end";
+    return svg`<text class="w-name ${wheel.focus?.[i] === true ? "chosen" : ""}" x=${x.toFixed(1)} y=${y.toFixed(1)} text-anchor=${anchor} dominant-baseline="middle">${name}</text>`;
+  })}
 `;
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -178,38 +190,57 @@ class WheelSheet extends LitElement {
       border-color: var(--color-border-strong);
       background: var(--color-surface-hover);
     }
+    /* The card's wheel has room around it for the area names. */
     .mini {
       flex: none;
       display: block;
-      width: calc(var(--space-2xl) + var(--space-lg));
-      height: calc(var(--space-2xl) + var(--space-lg));
+      width: calc(var(--space-2xl) * 3 + var(--space-xl));
+      height: auto;
+      aspect-ratio: 390 / 236;
     }
-    /* The columns stop growing, so a score never stands far from its name on a wide card. */
+    .w-name {
+      font-size: calc(var(--text-sm) + var(--space-sm));
+      fill: var(--color-body-mid);
+    }
+    .w-name.chosen {
+      fill: var(--color-accent-active);
+      font-weight: var(--weight-semibold);
+    }
     .sum {
       flex: 1;
       min-width: 0;
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, calc(var(--space-2xl) * 2 + var(--space-lg))));
-      justify-content: start;
-      gap: 0 var(--space-md);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
       font-size: var(--text-sm);
     }
-    .it {
-      display: flex;
-      justify-content: space-between;
-      gap: var(--space-xs);
-    }
-    .n {
-      color: var(--color-body);
-    }
-    .v {
+    .need {
+      font-size: var(--text-body);
       color: var(--color-ink);
-      font-weight: var(--weight-semibold);
     }
-    .d {
-      font-weight: var(--weight-normal);
+    .need strong {
+      color: var(--color-accent-active);
+    }
+    .next {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+      padding-left: var(--space-sm);
+      border-left: calc(var(--space-2xs) + var(--border-width)) solid var(--color-accent);
+    }
+    .next-h {
+      font-size: var(--text-caption);
+      font-weight: var(--weight-semibold);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--color-accent-active);
+    }
+    .next-t {
+      color: var(--color-ink);
+      white-space: pre-line;
+    }
+    .none {
       color: var(--color-body-mid);
-      margin-left: var(--space-xs);
     }
     .sheet {
       display: flex;
@@ -258,7 +289,7 @@ class WheelSheet extends LitElement {
       grid-template-rows: auto auto repeat(8, auto) auto;
     }
     .modes {
-      grid-column: 1 / 3;
+      grid-column: 1 / -1;
       grid-row: 1;
       margin-bottom: var(--space-sm);
     }
@@ -320,7 +351,7 @@ class WheelSheet extends LitElement {
     .area {
       grid-column: 2;
       display: grid;
-      grid-template-columns: calc(var(--space-xl) + var(--space-md) * 2 + var(--space-2xs)) minmax(0, 1fr) calc(var(--space-xl) - var(--space-xs));
+      grid-template-columns: calc(var(--space-xl) + var(--space-md) * 2 + var(--space-2xs)) minmax(0, 1fr);
       gap: var(--space-xs);
       align-items: center;
       padding: var(--space-2xs) var(--space-xs);
@@ -372,31 +403,108 @@ class WheelSheet extends LitElement {
       background: var(--color-accent);
       color: var(--color-accent-text);
     }
+    /* One bar of nine steps. Each step is a button as tall as the row, so it is easy to press,
+       with the thin bar drawn inside it. A thin mark parts the steps and a wide one the three
+       sections, so the eye finds the section first and then the step (the marks are the left
+       edge of the step after them). The Wanted line is drawn over the marks. */
     .scale {
-      display: grid;
-      grid-template-columns: repeat(10, minmax(0, 1fr));
-      gap: var(--space-2xs);
+      display: flex;
     }
     .sq {
+      position: relative;
+      flex: 1;
+      min-width: 0;
       height: var(--space-md);
       padding: 0;
-      border: var(--border-width) solid var(--color-border-strong);
-      border-radius: var(--space-2xs);
-      background: var(--color-canvas);
+      border: 0;
+      border-radius: 0;
+      background: transparent;
     }
-    .sq.on {
+    .sq::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(50% - var(--space-xs) - var(--border-width));
+      height: calc(var(--space-sm) + var(--border-width) * 2);
+      box-sizing: border-box;
+      background: var(--color-canvas-soft);
+    }
+    .sq + .sq::before {
+      border-left: var(--border-width) solid var(--color-canvas);
+    }
+    .sq.sec::before {
+      border-left-width: calc(var(--space-2xs) * 3);
+    }
+    .sq:first-child::before {
+      border-radius: var(--space-xs) 0 0 var(--space-xs);
+    }
+    .sq:last-child::before {
+      border-radius: 0 var(--space-xs) var(--space-xs) 0;
+    }
+    .sq:not([disabled]):hover::before {
+      background: var(--color-surface-active);
+    }
+    .sq.gap::before,
+    .sq.gap:not([disabled]):hover::before {
+      background: var(--color-accent-selection);
+    }
+    .sq.on::before,
+    .sq.on:not([disabled]):hover::before {
       background: var(--color-accent);
-      border-color: var(--color-accent);
     }
-    .sq.was {
-      border: var(--space-2xs) solid var(--color-ink);
+    .sq.was::after {
+      content: "";
+      position: absolute;
+      z-index: 1;
+      top: calc(50% - var(--space-sm));
+      height: var(--space-md);
+      width: calc(var(--space-2xs) + var(--border-width));
+      right: calc((var(--space-2xs) + var(--border-width) + var(--border-width)) / -2);
+      border-radius: var(--border-width);
+      background: var(--color-ink);
+    }
+    .sq.was.pre::after {
+      right: calc((var(--space-2xs) + var(--border-width) + var(--space-2xs) * 3) / -2);
+    }
+    .sq.was:last-child::after {
+      right: 0;
     }
     .sq[disabled] {
       cursor: default;
     }
-    .score {
-      text-align: right;
-      font-size: var(--text-caption);
+    /* The areas to focus on, under the rows. */
+    .choose {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      padding-top: var(--space-sm);
+      border-top: var(--border-width) solid var(--color-border);
+    }
+    .choose-q {
+      margin: 0;
+      font-size: var(--text-sm);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-xs);
+    }
+    .chip {
+      padding: var(--space-2xs) var(--space-sm);
+      border-radius: var(--radius-full);
+      color: var(--color-body);
+    }
+    .chip:hover {
+      background: var(--color-surface-hover);
+    }
+    .chip.on,
+    .chip.on:hover {
+      background: var(--color-accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent-text);
       font-weight: var(--weight-semibold);
     }
     .qs {
@@ -481,20 +589,28 @@ class WheelSheet extends LitElement {
       text-wrap: balance;
     }
     .legend b,
-    .legend i {
+    .legend em {
       display: inline-block;
       flex: none;
       width: calc(var(--space-md) - var(--space-xs));
-      height: calc(var(--space-md) - var(--space-xs));
-      box-sizing: border-box;
+      height: var(--space-sm);
       border-radius: var(--space-2xs);
     }
     .legend b {
       background: var(--color-accent);
     }
-    .legend i {
+    .legend em {
       margin-left: var(--space-sm);
-      border: var(--space-2xs) solid var(--color-ink);
+      background: var(--color-accent-selection);
+    }
+    .legend i {
+      display: inline-block;
+      flex: none;
+      margin-left: var(--space-sm);
+      width: calc(var(--space-2xs) + var(--border-width));
+      height: calc(var(--space-md) - var(--space-xs));
+      border-radius: var(--border-width);
+      background: var(--color-ink);
     }
     .buttons {
       flex: none;
@@ -508,6 +624,12 @@ class WheelSheet extends LitElement {
     }
     .buttons button:hover {
       background: var(--color-surface-hover);
+    }
+    .buttons button[disabled],
+    .buttons button[disabled]:hover {
+      cursor: default;
+      background: var(--color-canvas);
+      color: var(--color-mute);
     }
     .buttons .done {
       background: var(--color-accent);
@@ -532,13 +654,6 @@ class WheelSheet extends LitElement {
         gap: var(--space-lg);
       }
     }
-    /* Four columns of scores with the small wheel beside them need this much of the card. */
-    @container (width >= 52rem) {
-      .sum {
-        grid-template-columns: repeat(4, calc(var(--space-2xl) * 2 + var(--space-lg)));
-        gap: 0 var(--space-lg);
-      }
-    }
     /* A wide page has room for the panel beside the wheel and the rows: from this width each
        box holds about five words a line, and narrower ones wrap a sentence over four lines, where
        the panel below the rows reads better. The last row track is flexible so a tall panel does
@@ -550,7 +665,7 @@ class WheelSheet extends LitElement {
       .qs,
       .q-hint {
         grid-column: 3;
-        grid-row: 1 / -1;
+        grid-row: 2 / -1;
         margin: 0 0 0 var(--space-lg);
         padding: 0 0 0 var(--space-lg);
         border-top: 0;
@@ -599,30 +714,17 @@ class WheelSheet extends LitElement {
       .foot {
         flex-wrap: wrap;
       }
+      /* Delete, Reset and Done wrap rather than run past the sheet. */
+      .buttons {
+        flex: 1 1 auto;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
       .modes button {
         min-height: var(--space-xl);
       }
       .sq {
         height: calc(var(--space-md) * 2);
-      }
-      .sum {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
-    /* Narrower still (a stage squeezed between both panels, a small phone): the name and score
-       stand above the squares, which otherwise get too thin to press, and the small wheel above
-       its card's lines. */
-    @container (width < 20rem) {
-      .area {
-        grid-template-columns: minmax(0, 1fr) auto;
-      }
-      .scale {
-        grid-column: 1 / -1;
-        grid-row: 2;
-      }
-      .score {
-        grid-column: 2;
-        grid-row: 1;
       }
       .card {
         flex-direction: column;
@@ -630,6 +732,16 @@ class WheelSheet extends LitElement {
       }
       .mini {
         align-self: center;
+      }
+    }
+    /* Narrower still (a stage squeezed between both panels, a small phone): the name stands
+       above the bar, whose steps otherwise get too thin to press. */
+    @container (width < 20rem) {
+      .area {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .scale {
+        grid-row: 2;
       }
     }
   `;
@@ -662,6 +774,8 @@ class WheelSheet extends LitElement {
   // area's text.
   #boxes = new Map();
   #wanted = new Map();
+  // Which name of the row of areas to focus on the keyboard last stood on.
+  #chip = 0;
 
   #rows() {
     return [...(this.renderRoot?.querySelectorAll(".list > *") ?? [])];
@@ -756,16 +870,11 @@ class WheelSheet extends LitElement {
     return true;
   }
 
-  // Past the last box: the next area, or past the last area what follows the sheet. The page
-  // around ignores a key whose target is a box, where a letter is text, so the key is sent on
-  // from the host, where nothing has used it.
+  // Past the last box: the next area, or past the last area the row of areas to focus on.
   #pastLast(cursor) {
     const to = pastLastBox(cursor);
-    if (to !== "leave") return this.#focusArea(to);
-    const rows = this.#rows();
-    const next = rows[rows.findIndex((r) => r.classList.contains("sheet")) + 1];
-    if (next) return this.#focusRow(next, "first");
-    this.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true, composed: true, cancelable: true }));
+    if (to === "choose") return this.#focusPlace(to);
+    return this.#focusArea(to);
   }
 
   // The area's panel has to render before the box exists.
@@ -888,7 +997,14 @@ class WheelSheet extends LitElement {
   // Where a move inside the sheet landed (sheetTarget).
   #focusPlace(place) {
     if (typeof place === "number") return this.#focusArea(place);
+    if (place === "choose") return this.#focusChip(this.#chip);
     this.renderRoot.querySelector(place === "tabs" ? ".modes button.on" : ".close")?.focus();
+  }
+
+  #focusChip(i) {
+    this.#chip = Math.max(0, Math.min(AREAS.length - 1, i));
+    this.requestUpdate();
+    this.renderRoot.querySelector(`.chip[data-c="${this.#chip}"]`)?.focus();
   }
 
   // A card takes the keyboard itself; an open sheet at the end of its path it is entered from:
@@ -898,12 +1014,7 @@ class WheelSheet extends LitElement {
     const read = row.classList.contains("read");
     if (edge === "last") {
       this.#actor.send({ type: "_cursor", to: AREAS.length - 1 });
-      this.#focusPlace(read ? "close" : AREAS.length - 1);
-      // The area takes the keyboard at once, because the page around asks right after this
-      // whether the view took it; the box follows once it is drawn.
-      const { vimKeys, panel } = this.#actor.snapshot.context;
-      if (!read && vimKeys && panel) this.#walkTo({ area: AREAS.length - 1, edge: "last" });
-      return;
+      return this.#focusPlace(read ? "close" : "choose");
     }
     this.#focusPlace(read ? 0 : "tabs");
   }
@@ -954,6 +1065,13 @@ class WheelSheet extends LitElement {
     if (!key) return;
     if (key.wait) return event.preventDefault();
     const onTabs = target.parentElement?.classList.contains("modes") === true;
+    const onChip = target.classList?.contains("chip") === true;
+    // On the row of areas to focus on left and right move between the names; Space and Enter
+    // are the button's own.
+    if (key.step && onChip) {
+      take();
+      return this.#focusChip(Number(target.dataset.c) + (key.more ? 1 : -1));
+    }
     // On the tabs left and right switch them, and the keyboard goes with the choice.
     if (key.choose || (key.step && onTabs)) {
       take();
@@ -972,7 +1090,12 @@ class WheelSheet extends LitElement {
         take();
         return this.#walkTo(into);
       }
-      const on = onArea ? "area" : onTabs ? "tabs" : target.classList?.contains("close") ? "close" : "button";
+      // k from the row of areas to focus on goes back into the last area's last box, the way j came.
+      if (onChip && move === "up" && key.walk && write && context.panel) {
+        take();
+        return this.#walkTo({ area: AREAS.length - 1, edge: "last" });
+      }
+      const on = onArea ? "area" : onTabs ? "tabs" : onChip ? "choose" : target.classList?.contains("close") ? "close" : "button";
       const to = sheetTarget(move, on, context.cursor, write);
       if (to !== "leave") {
         take();
@@ -1019,6 +1142,16 @@ class WheelSheet extends LitElement {
     this.#send({ type: "_open", id }, '.area[data-i="0"]');
   }
 
+  // A press keeps the keyboard on the name pressed.
+  #choose(i) {
+    this.#chip = i;
+    this.#actor.send({ type: "_choose", area: i });
+  }
+
+  #reset() {
+    this.#actor.send({ type: "_reset" });
+  }
+
   // A press sets the score and leaves the keyboard on that area, without scrolling to it: on a
   // phone the rows may stand below the wheel that was pressed.
   #pick = (area, value) => {
@@ -1037,13 +1170,17 @@ class WheelSheet extends LitElement {
     this.#focusArea(area, { preventScroll: true });
   }
 
-  #card(w) {
+  #card(context, w) {
+    const chosen = chosenOf(w);
+    const steps = nextSteps(w);
+    const none = writable(context) ? "Open the wheel to choose the areas you will focus on." : "No areas chosen on this day.";
     return html`<button type="button" class="card" data-id=${w.id} aria-label="Wheel of Life, press to open" @click=${() => this.#open(w.id)}>
-      <svg class="mini" viewBox="0 0 200 200" aria-hidden="true">${wheelPaths(w)}</svg>
+      <svg class="mini" viewBox="-95 -18 390 236" aria-hidden="true">${wheelPaths(w)}${wheelNames(w)}</svg>
       <span class="sum">
-        ${summaryOf(w).map(
-          ({ name, score, gap }) => html`<span class="it"><span class="n">${name}</span><span class="v">${score}<span class="d">${gap}</span></span></span>`,
-        )}
+        ${chosen
+          ? html`<span class="need">You chose to focus on: <strong>${chosen}</strong></span>
+              ${steps.map((s) => html`<span class="next"><span class="next-h">Your next step · ${s.name}</span><span class="next-t">${s.text}</span></span>`)}`
+          : html`<span class="none">${none}</span>`}
       </span>
     </button>`;
   }
@@ -1070,11 +1207,11 @@ class WheelSheet extends LitElement {
       </button>
       <span class="scale">
         ${Array.from(
-          { length: 10 },
+          { length: STEPS },
           (_, n) =>
             html`<button
               type="button"
-              class="sq ${(draft.actual[i] ?? 0) > n ? "on" : ""} ${draft.wanted[i] === n + 1 ? "was" : ""}"
+              class="sq ${(draft.actual[i] ?? 0) > n ? "on" : (draft.wanted[i] ?? 0) > n ? "gap" : ""} ${draft.wanted[i] === n + 1 ? "was" : ""} ${n % 3 === 0 && n > 0 ? "sec" : ""} ${n % 3 === 2 ? "pre" : ""}"
               aria-label="${name} ${n + 1}"
               tabindex="-1"
               ?disabled=${!write}
@@ -1082,7 +1219,6 @@ class WheelSheet extends LitElement {
             ></button>`,
         )}
       </span>
-      <span class="score">${scoreLine(draft.actual[i], draft.wanted[i])}</span>
     </div>`;
   }
 
@@ -1111,10 +1247,10 @@ class WheelSheet extends LitElement {
   }
 
   #panel(context, draft) {
-    const { name, score, label, groups, emptyLine } = panelOf(context, draft);
+    const { name, label, groups, emptyLine } = panelOf(context, draft);
     const write = writable(context);
     return html`<div class="qs" style="order: ${context.cursor * 2 + 1}" role="group" aria-label=${label}>
-      <div class="q-title"><span>${name}</span><span class="score">${score}</span></div>
+      <div class="q-title"><span>${name}</span></div>
       ${emptyLine ? html`<p class="caption">${emptyLine}</p>` : nothing}
       ${groups.length
         ? html`<div class="q-groups">
@@ -1147,14 +1283,38 @@ class WheelSheet extends LitElement {
         </div>
         ${context.panel ? nothing : html`<p class="caption q-hint">${panelHint(context)}</p>`}
       </div>
+      ${write ? this.#chooser(draft) : chosenOf(draft) ? html`<p class="caption">You chose to focus on ${chosenOf(draft)}.</p>` : nothing}
+      ${copiedLabel(context, draft) ? html`<p class="caption copied">${copiedLabel(context, draft)}</p>` : nothing}
       <div class="foot">
-        <span class="caption legend"><b></b>Actual<i></i>${wantedLabel(context, draft)}</span>
+        <span class="caption legend"><b></b>Actual<em></em>Gap<i></i>Wanted</span>
         <div class="buttons">
           ${write
             ? html`<button type="button" class="delete" @click=${() => this.#delete()}>Delete</button>
+                <button type="button" class="reset" ?disabled=${!holdsAny(draft) && !draft.focus.some(Boolean)} @click=${() => this.#reset()}>Reset</button>
                 <button type="button" class="done" @click=${() => this.#done()}>Done</button>`
             : html`<button type="button" class="close" @click=${() => this.#done()}>Close</button>`}
         </div>
+      </div>
+    </div>`;
+  }
+
+  // The names take no Tab but the one the keyboard last stood on, so the row is one stop.
+  #chooser(draft) {
+    return html`<div class="choose" role="group" aria-label="Which areas will you focus on?">
+      <p class="choose-q">Which areas will you focus on?</p>
+      <div class="chips">
+        ${AREAS.map(
+          (name, i) =>
+            html`<button
+              type="button"
+              class="chip ${draft.focus[i] ? "on" : ""}"
+              data-c=${i}
+              aria-pressed=${draft.focus[i] ? "true" : "false"}
+              tabindex=${i === this.#chip ? "0" : "-1"}
+              @focus=${() => (this.#chip = i)}
+              @click=${() => this.#choose(i)}
+            >${name}</button>`,
+        )}
       </div>
     </div>`;
   }
@@ -1180,7 +1340,7 @@ class WheelSheet extends LitElement {
       ${failed
         ? html`<p class="empty">The Wheel of Life is unavailable.</p>`
         : html`<div class="list" @keydown=${this.#key} @pointerdown=${this.#press}>
-            ${items.map((w) => (context.draft?.id === w.id ? this.#sheet(context, context.draft) : this.#card(w)))}
+            ${items.map((w) => (context.draft?.id === w.id ? this.#sheet(context, context.draft) : this.#card(context, w)))}
           </div>`}
     </section>`;
   }

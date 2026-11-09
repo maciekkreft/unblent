@@ -72,26 +72,25 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await sheet.evaluate((el, w) => (el.style.width = w), `${width}px`);
       await sheet.locator(".card").waitFor();
       const box = (sel) => sheet.locator(sel).first().boundingBox();
-      const columns = () => inSheet(page, (root) => getComputedStyle(root.querySelector(".sum")).gridTemplateColumns.split(" ").length);
-      const cardColumns = await columns();
       await sheet.locator(".card").click();
       await sheet.locator(".sheet").waitFor();
-      return { context, page, problems, sheet, box, cardColumns };
+      return { context, page, problems, sheet, box };
     };
 
     // Browser: rendering and layout.
     test("wide: the sheet fills the page, the wheel and rows keep their size on the left, and the panel stands on the right with its groups side by side", async () => {
-      const { context, problems, sheet, box, cardColumns } = await atWidth(1150);
+      const { context, problems, sheet, box } = await atWidth(1150);
       try {
         assert.equal((await box(".sheet")).width, 1150, "no form's width any more");
-        assert.equal(cardColumns, 4);
+        const tabs = await box(".modes");
+        assert.ok(tabs.width >= 1150 - 2 * 17, "Actual and Wanted span the whole sheet");
         const wheel = await box(".wheel");
         const first = await box('.area[data-i="0"]');
         const second = await box('.area[data-i="1"]');
         const square = await box(".sq");
         assert.equal(wheel.width, 172);
         assert.ok(wheel.x + wheel.width <= first.x, "the wheel beside the rows");
-        assert.ok(square.width <= 2 * square.height, "a square stays near square");
+        assert.ok(square.width <= 2 * square.height, "a step of the bar does not stretch");
         const hint = sheet.locator(".q-hint");
         assert.equal(await hint.innerText(), "Press an area’s arrow to write about it.");
         const hintAt = await box(".q-hint");
@@ -115,16 +114,11 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
-    test("the panel goes beside the rows only where each box still holds a sentence on two lines, and the card takes four columns where they fit", async () => {
+    test("the panel goes beside the rows only where each box still holds a sentence on two lines", async () => {
       const { context, problems, sheet } = await open(browser, { viewport: { width: 1600, height: 900 } });
       try {
         const width = (w) => sheet.evaluate((el, v) => (el.style.width = v), `${w}px`);
-        const columns = () => sheet.evaluate((el) => getComputedStyle(el.shadowRoot.querySelector(".sum")).gridTemplateColumns.split(" ").length);
         await sheet.locator(".card").waitFor();
-        await width(832);
-        assert.equal(await columns(), 4);
-        await width(831);
-        assert.equal(await columns(), 2);
         await sheet.locator(".card").click();
         await sheet.locator('.area[data-i="0"] .opener').click();
         const box = (sel) => sheet.locator(sel).first().boundingBox();
@@ -142,9 +136,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
     // Browser: rendering and layout.
     test("normal: the panel stands below the wheel and the rows, and no line says to press an arrow", async () => {
-      const { context, problems, sheet, box, cardColumns } = await atWidth(462);
+      const { context, problems, sheet, box } = await atWidth(462);
       try {
-        assert.equal(cardColumns, 2);
         assert.equal((await box(".sheet")).width, 462);
         assert.equal(await sheet.locator(".q-hint").isVisible(), false);
         assert.ok((await box(".wheel")).x + (await box(".wheel")).width <= (await box('.area[data-i="7"]')).x, "the wheel beside the rows");
@@ -170,7 +163,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const { context, problems, sheet, box } = await atWidth(806);
       try {
         const square = await box(".sq");
-        assert.ok(square.width <= 2 * square.height, "a square stays near square");
+        assert.ok(square.width <= 2 * square.height, "a step of the bar does not stretch");
         await sheet.locator('.area[data-i="2"] .opener').click();
         assert.ok((await box(".qs")).y >= (await box('.area[data-i="7"]')).y);
         const groups = sheet.locator(".q-group");
@@ -213,9 +206,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const wheelAt = await box(".wheel");
         assert.ok(wheelAt.x >= sheetAt.x && wheelAt.x + wheelAt.width <= sheetAt.x + sheetAt.width, "the wheel stays inside the sheet");
         assert.ok((await box(".sq")).width >= 10, "a square can be pressed");
-        assert.ok((await box(".scale")).y > (await box(".score")).y, "the squares stand under the name and score");
+        assert.ok((await box(".scale")).y > (await box(".opener")).y, "the squares stand under the name");
         const buttonsAt = await box(".buttons");
-        assert.ok(buttonsAt.x + buttonsAt.width <= sheetAt.x + sheetAt.width, "Delete and Done stay inside");
+        assert.ok(buttonsAt.x + buttonsAt.width <= sheetAt.x + sheetAt.width, "Delete, Reset and Done stay inside");
 
         await sheet.locator(".done").click();
         await sheet.locator(".card").waitFor();

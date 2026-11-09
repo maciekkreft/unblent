@@ -28,6 +28,11 @@ const area = (v) =>
 const answersOf = (v) => Array.from({ length: AREAS }, (_, i) => area(Array.isArray(v) ? v[i] : null));
 const areAnswers = (v) => Array.isArray(v) && v.length === AREAS && v.every(isArea);
 
+// The areas the user chose to focus on, one true or false per area; what cannot be read
+// counts as not chosen.
+const focusOf = (v) => Array.from({ length: AREAS }, (_, i) => Array.isArray(v) && v[i] === true);
+const isFocus = (v) => Array.isArray(v) && v.length === AREAS && v.every((c) => typeof c === "boolean");
+
 // --- Records --------------------------------------------------------------------------
 
 // One fixed shape and key order, so two copies of the same content compare equal as
@@ -38,6 +43,7 @@ const toRecord = (r) => ({
   actual: scores(r.actual),
   wanted: scores(r.wanted),
   answers: answersOf(r.answers),
+  focus: focusOf(r.focus),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
   ...(r.deleted === true ? { deleted: true } : {}),
   // The step that last wrote it in this browser (12, Undo); the server never has it.
@@ -45,7 +51,7 @@ const toRecord = (r) => ({
 });
 
 // What a write carries, and what decides whether a change is a new version.
-const content = (r) => ({ day: r.day, actual: r.actual, wanted: r.wanted, answers: r.answers });
+const content = (r) => ({ day: r.day, actual: r.actual, wanted: r.wanted, answers: r.answers, focus: r.focus });
 const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b));
 
 // A tombstone is kept for the sync (5) but never listed or announced as a change.
@@ -57,6 +63,7 @@ const announce = (context, r) => ({
   actual: r.actual,
   wanted: r.wanted,
   answers: r.answers,
+  focus: r.focus,
   version: r.version,
   pending: context.outbox.has(r.id),
 });
@@ -110,6 +117,7 @@ const entry = (r, prior = r.step) => ({
   actual: r.actual,
   wanted: r.wanted,
   answers: r.answers,
+  focus: r.focus,
   deleted: Boolean(r.deleted),
   ...(prior ? { prior } : {}),
 });
@@ -158,6 +166,7 @@ function applyStep(context, event, enqueue) {
   const current = isId(p.id) ? context.wheels.get(p.id) : null;
   if (p.kind !== "wheel" || !current || !areScores(p.actual) || !areScores(p.wanted)) return settle("refused", "changed");
   if (p.answers !== undefined && !areAnswers(p.answers)) return settle("refused", "changed");
+  if (p.focus !== undefined && !isFocus(p.focus)) return settle("refused", "changed");
   if (current.step !== (undoing ? event.id : before(p, event.id))) return settle("refused", "changed");
   // Wheels are written only while their journal day is (13, Journal).
   if (context.today != null && current.day !== context.today) return settle("refused", "closed");
@@ -168,6 +177,8 @@ function applyStep(context, event, enqueue) {
     wanted: p.wanted,
     // A step kept from before answers says nothing about them, so they stay.
     answers: p.answers === undefined ? current.answers : answersOf(p.answers),
+    // The same holds for a step kept from before focus.
+    focus: p.focus === undefined ? current.focus : focusOf(p.focus),
     ...(p.deleted ? { deleted: true } : {}),
     step: undoing ? before(p, event.id) : event.id,
   });
@@ -191,12 +202,13 @@ function applySave(context, event, enqueue) {
   const actual = scores(event.actual);
   const wanted = scores(event.wanted);
   const answers = event.answers === undefined ? answersOf(was?.answers) : answersOf(event.answers);
+  const focus = event.focus === undefined ? focusOf(was?.focus) : focusOf(event.focus);
   if (!was) {
     if (!isDay(event.day) || blank(actual, wanted, answers)) return;
-    return recordStep(context, enqueue, null, toRecord({ id: event.id, day: event.day, actual, wanted, answers }), event);
+    return recordStep(context, enqueue, null, toRecord({ id: event.id, day: event.day, actual, wanted, answers, focus }), event);
   }
   if (blank(actual, wanted, answers)) return recordStep(context, enqueue, was, { ...was, deleted: true }, event);
-  const next = { ...was, actual, wanted, answers };
+  const next = { ...was, actual, wanted, answers, focus };
   if (same(was, next)) {
     // A fold with nothing new to save still ends the stretch of rating.
     if (event.finished === true && context.stretch?.id === event.id) {
@@ -347,7 +359,10 @@ export const machine = setup({
       "day for good. `wheels: list` answers one day's wheels, or every day's when no day is given, " +
       "oldest first; the chat does not read it. Every wheel it announces or lists carries eight " +
       "answer objects, empty for a wheel without answers, and answers it cannot read count as " +
-      "empty. A save without answers keeps those stored. A new wheel with no score and no answer " +
+      "empty. A save without answers keeps those stored. Every wheel also carries which areas the " +
+      "user chose to focus on, eight true or false values, none chosen for a wheel from before or " +
+      "one it cannot read; a save without them keeps those stored, and choosing alone keeps no wheel. " +
+      "The view offers scores from 1 to 9; a 10 from before is still accepted. A new wheel with no score and no answer " +
       "with text, text being something other than spaces and blank lines, is not kept, and a save " +
       "that leaves a kept wheel so deletes it at once, so a wheel holding only answers is kept; " +
       "its tombstone keeps what it had. Every change is a step Undo and Redo reverse (section 12): " +
@@ -600,6 +615,7 @@ function applySync(context, output, enqueue) {
     // A row queued before answers existed carries none and the server kept what it holds,
     // so that row is drained by what it did carry, and those answers are taken.
     const unanswered = row && row.answers === undefined;
+    const unfocused = row && row.focus === undefined;
     const drained = row && JSON.stringify(content(toRecord({ ...ack, ...row }))) === JSON.stringify(content(toRecord(ack)));
     if (drained) {
       context.outbox.delete(ack.id);
@@ -610,7 +626,9 @@ function applySync(context, output, enqueue) {
       enqueue(() => context.store.outboxPut(advanced).catch(() => {}));
     }
     // Keep the latest local content (a mid-sync edit), take the server's version.
-    const r = held ? { ...held, version: ack.version, ...(unanswered ? { answers: answersOf(ack.answers) } : {}) } : toRecord(ack);
+    const r = held
+      ? { ...held, version: ack.version, ...(unanswered ? { answers: answersOf(ack.answers) } : {}), ...(unfocused ? { focus: focusOf(ack.focus) } : {}) }
+      : toRecord(ack);
     context.wheels.set(r.id, r);
     enqueue(() => context.store.put(r).catch(() => {}));
     if (visible(r)) enqueue.emit({ type: "wheel.changed", wheel: announce(context, r) });

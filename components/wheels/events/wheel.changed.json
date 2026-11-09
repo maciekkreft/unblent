@@ -75,6 +75,15 @@
           },
           "description": "The answers to the questions of each area, in the fixed order Health, Work, Money, Family, Love, Friends, Growth, Fun, an object holding only the questions answered. Every wheel the fact announces carries it, with eight empty objects for a wheel without answers."
         },
+        "focus": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "items": {
+            "type": "boolean"
+          },
+          "description": "Whether the user chose each area to focus on, in the fixed order Health, Work, Money, Family, Love, Friends, Growth, Fun. Every wheel the fact announces carries it, all false for a wheel from before it."
+        },
         "version": {
           "type": "integer",
           "minimum": 1

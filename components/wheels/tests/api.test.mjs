@@ -28,6 +28,8 @@ const ACTUAL = [6, null, null, null, null, null, null, null];
 const WANTED = [9, 8, 7, 6, 5, 4, 3, 2];
 const OTHER = [1, null, null, null, null, null, null, 10];
 const EMPTY = Array(8).fill({});
+const NOFOCUS = Array(8).fill(false);
+const CHOSEN = [false, false, false, false, false, true, false, true];
 const said = (answer) => [answer, {}, {}, {}, {}, {}, {}, {}];
 
 const body = (over = {}) => ({ day: DAY, actual: ACTUAL, wanted: WANTED, baseVersion: null, deleted: false, ...over });
@@ -47,7 +49,7 @@ test("every route needs a signed-in user", async () => {
 test("a create continues from the base the browser held, and any later write wins", async () => {
   const cookie = freshCookie();
   const created = await (await put(ID, body({ baseVersion: 3 }), cookie)).json();
-  assert.deepEqual(created, { id: ID, day: DAY, actual: ACTUAL, wanted: WANTED, answers: EMPTY, version: 4, deleted: false });
+  assert.deepEqual(created, { id: ID, day: DAY, actual: ACTUAL, wanted: WANTED, answers: EMPTY, focus: NOFOCUS, version: 4, deleted: false });
   const res = await put(ID, body({ actual: OTHER, baseVersion: 1 }), cookie);
   assert.equal(res.status, 200);
   assert.equal((await res.json()).version, 5, "a stale base is never refused");
@@ -93,6 +95,17 @@ test("answers are kept, count as a change, and a write without them keeps those 
   assert.deepEqual(all.wheels[0].answers, said({ one: "Lower" }), "a pull carries them");
 });
 
+test("the chosen areas are kept, count as a change, and a write without them keeps those held", async () => {
+  const cookie = freshCookie();
+  const created = await (await put(ID, body({ focus: CHOSEN }), cookie)).json();
+  assert.deepEqual([created.focus, created.version], [CHOSEN, 1]);
+  const kept = await (await put(ID, body(), cookie)).json();
+  assert.deepEqual([kept.focus, kept.version], [CHOSEN, 1], "no focus in the write is no change");
+  const changed = await (await put(ID, body({ focus: NOFOCUS }), cookie)).json();
+  assert.deepEqual([changed.focus, changed.version], [NOFOCUS, 2]);
+  assert.equal((await put(ID, body({ focus: [true] }), cookie)).status, 400, "eight true or false values, or nothing");
+});
+
 test("a tombstone keeps its answers, and a restore write brings back those it names", async () => {
   const cookie = freshCookie();
   await put(ID, body({ answers: said({ closer: "Walk" }) }), cookie);
@@ -133,6 +146,9 @@ test("a database file from before answers gains the column and keeps its wheels"
     assert.deepEqual([written.actual, written.answers, written.version], [ACTUAL, said({ one: "New" }), 3]);
     const unchanged = await (await put(ID, body(), cookie)).json();
     assert.deepEqual([unchanged.answers, unchanged.version], [said({ one: "New" }), 3], "the row can now hold answers");
+    assert.deepEqual(unchanged.focus, NOFOCUS, "and reads as nothing chosen");
+    const chosen = await (await put(ID, body({ focus: CHOSEN }), cookie)).json();
+    assert.deepEqual([chosen.focus, chosen.version], [CHOSEN, 4], "and can hold a choice");
   } finally {
     process.emitWarning = saved;
   }

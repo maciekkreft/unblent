@@ -30,7 +30,7 @@ const inSheet = (page, fn) =>
   page.evaluate((fn) => new Function("root", `return (${fn})(root)`)(document.querySelector("wheel-sheet").shadowRoot), fn.toString());
 
 // The area the keyboard is on, the tab, or the class of what else has it inside the view.
-const at = (page) => inSheet(page, (root) => root.activeElement?.dataset?.i ?? root.activeElement?.dataset?.mode ?? root.activeElement?.className ?? null);
+const at = (page) => inSheet(page, (root) => root.activeElement?.dataset?.i ?? root.activeElement?.dataset?.mode ?? root.activeElement?.className?.trim() ?? null);
 
 async function open(browser, { viewport = { width: 900, height: 900 }, vim = false, phone = false, wheels = [{ id: ID, day: today(), actual: ACTUAL, wanted: WANTED }], days = [] } = {}) {
   const context = await browser.newContext({ viewport });
@@ -52,16 +52,15 @@ async function open(browser, { viewport = { width: 900, height: 900 }, vim = fal
   return { context, page, problems, sheet: page.locator("wheel-sheet") };
 }
 
-// How many cells each area has filled on the wheel, and how many squares each row has filled.
+// How many cells each area has filled on the wheel, and how many steps each row's bar has filled.
 const drawn = (page) =>
   inSheet(page, (root) => {
     const cells = [...root.querySelectorAll(".wheel .w-cell")];
-    const wheel = Array.from({ length: 8 }, (_, i) => cells.slice(i * 10, i * 10 + 10).filter((c) => c.classList.contains("on")).length);
+    const wheel = Array.from({ length: 8 }, (_, i) => cells.slice(i * 9, i * 9 + 9).filter((c) => c.classList.contains("on")).length);
     const rows = [...root.querySelectorAll(".area")].map((a) => a.querySelectorAll(".sq.on").length);
     const wanted = [...root.querySelectorAll(".area")].map((a) => [...a.querySelectorAll(".sq")].findIndex((q) => q.classList.contains("was")) + 1);
     const lines = root.querySelectorAll(".wheel .w-last").length;
-    const scores = [...root.querySelectorAll(".score")].map((s) => s.textContent.trim());
-    return { wheel, rows, wanted, lines, scores };
+    return { wheel, rows, wanted, lines };
   });
 
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
@@ -86,17 +85,20 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.deepEqual(start.rows, ACTUAL);
         assert.deepEqual(start.wanted, WANTED);
         assert.equal(start.lines, 8);
-        assert.equal(start.scores[0], "6/9");
+
+        assert.equal(await sheet.locator('.area[data-i="0"] .sq.gap').count(), WANTED[0] - ACTUAL[0], "the gap is drawn up to Wanted");
+        const above = await sheet.locator('.area[data-i="0"] .sq.was').evaluate((el) => getComputedStyle(el, "::after").zIndex);
+        assert.equal(above, "1", "the Wanted line is drawn over the marks");
 
         await sheet.getByRole("button", { name: "Work 8", exact: true }).click();
         let now = await drawn(page);
         assert.equal(now.rows[1], 8);
-        assert.equal(now.wheel[1], 8, "a click on a square fills the wheel");
+        assert.equal(now.wheel[1], 8, "a click on a step fills the wheel");
         assert.equal(await at(page), "1", "the keyboard stays on that area");
 
         // The third area's ninth ring. A cell's box mostly covers its neighbors, so the click
         // is sent to it rather than to a point on the screen.
-        await inSheet(page, (root) => root.querySelectorAll(".wheel .w-cell")[2 * 10 + 8].dispatchEvent(new MouseEvent("click", { bubbles: true })));
+        await inSheet(page, (root) => root.querySelectorAll(".wheel .w-cell")[2 * 9 + 8].dispatchEvent(new MouseEvent("click", { bubbles: true })));
         now = await drawn(page);
         assert.equal(now.wheel[2], 9);
         assert.equal(now.rows[2], 9, "a click on the wheel fills the row");
@@ -111,7 +113,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         now = await drawn(page);
         assert.equal(now.wanted[7], 0, "the current score clears");
         assert.equal(now.lines, 7, "and its line goes from the wheel");
-        assert.equal(now.scores[7], "2/–");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -119,20 +120,24 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: a reload against real storage.
-    test("Done folds it into a card that says each area's scores and gap, and a reload keeps what was set", async () => {
+    test("Done folds it into a card that names the areas chosen, and a reload keeps what was set", async () => {
       const { context, page, problems, sheet } = await open(browser);
       try {
         await sheet.locator(".card").click();
         await sheet.getByRole("button", { name: "Health 9", exact: true }).click();
+        await sheet.getByRole("button", { name: "Fun", exact: true }).click();
+        await sheet.getByRole("button", { name: "Friends", exact: true }).click();
+        assert.equal(await sheet.locator(".chip.on").count(), 2);
         await sheet.locator(".done").click();
         const card = sheet.locator(`.card[data-id="${ID}"]`);
         await card.waitFor();
         assert.equal(await inSheet(page, (root) => root.activeElement?.className), "card", "the keyboard stays on the card");
-        const said = async () => (await card.innerText()).replace(/\s+/g, " ").trim();
-        assert.match(await said(), /^Health 9\/9 Work 5\/7−2 Money 4\/6−2/);
+        const said = async () => (await card.locator(".sum").innerText()).replace(/\s+/g, " ").trim();
+        assert.equal(await said(), "You chose to focus on: Friends and Fun");
+        assert.deepEqual(await card.locator(".w-name.chosen").allTextContents(), ["Friends", "Fun"]);
         await page.reload({ waitUntil: "domcontentloaded" });
         await card.waitFor();
-        assert.match(await said(), /^Health 9\/9 Work 5\/7−2/);
+        assert.equal(await said(), "You chose to focus on: Friends and Fun");
         assert.equal(await sheet.locator(".mini .w-cell.on").count(), 9 + 5 + 4 + 7 + 3 + 6 + 5 + 2);
         assert.deepEqual(problems, []);
       } finally {
@@ -168,9 +173,13 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("j");
         assert.equal(await at(page), "1", "letters are not keys without Vim keys");
 
-        // Tab: the area the keys act on, then the buttons, and back the same way.
+        // Tab: the area the keys act on, the areas to focus on, then the buttons, and back the same way.
+        await page.keyboard.press("Tab");
+        assert.equal(await at(page), "chip");
         await page.keyboard.press("Tab");
         assert.equal(await at(page), "delete");
+        await page.keyboard.press("Tab");
+        assert.equal(await at(page), "reset");
         await page.keyboard.press("Tab");
         assert.equal(await at(page), "done");
         await page.keyboard.press("ArrowUp");
@@ -257,9 +266,11 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await chosen(), "Wanted");
         assert.equal((await drawn(page)).wanted[0], 9, "choosing changes no score");
         await page.keyboard.press("l");
-        assert.equal((await drawn(page)).wanted[0], 10);
-        assert.equal((await drawn(page)).rows[0], 6);
+        assert.equal((await drawn(page)).wanted[0], 9, "9 is the top of the scale");
         await page.keyboard.press("h");
+        assert.equal((await drawn(page)).wanted[0], 8);
+        assert.equal((await drawn(page)).rows[0], 6);
+        await page.keyboard.press("l");
         assert.equal((await drawn(page)).wanted[0], 9);
         await page.keyboard.press("H");
         assert.equal(await chosen(), "Actual");
@@ -278,10 +289,15 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await press("j", "actual");
         await press("j", "0");
 
-        // Past the last area the key goes on to + Add sheet, and k comes back to the same area.
+        // Past the last area the areas to focus on, then + Add sheet, and k comes back the same way.
         await press("G", "7");
+        await press("j", "chip");
+        await press("l", "chip");
+        assert.equal(await inSheet(page, (root) => root.activeElement.dataset.c), "1", "l moves to the next name");
+        await press("h", "chip");
         await page.keyboard.press("j");
         await until(onRow);
+        await press("k", "chip");
         await press("k", "7");
         await press("k", "6");
         await press("j", "7");
@@ -313,10 +329,11 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         };
         await press("Enter", "0");
         await press("G", "7");
+        await press("j", "chip");
         await press("j", "card");
         assert.equal(await inSheet(page, (root) => root.activeElement.dataset.id), second);
-        // Coming back from below lands on the sheet's last area.
-        await press("k", "7");
+        // Coming back from below lands on the sheet's last row, the areas to focus on.
+        await press("k", "chip");
         await press("Escape", "card");
         assert.equal(await inSheet(page, (root) => root.activeElement.dataset.id), ID);
 
@@ -340,6 +357,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       try {
         await sheet.locator(".card").click();
         await sheet.locator(".sheet").waitFor();
+        await page.keyboard.press("Tab");
+        assert.equal(await at(page), "chip");
         await page.keyboard.press("Tab");
         assert.equal(await at(page), "delete");
         await page.keyboard.press("Enter");
@@ -434,7 +453,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await at(page), "0", "the keyboard stays on the area");
         assert.deepEqual(await sheet.locator(".q-text").allTextContents(), [
           "What does a 1 look like for you?",
-          "What does a 10 look like for you?",
+          "What does a 9 look like for you?",
           "What makes it a 6, and not lower?",
           "What keeps it from being higher?",
           "What would move it one point closer to Wanted?",
@@ -467,7 +486,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           inSheet(page, (root) => {
             const cells = [...root.querySelectorAll(".wheel .w-cell")];
             const fill = (c) => getComputedStyle(c).fill;
-            return { lit: fill(cells[0]), other: fill(cells[10]), emptyLit: fill(cells[9]), emptyOther: fill(cells[19]) };
+            return { lit: fill(cells[0]), other: fill(cells[9]), emptyLit: fill(cells[8]), emptyOther: fill(cells[17]) };
           });
         const { lit, other, emptyLit, emptyOther } = await fills();
         assert.notEqual(lit, other);

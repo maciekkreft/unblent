@@ -19,7 +19,7 @@ const ID = "01K7TEST00000000000000WHB1";
 const ACTUAL = [6, 5, 4, 7, 3, 6, 5, 2];
 const WANTED = [9, 7, 6, 8, 7, 6, 7, 6];
 const ONE = "What does a 1 look like for you?";
-const TEN = "What does a 10 look like for you?";
+const TEN = "What does a 9 look like for you?";
 
 const dayOf = (ms) => {
   const d = new Date(ms);
@@ -32,7 +32,7 @@ const inSheet = (page, fn) =>
   page.evaluate((fn) => new Function("root", `return (${fn})(root)`)(document.querySelector("wheel-sheet").shadowRoot), fn.toString());
 
 // The area the keyboard is on, or the class of what else has it inside the view.
-const at = (page) => inSheet(page, (root) => root.activeElement?.dataset?.i ?? root.activeElement?.className ?? null);
+const at = (page) => inSheet(page, (root) => root.activeElement?.dataset?.i ?? root.activeElement?.className?.trim() ?? null);
 // The question whose box has the keyboard.
 const inBox = (page) => inSheet(page, (root) => (root.activeElement?.classList.contains("cm-content") ? root.activeElement.getAttribute("aria-label") : null));
 // The lines of the first box. An empty box's line holds its faint example.
@@ -139,7 +139,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: focus and keys.
-    test("with Vim keys on and the panel open, j and k walk from an area through its boxes to the next area and back, and past the last area and back", async () => {
+    test("with Vim keys on and the panel open, j and k walk from an area through its boxes to the next area and back, and past the last area to the areas to focus on and back", async () => {
       const { context, page, problems, sheet } = await open(browser, { vim: true });
       try {
         const LAST = "What would move it one point closer to Wanted?";
@@ -171,13 +171,19 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await pressOnto("ArrowDown", "1");
         await pressOnto("ArrowUp", "0");
 
-        // Past the last area's last box, and back into it.
+        // Past the last area's last box onto the areas to focus on, out of the sheet, and back.
         await pressOnto("G", "7");
         await press("j", ONE);
         for (let n = 0; n < 4; n += 1) await page.keyboard.press("j");
         await until(async () => (await inBox(page)) === LAST);
+        await pressOnto("j", "chip");
+        await page.keyboard.press("l");
+        await until(async () => (await inSheet(page, (root) => root.activeElement?.dataset?.c)) === "1");
+        await page.keyboard.press(" ");
+        await until(async () => (await sheet.locator(".chip.on").count()) === 1);
         await page.keyboard.press("j");
         await until(onRow);
+        await pressOnto("k", "chip on");
         await press("k", LAST);
         assert.equal(await title(), "Fun");
 
@@ -205,7 +211,10 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         for (let n = 0; n < 4; n += 1) await page.keyboard.press("Tab");
         assert.equal(await inBox(page), "What would move it one point closer to Wanted?");
         await page.keyboard.press("Tab");
+        assert.equal(await at(page), "chip", "the areas to focus on are one stop");
+        await page.keyboard.press("Tab");
         assert.equal(await at(page), "delete");
+        await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Escape");
         await until(async () => (await at(page)) === "0");
