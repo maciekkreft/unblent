@@ -241,12 +241,15 @@ async fn offer_update(app: AppHandle) {
             app.updater().map_err(|e| e.to_string())?
         };
         let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+            log(&app, "update: no newer version");
             return Ok(());
         };
+        log(&app, &format!("update: downloading {}", update.version));
         let bytes = update
             .download(|_, _| {}, || {})
             .await
             .map_err(|e| e.to_string())?;
+        log(&app, &format!("update: downloaded {}", update.version));
         let yes = app
             .dialog()
             .message(
@@ -259,8 +262,10 @@ async fn offer_update(app: AppHandle) {
             ))
             .blocking_show();
         if !yes {
+            log(&app, "update: the user chose Later");
             return Ok(());
         }
+        log(&app, "update: the user chose Restart to update");
         update.install(bytes).map_err(|e| e.to_string())?;
         // The Exit event stops the server before the new version starts its own.
         app.request_restart();
