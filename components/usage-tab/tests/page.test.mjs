@@ -144,18 +144,24 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: a reload against real storage.
-    test(`the switch is off at first, turns on, and is still on after a reload, in ${engine.name}`, async () => {
+    test(`the switch is off at first and below the charts, turns on, and is still on after a reload, in ${engine.name}`, async () => {
       const { context, page, problems, tab } = await open(browser);
       try {
         await showUsage(page);
         const share = tab.getByRole("switch", { name: "Share usage statistics from this device" });
         await share.waitFor();
         assert.equal(await share.isChecked(), false);
-        assert.ok((await text(tab)).includes("Sharing is off. Turn it on to see your features here."));
-        assert.equal(await tab.getByRole("button", { name: "Week" }).count(), 0, "no range while off");
+        // Off, the tab shows this device's own time, here nothing yet.
+        assert.ok((await text(tab)).includes("Counting from now."));
+        assert.equal(await tab.getByRole("button", { name: "Week" }).count(), 1, "the range is offered while off");
         await share.click();
         await tab.locator(".chip").first().waitFor();
         assert.equal(await share.isChecked(), true);
+        const below = await tab.evaluate((el) => {
+          const r = el.shadowRoot;
+          return r.querySelector(".cal-wrap").compareDocumentPosition(r.querySelector(".switch-row")) & Node.DOCUMENT_POSITION_FOLLOWING;
+        });
+        assert.ok(below, "the switch sits below the calendar");
         // The desk keeps the sheet open and the sheet keeps its tab across the reload.
         await page.reload({ waitUntil: "domcontentloaded" });
         await tab.locator(".chip").first().waitFor();
@@ -200,10 +206,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("Enter");
         assert.equal(await tab.getByRole("button", { name: "Month" }).getAttribute("aria-pressed"), "true");
 
-        // Tab reaches the switch, then the chips.
+        // Tab reaches the chips; the switch comes after them, below the charts.
         await page.keyboard.press("Tab");
-        await page.keyboard.press("Tab");
-        assert.equal(await tab.evaluate((el) => el.shadowRoot.activeElement?.id), "share");
         await page.keyboard.press("Tab");
         assert.equal(await focused(), "Journal 40 min");
         await page.keyboard.press("l");

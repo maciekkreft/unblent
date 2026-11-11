@@ -4,6 +4,18 @@ All notable changes to Unblent for Mac are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-11-11
+
+### Added
+
+- A Usage tab in Settings that shows where your time in Unblent goes: the total for the week,
+  the last 30 days or since you started, tiles sized by the time in each part (Journal,
+  Reading, Highlights, Notes, Chats, Evaluators, Choice Points and Values), minutes per day,
+  and a calendar of every day you used it. Click a part to follow it in all three pictures.
+  Only which part you were in and for how long is counted, never what you write or read, and
+  the counts stay on your Mac. Share usage statistics, below the charts, is off until you
+  turn it on, and the tab works the same either way.
+
 ## [0.7.0] — 2026-11-09
 
 ### Added

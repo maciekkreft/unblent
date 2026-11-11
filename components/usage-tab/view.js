@@ -118,8 +118,9 @@ class UsageTab extends LitElement {
       justify-content: space-between;
       align-items: center;
       gap: var(--space-md);
+      margin-top: var(--space-md);
       padding: var(--space-sm) 0;
-      border-bottom: var(--border-width) solid var(--color-border);
+      border-top: var(--border-width) solid var(--color-border);
     }
     .switch-row label {
       color: var(--color-ink);
@@ -355,16 +356,20 @@ class UsageTab extends LitElement {
     super.connectedCallback();
     // The sheet keeps every tab connected (settings-tabs): a tab shown has a box, one
     // hidden has none, so the summary is asked again each time the box appears.
-    this.#resize = new ResizeObserver(() => {
-      const shown = this.offsetWidth > 0;
-      if (shown && !this.#shown) this.#actor.send({ type: "_show" });
-      this.#shown = shown;
-      if (shown) {
-        this.#mountCharts();
-        this.#charts.tree?.resize();
-        this.#charts.stream?.resize();
-      }
-    });
+    // Next frame: a summary answered from this device lands at once, and a tab redrawn
+    // inside the observer resizes the box it watches, which the browser reports.
+    this.#resize = new ResizeObserver(() =>
+      requestAnimationFrame(() => {
+        const shown = this.offsetWidth > 0;
+        if (shown && !this.#shown) this.#actor.send({ type: "_show" });
+        this.#shown = shown;
+        if (shown) {
+          this.#mountCharts();
+          this.#charts.tree?.resize();
+          this.#charts.stream?.resize();
+        }
+      }),
+    );
     this.#resize.observe(this);
     // The colour scheme is a document fact (7.5): read, never written.
     this.#scheme = new MutationObserver(this.#redraw);
@@ -444,7 +449,7 @@ class UsageTab extends LitElement {
     const vim = settings?.vimKeys === true;
     const who = whoOf(context);
     const summary = context.summary;
-    const ready = on && summary && !summary.error;
+    const ready = summary && !summary.error;
     const picture = ready ? pictureOf(summary, context.range, context.now(), context.focus) : null;
     return html`
       <div class="usage" @keydown=${(e) => this.#key(e)}>
@@ -462,7 +467,7 @@ class UsageTab extends LitElement {
                 )}
               </div>`
             : nothing}
-          ${on
+          ${settings
             ? html`<div class="seg" role="group" aria-label="Range" @keydown=${(e) => this.#move(e, vim)}>
                 ${[
                   ["week", "Week"],
@@ -477,8 +482,8 @@ class UsageTab extends LitElement {
               </div>`
             : nothing}
         </div>
+        ${settings ? this.#body(context, picture, who) : nothing}
         ${settings ? this.#switchRow(on, context.session) : nothing}
-        ${settings ? this.#body(context, on, picture, who) : nothing}
       </div>
     `;
   }
@@ -488,7 +493,7 @@ class UsageTab extends LitElement {
       <div>
         <label for="share">Share usage statistics from this device</label>
         <p class="help">
-          When on, this device sends which features you use and for how long — never what you write or read — to guide future
+          Your time is counted on this device either way. When on, this device also sends which features you use and for how long — never what you write or read — to guide future
           development. You can leave it off for good.${onMacOf(session) ? " The counts stay on this Mac." : ""}
         </p>
       </div>
@@ -512,8 +517,7 @@ class UsageTab extends LitElement {
       <p class="empty">${text}</p>`;
   }
 
-  #body(context, on, picture, who) {
-    if (!on) return this.#ghost("Sharing is off. Turn it on to see your features here.");
+  #body(context, picture, who) {
     const summary = context.summary;
     if (!summary) return nothing;
     if (summary.error === "signed-out") return this.#ghost("Sign in to see where your time goes.");

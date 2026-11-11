@@ -173,8 +173,9 @@ export const machine = setup({
     sessionMoves: ({ context, event }) =>
       context.asked &&
       (!sameAccount(context.session, event) || whoOf(context) !== whoOf({ ...context, session: sessionOf(event) })),
-    // Turning the switch on shows what is there already.
-    turnsOn: ({ context, event }) => context.asked && context.settings?.usageCounting !== true && event.usageCounting === true,
+    // On, the account's totals; off, this device's own (usage): either way the picture changes.
+    switches: ({ context, event }) =>
+      context.asked && context.settings != null && context.settings.usageCounting !== (event.usageCounting === true),
     whoMoves: ({ context, event }) => context.asked && whoOf(context) !== whoOf({ ...context, who: event.who }),
   },
   actions: {
@@ -186,12 +187,8 @@ export const machine = setup({
   meta: {
     description:
       "The Usage tab of the gear's sheet, shown to everyone while the Usage feature is " +
-      "shown. At the top is the switch Share usage statistics from this device, off until " +
-      "the person turns it on, with what it sends (which features are used and for how " +
-      "long, never what is written or read) and that it may stay off for good; on a Mac " +
-      "that is not connected it adds that the counts stay on the Mac. The switch is one " +
-      "device setting, so Undo turns it back. While it is off the tab shows an empty " +
-      "placeholder and says so. While it is on: Week, Month or All; for the admin on the " +
+      "shown, whether or not the person shares: while the switch below is off it shows " +
+      "this device's own time, while on the account's. Week, Month or All; for the admin on the " +
       "website, not while viewing as someone, also You or All accounts on the admin tint; " +
       "the total time and which feature took most of it; tiles sized by the time in each " +
       "feature, with a row of buttons naming them; a flowing chart of minutes per day " +
@@ -200,7 +197,13 @@ export const machine = setup({
       "a band or a button follows that feature in all three pictures and greys the others; " +
       "clicking it again, or Escape, shows all again. The arrow keys, and h and l with " +
       "Vim keys on, move between the buttons of a row. The summary is asked when the tab " +
-      "is shown and when You or All accounts is picked; it does not change while open.",
+      "is shown, when You or All accounts is picked and when the switch changes; it does not " +
+      "change otherwise while open. Below the calendar is the switch Share usage statistics " +
+      "from this device, off until the person turns it on, saying that the time is counted " +
+      "on the device either way, what turning it on sends (which features are used and for " +
+      "how long, never what is written or read) and that it may stay off for good; on a Mac " +
+      "that is not connected it adds that the counts stay on the Mac. The switch is one " +
+      "device setting, so Undo turns it back. You or All accounts shows only while it is on.",
     kind: "view",
     emits: ["settings.edited"],
     attributes: [],
@@ -247,7 +250,7 @@ export const machine = setup({
   },
   on: {
     "settings.changed": [
-      { guard: "turnsOn", target: ".asking", actions: "adoptSettings" },
+      { guard: "switches", target: ".asking", actions: "adoptSettings" },
       { actions: "adoptSettings" },
     ],
     "session.changed": [

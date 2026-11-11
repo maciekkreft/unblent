@@ -142,21 +142,48 @@ test("a stretch across local midnight counts on both days", async () => {
   actor.stop();
 });
 
-test("nothing is counted while Share usage statistics is off, and turning it on starts afresh", async () => {
-  const { actor, store } = start({ counting: false });
+test("while Share usage statistics is off time is counted but nothing is queued or sent; turning it on sends it all", async () => {
+  const { actor, store, calls, clock } = start({ counting: false });
   await flush();
   actor.send(act(T0));
   actor.send(act(T0 + 10_000));
-  assert.equal(store.t.size, 0);
+  clock.increment(61_000);
+  await flush();
+  assert.equal(ms(store, "notes"), 10_000, "counted on the device");
+  assert.equal(store.o.size, 0, "nothing waits to be sent, so a change of account never waits on it");
+  assert.deepEqual(puts(calls), []);
   actor.send({ type: "settings.changed", usageCounting: true });
+  await flush();
+  assert.deepEqual(puts(calls).at(-1)?.[1].map((r) => r.ms), [10_000], "what was counted before is sent");
+  actor.send({ type: "settings.changed", usageCounting: false });
   actor.send(act(T0 + 20_000));
   actor.send(act(T0 + 30_000));
-  actor.send({ type: "settings.changed", usageCounting: false });
-  actor.send(act(T0 + 40_000));
-  actor.send({ type: "settings.changed", usageCounting: true });
-  actor.send(act(T0 + 50_000));
+  clock.increment(61_000);
   await flush();
-  assert.equal(ms(store, "notes"), 10_000, "only the stretch while it was on, not across the switch");
+  assert.equal(ms(store, "notes"), 20_000);
+  assert.equal(puts(calls).length, 1, "turned off again, nothing more leaves");
+  actor.stop();
+});
+
+test("rows queued while sharing was on are dropped when it is off at load", async () => {
+  const row = { id: `${DEVICE}:${DAY}:notes`, device: DEVICE, day: DAY, feature: "notes", ms: 5000 };
+  const store = memoryStore({ totals: [row], outbox: [row] });
+  const { actor, calls } = start({ store, counting: false });
+  await flush();
+  assert.equal(store.o.size, 0);
+  assert.equal(store.t.size, 1, "the totals stay");
+  assert.deepEqual(puts(calls), []);
+  actor.stop();
+});
+
+test("while sharing is off, the summary is this device's own and the server is not asked", async () => {
+  const { actor, calls } = start({ counting: false });
+  await flush();
+  actor.send(act(T0));
+  actor.send(act(T0 + 10_000));
+  const answer = await new Promise((reply) => actor.send({ type: "summary?", cid: "c1", payload: { who: "you" }, reply }));
+  assert.deepEqual(answer, { days: [{ day: DAY, feature: "notes", ms: 10_000 }], accounts: 1 });
+  assert.deepEqual(calls, []);
   actor.stop();
 });
 

@@ -90,6 +90,7 @@ function answerAll(context, enqueue) {
     }
     const fallback = () => reply(who === "you" ? localSummary(records, now(), features) : { error: "unavailable" });
     enqueue(() => {
+      if (!context.on && who === "you") return fallback();
       if (!api) return fallback();
       api.summary(who).then(
         (answer) => {
@@ -123,20 +124,42 @@ function onRecord(context, r, enqueue, self) {
     return;
   }
   if (r.tab !== context.tab || !isAction(r) || !Number.isFinite(r.at)) return;
-  if (!(context.on && context.userId && context.device && !context.leaving)) return;
+  if (!(context.userId && context.device && !context.leaving)) return;
   const feature = featureOf(context.counts, r.name, bare(r.from));
   const last = context.last;
   enqueue.assign({ last: { at: r.at, feature } });
   if (!last || r.at <= last.at || r.at - last.at > GAP_MS) return;
   const changed = credit(context, last.at, r.at, last.feature);
   for (const rec of changed) {
+    enqueue(() => context.store.put(rec).catch(() => {}));
+    if (!context.on) continue;
     context.outbox.set(rec.id, rec);
-    enqueue(() => {
-      context.store.put(rec).catch(() => {});
-      context.store.outboxPut(rec).catch(() => {});
-    });
+    enqueue(() => context.store.outboxPut(rec).catch(() => {}));
   }
-  enqueue.raise({ type: "_drain" });
+  if (context.on) enqueue.raise({ type: "_drain" });
+}
+
+// Share usage statistics decides only what leaves the device: counting goes on either
+// way. While it is off the outbox stays empty, so a change of account (12) never waits
+// on totals nobody agreed to send; turning it on queues every total of this device,
+// each a running total that the last write lets replace the account's copy (5).
+function share(context, on, enqueue) {
+  enqueue.assign({ on, last: on ? context.last : null });
+  if (on === context.on || !context.device) return;
+  const { store, outbox } = context;
+  if (on) {
+    for (const rec of context.records.values()) {
+      outbox.set(rec.id, rec);
+      enqueue(() => store.outboxPut(rec).catch(() => {}));
+    }
+    enqueue.raise({ type: "_sync" });
+  } else unqueue(context);
+}
+
+function unqueue({ store, outbox }) {
+  const ids = [...outbox.keys()];
+  outbox.clear();
+  for (const id of ids) store.outboxDelete(id).catch(() => {});
 }
 
 function featureOf(counts, name, from) {
@@ -233,9 +256,11 @@ export const machine = setup({
   meta: {
     description:
       "Owns how long this account spends in each feature, by day: Journal, Reading, " +
-      "Highlights, Notes, Chats, Evaluators, Choice Points, Values and Other. It counts only " +
-      "on a device where the person turned on Share usage statistics in Settings, and only " +
-      "while someone is signed in. It learns what the person did from the trace of this tab: " +
+      "Highlights, Notes, Chats, Evaluators, Choice Points, Values and Other. It counts on " +
+      "every device while someone is signed in, and sends the totals to the account only " +
+      "while Share usage statistics from this device is on in the Usage tab; while it is " +
+      "off nothing leaves the device, and turning it on sends everything this device " +
+      "counted. It learns what the person did from the trace of this tab: " +
       "each action a view announced, by its name and the view that announced it, never what " +
       "was written or read. The time between two actions is counted for the feature of the " +
       "first, and an action that opens something on the stage, such as a book from a chat, " +
@@ -243,8 +268,8 @@ export const machine = setup({
       "day and feature in the browser and sent to the account when there is something new, " +
       "also later when the device was offline; the last write wins (5). Summary answers the " +
       "last 182 days for this account, or, for the admin only, added up across all accounts, " +
-      "as totals with no breakdown per account (12). Offline it answers with this device's " +
-      "own totals.",
+      "as totals with no breakdown per account (12). Offline, or while sharing is off, it " +
+      "answers with this device's own totals.",
     kind: "fact",
     shape: "replicated",
     owns: "how long the account spends in each feature, per device and day",
@@ -371,18 +396,10 @@ export const machine = setup({
   entry: [assign({ probing: true }), ({ context, self }) => probe(context, self)],
   on: {
     "trace.recorded": { actions: enqueueActions(({ context, event, enqueue, self }) => onRecord(context, event, enqueue, self)) },
-    "settings.changed": {
-      actions: assign({
-        on: ({ event }) => event.usageCounting === true,
-        last: ({ context, event }) => (event.usageCounting === true ? context.last : null),
-      }),
-    },
+    "settings.changed": { actions: enqueueActions(({ context, event, enqueue }) => share(context, event.usageCounting === true, enqueue)) },
     _settings: {
       guard: ({ event }) => event.value != null && typeof event.value === "object" && !("error" in event.value),
-      actions: assign({
-        on: ({ event }) => event.value.usageCounting === true,
-        last: ({ context, event }) => (event.value.usageCounting === true ? context.last : null),
-      }),
+      actions: enqueueActions(({ context, event, enqueue }) => share(context, event.value.usageCounting === true, enqueue)),
     },
     _probed: { actions: assign({ probing: false }) },
     // While loading, only whether the browser is leaving is kept (12); who is signed in
@@ -427,8 +444,10 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: {
           target: "ready.idle",
-          actions: enqueueActions(({ event, enqueue }) => {
+          actions: enqueueActions(({ context, event, enqueue }) => {
             enqueue.assign({ userId: typeof event.output?.userId === "string" ? event.output.userId : null });
+            // Rows queued while sharing was on, read back after it was turned off.
+            if (!context.on) enqueue(() => unqueue(context));
             enqueue.raise({ type: "_sync" });
             enqueue.raise({ type: "_answer" });
           }),
