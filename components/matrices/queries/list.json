@@ -1,0 +1,145 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The day whose matrix is wanted; when left out, the newest matrices of any day.",
+    "type": "object",
+    "properties": {
+      "day": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      }
+    },
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "With a day, that day's matrix, or none; without one, at most 20 matrices, newest day first. Each is whole as matrix.changed carries it.",
+    "type": "object",
+    "properties": {
+      "matrices": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "day": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "description": "The journal day the matrix is kept with, as its date; it never changes."
+            },
+            "from": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "description": "The day of the earlier matrix this one was copied from, without its ticked tasks. Absent on a matrix that started empty."
+            },
+            "tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "The task in the user's own words."
+                  },
+                  "place": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "do",
+                      "schedule",
+                      "delegate",
+                      "drop",
+                      null
+                    ],
+                    "description": "Where the user put the task: do (urgent and important), schedule (important, not urgent), delegate (urgent, not important) or drop (neither). Only ever set by the user; null while the user has not placed it."
+                  },
+                  "done": {
+                    "type": "boolean",
+                    "description": "Whether the user ticked the task."
+                  },
+                  "suggested": {
+                    "type": "object",
+                    "description": "Where the app suggests the task goes while the user has not placed it, written only by the matrices fact. A task without a place shows at this place; with neither, it shows in To sort.",
+                    "properties": {
+                      "place": {
+                        "enum": [
+                          "do",
+                          "schedule",
+                          "delegate",
+                          "drop"
+                        ]
+                      },
+                      "sure": {
+                        "type": "boolean",
+                        "description": "False when the answer was too close to call, shown as Not sure."
+                      }
+                    },
+                    "required": [
+                      "place",
+                      "sure"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "text",
+                  "place",
+                  "done"
+                ],
+                "additionalProperties": false
+              },
+              "description": "The tasks, in the order they stand inside each place."
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When the matrix was added."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "pending": {
+              "type": "boolean",
+              "description": "A change the server has not acknowledged yet (5)."
+            }
+          },
+          "required": [
+            "id",
+            "day",
+            "tasks",
+            "createdAt",
+            "version",
+            "pending"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "total": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "How many matrices match in all, of which the reply holds at most 20."
+      }
+    },
+    "required": [
+      "matrices",
+      "total"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "matrix.changed",
+    "matrix.deleted"
+  ]
+}

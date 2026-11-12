@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "add opens an Eisenhower Matrix on the day shown, when that day can be written: the one the day already has, or a new one copied from the newest earlier matrix without its ticked tasks.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

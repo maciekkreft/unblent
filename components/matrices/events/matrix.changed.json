@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An Eisenhower Matrix now looks like this: the whole matrix (4, third rule), pending until the server acknowledges it (5).",
+  "type": "object",
+  "properties": {
+    "matrix": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "day": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "The journal day the matrix is kept with, as its date; it never changes."
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "The day of the earlier matrix this one was copied from, without its ticked tasks. Absent on a matrix that started empty."
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              "text": {
+                "type": "string",
+                "description": "The task in the user's own words."
+              },
+              "place": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "do",
+                  "schedule",
+                  "delegate",
+                  "drop",
+                  null
+                ],
+                "description": "Where the user put the task: do (urgent and important), schedule (important, not urgent), delegate (urgent, not important) or drop (neither). Only ever set by the user; null while the user has not placed it."
+              },
+              "done": {
+                "type": "boolean",
+                "description": "Whether the user ticked the task."
+              },
+              "suggested": {
+                "type": "object",
+                "description": "Where the app suggests the task goes while the user has not placed it, written only by the matrices fact. A task without a place shows at this place; with neither, it shows in To sort.",
+                "properties": {
+                  "place": {
+                    "enum": [
+                      "do",
+                      "schedule",
+                      "delegate",
+                      "drop"
+                    ]
+                  },
+                  "sure": {
+                    "type": "boolean",
+                    "description": "False when the answer was too close to call, shown as Not sure."
+                  }
+                },
+                "required": [
+                  "place",
+                  "sure"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "place",
+              "done"
+            ],
+            "additionalProperties": false
+          },
+          "description": "The tasks, in the order they stand inside each place."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the matrix was added."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pending": {
+          "type": "boolean",
+          "description": "A change the server has not acknowledged yet (5)."
+        }
+      },
+      "required": [
+        "id",
+        "day",
+        "tasks",
+        "createdAt",
+        "version",
+        "pending"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "matrix"
+  ],
+  "additionalProperties": false
+}

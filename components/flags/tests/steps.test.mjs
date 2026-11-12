@@ -120,3 +120,13 @@ test("the Wheel of Life is named as people know it in a step's label", async () 
   await flush();
   assert.deepEqual(steps.map((s) => s.label), ["release Wheel of Life", "show Wheel of Life"]);
 });
+
+test("the Eisenhower Matrix is named as people know it in a step's label", async () => {
+  const { actor, steps } = start(server());
+  await flush();
+  actor.send({ type: "flag.switched", feature: "eisenhower-matrix", on: true, column: "release" });
+  await flush();
+  actor.send({ type: "flag.switched", feature: "eisenhower-matrix", on: true, column: "show" });
+  await flush();
+  assert.deepEqual(steps.map((s) => s.label), ["release Eisenhower Matrix", "show Eisenhower Matrix"]);
+});
