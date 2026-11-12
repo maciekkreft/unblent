@@ -22,7 +22,8 @@
       "style-mod": "/static/vendor/style-mod/src/style-mod.js",
       "w3c-keyname": "/static/vendor/w3c-keyname/index.js",
       "crelt": "/static/vendor/crelt/index.js",
-      "echarts": "/static/vendor/echarts/echarts.esm.min.js"
+      "echarts": "/static/vendor/echarts/echarts.esm.min.js",
+      "sortablejs": "/static/vendor/sortablejs/sortable.esm.js"
     }
   },
   "packages": [
@@ -232,6 +233,16 @@
         "echarts/NOTICE": "fa99ac3af859d0e13166906dc53a73ad34a08898da7e8ae83407275496e9e30c",
         "echarts/licenses/LICENSE-d3": "e1211892da0b0e0585b7aebe8f98c1274fba15bafe47fa1f4ee8a7a502c06304",
         "echarts/echarts.esm.min.js": "971816189bf83502ba4142e5bec61367272427a9c990814ee69734395faf357e"
+      }
+    },
+    {
+      "name": "sortablejs",
+      "version": "1.15.6",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/modular/sortable.esm.js",
+      "files": {
+        "sortablejs/LICENSE": "e94dfc31e800d169257569db270457c9f028440c9ccae41e7eb78b2db18f1298",
+        "sortablejs/sortable.esm.js": "62375e4088a365131d262921a50367280717136598de5f5c208137a919141a96"
       }
     }
   ]
