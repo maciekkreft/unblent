@@ -6,7 +6,7 @@ import { EditorState, Compartment, Annotation } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
-import { machine, duplicateNames, OPTION_ICONS, showing, removable } from "./machine.js";
+import { machine, duplicateNames, OPTION_ICONS, showing, removable, EISENHOWER } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import discarded from "./events/evaluator.discarded.json" with { type: "json" };
 import opened from "./events/evaluator.opened.json" with { type: "json" };
@@ -703,7 +703,7 @@ class EvaluatorEditor extends LitElement {
     const { draft, evaluators } = snapshot.context;
     if (draft.removing) return html`<p class="note">This evaluator was deleted.</p>`;
     if (draft.derivedFrom) return this.#derived(snapshot, draft);
-    const stored = evaluators.some((r) => r.id === draft.id);
+    const stored = evaluators.some((r) => r.id === draft.id) && draft.id !== EISENHOWER;
     const questions = draft.questions.filter((q) => !q.removing);
     this.#wanted.clear();
     return html`

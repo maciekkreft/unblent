@@ -238,3 +238,10 @@ test("the Mac app is told by connect in the session picture", () => {
   assert.equal(onMac({ userId: "a" }), false);
   assert.equal(onMac({ error: "no-answerer" }), false);
 });
+
+test("the built-in Eisenhower is never deleted from here", async () => {
+  const E = "0000000000000000000000EMTX";
+  const { actor, emitted } = await start({ evaluators: [{ ...EV_B, id: E, name: "Eisenhower" }] });
+  actor.send({ type: "_delete", evaluator: E });
+  assert.ok(!emitted.some((e) => e.type === "evaluator.discarded"));
+});

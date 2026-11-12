@@ -31,6 +31,7 @@ test("every evaluator of the admin is listed, whichever book it is kept with, ea
       ...REPLIES.evaluators.evaluators,
       evaluator("01ARZ3NDEKTSV4RRFFQ69G5EV4", BOOK, { removing: true }),
       evaluator("01ARZ3NDEKTSV4RRFFQ69G5EV5", JOURNAL, { name: "Your values", derivedFrom: "values" }),
+      evaluator("0000000000000000000000EMTX", JOURNAL, { name: "Eisenhower" }),
     ],
   });
   assert.deepEqual(starters, [

@@ -698,6 +698,13 @@ test("dd ignores a row built from another fact (Your values), which cannot be de
   assert.equal(ctx().cut?.id, id(2), "a row the user wrote is cut as before");
 });
 
+test("dd ignores the built-in Eisenhower, which cannot be deleted", async () => {
+  const E = "0000000000000000000000EMTX";
+  const { actor, ctx } = await start({ kept: { [A]: [{ ...placed(1, "V"), id: E, name: "Eisenhower" }] } });
+  actor.send({ type: "_cut", id: E });
+  assert.equal(ctx().cut, null);
+});
+
 test("Escape on a cut row deletes it at once, and so does a second dd", async () => {
   const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED } });
   actor.send({ type: "_escape" });

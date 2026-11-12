@@ -498,3 +498,15 @@ test("a copied text or link goes into Vim's register", () => {
   assert.deepEqual(pushed, ["One.\n\nTwo.", "[q](note:01K7TEST0000000000000H0001)"]);
   actor.stop();
 });
+
+test("the built-in Eisenhower is saved like any evaluator but never deleted", async () => {
+  const E = "0000000000000000000000EMTX";
+  const { actor, clock, emitted, ctx } = await start([{ ...EVALUATOR, id: E, book: P, name: "Eisenhower" }]);
+  await select(actor, { id: E, book: P });
+  actor.send({ type: "_edit", patch: { name: "Urgent and important" } });
+  clock.increment(400);
+  assert.equal(saves(emitted).at(-1)?.name, "Urgent and important");
+  actor.send({ type: "_delete" });
+  assert.ok(!emitted.some((e) => e.type === "evaluator.discarded"));
+  assert.equal(ctx().draft.removing, false);
+});

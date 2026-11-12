@@ -13,6 +13,9 @@ export const PAGE = "evaluators";
 export const PATH = `/try/${PAGE}`;
 
 export const UNTITLED = "Untitled evaluator";
+// The built-in Eisenhower evaluator's fixed id, repeated from evaluators because components
+// never import each other.
+const EISENHOWER = "0000000000000000000000EMTX";
 
 // A question Run would ask (the same rule as evaluator-list's; components never import
 // each other, 11.2): not being removed, switched on, written, and for a pick question
@@ -27,11 +30,11 @@ const askable = (question) =>
 
 // What the tab lists: every evaluator of the admin, whichever book it is stored with, as
 // evaluators belong to the account, in id order, with its tick for this page and how many
-// questions the Evaluate box would ask. One in its undo window, or one built from another
-// fact (Your values, never a starter), is left out.
+// questions the Evaluate box would ask. One in its undo window, one built from another
+// fact (Your values) or the built-in Eisenhower, never starters, is left out.
 export const startersOf = ({ evaluators }) =>
   evaluators
-    .filter((e) => !e.removing && !e.derivedFrom)
+    .filter((e) => !e.removing && !e.derivedFrom && e.id !== EISENHOWER)
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((e) => ({
       id: e.id,
@@ -57,7 +60,7 @@ export const machine = setup({
     description:
       "The Starters tab of the Evaluators try page, shown only to the admin, and hidden " +
       "while the admin views as someone: the try page's link with Copy link, which copies it " +
-      "ready to paste, and every evaluator of the admin, each with a tick and how many of its " +
+      "ready to paste, and every evaluator of the admin but Your values and the built-in Eisenhower, each with a tick and how many of its " +
       "questions are written and switched on. A new guest of the Evaluators try " +
       "page gets a copy of each ticked evaluator as it is " +
       "then, kept with the guest's Journal. Each later try page that has starters holds " +

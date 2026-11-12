@@ -17,6 +17,9 @@ const EXPECT = /^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$/;
 const str = (v) => (typeof v === "string" ? v : "");
 // Your values' fixed id (see "Your values" below), needed here for its place in the list.
 const YOURS_ID = "0000000000000000000000YVAS";
+// The Eisenhower evaluator's fixed id (see "Eisenhower" below).
+const EISENHOWER_ID = "0000000000000000000000EMTX";
+const builtIn = (id) => id === YOURS_ID || id === EISENHOWER_ID;
 
 // --- Records --------------------------------------------------------------------------
 
@@ -130,8 +133,9 @@ export function between(after, before) {
 // first: its key is "z", its id and "V", so it sorts after every key `between` makes for
 // a new evaluator and among its kind by id, the same on every device. The key is written
 // down only when it is moved, so an edit never moves it.
-// Your values, until it is moved, goes after them all: "zz" sorts after every such key.
-export const positionOf = (r) => (isPosition(r.position) ? r.position : r.id === YOURS_ID ? "zz" : `z${r.id}V`);
+// Your values and Eisenhower, until moved, go after them all: "zz" sorts after every such
+// key, and between the two by id.
+export const positionOf = (r) => (isPosition(r.position) ? r.position : builtIn(r.id) ? "zz" : `z${r.id}V`);
 
 // List order: by key, then by id where two keys are equal.
 const byPosition = (a, b) => {
@@ -248,9 +252,62 @@ const yoursHidden = (context) => context.hidden === null || context.hidden.inclu
 // error) hides nothing.
 const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
 
-// Your values is news only where the values fact is known to be, and while it is shown.
+// --- Eisenhower -------------------------------------------------------------------------
+
+// The Eisenhower evaluator is built in: matrices asks it where each task of an Eisenhower
+// Matrix goes, and finds it and its two questions by these fixed ids, so the ids never
+// change and are the same in every account. Kept with the Journal.
+export const EISENHOWER = EISENHOWER_ID;
+export const URGENT = "0000000000000000000000RGNT";
+export const IMPORTANT = "0000000000000000000000MPRT";
+const EISENHOWER_DEFAULT = {
+  id: EISENHOWER,
+  book: JOURNAL,
+  name: "Eisenhower",
+  description: "Decides where a task goes in the Eisenhower Matrix.",
+  on: true,
+  questions: [
+    {
+      id: URGENT,
+      kind: "yesno",
+      text: "Is this task urgent?",
+      yes: "A deadline within the next few days, someone waiting for it now, or a week's wait makes things clearly worse.",
+      no: "Nothing bad happens if it waits a week or more.",
+    },
+    {
+      id: IMPORTANT,
+      kind: "yesno",
+      text: "Is this task important?",
+      yes: "It moves forward the person's own goals, health, money, work results or close relationships, or leaving it undone has serious consequences.",
+      no: "It matters mostly to someone else, or it is routine, a distraction or a nice-to-have.",
+    },
+  ],
+};
+
+// What is stored of it is only what the user changed: until the user changes anything it
+// is not stored and is as above; from then on it is an ordinary row, whole.
+const eisenhower = (context) => {
+  const r = context.evaluators.get(EISENHOWER);
+  return visible(r) ? r : record(EISENHOWER_DEFAULT);
+};
+
+// Listed only while `flags` reports the Eisenhower Matrix shown (3.1), not before it answers,
+// nor on a try page, which has no matrix. Hiding it changes nothing that is stored.
+// A page without `flags` (its reply is an error) never shows it, since there it cannot be
+// known that the feature is shown.
+const eisenhowerShown = (context) => context.flagged === true && !context.hidden.includes("eisenhower-matrix") && !context.tryPage;
+
+// The built-in evaluators a list holds, beside the user's own.
+const builtIns = (context, values, book) => [
+  ...(values ? [yours(context)] : []),
+  ...(eisenhowerShown(context) && (book === undefined || book === JOURNAL) ? [eisenhower(context)] : []),
+];
+
+// Your values is news only where the values fact is known to be, and while it is shown;
+// Eisenhower only while it is shown.
 function say(context, enqueue, r) {
   if (r.id === YOURS && (context.values === null || yoursHidden(context))) return;
+  if (r.id === EISENHOWER && !eisenhowerShown(context)) return;
   const evaluator = announce(context, r);
   enqueue.emit({ type: "evaluator.changed", evaluator });
 }
@@ -261,8 +318,8 @@ function replyList(context, payload, reply) {
   const { book, day } = payload ?? {};
   const answer = (values) => {
     const evaluators = [...context.evaluators.values()]
-      .filter((r) => visible(r) && r.id !== YOURS && (book === undefined || r.book === book))
-      .concat(values ? [yours(context)] : [])
+      .filter((r) => visible(r) && !builtIn(r.id) && (book === undefined || r.book === book))
+      .concat(builtIns(context, values, book))
       .sort(byPosition)
       .map((r) => announce(context, r, values ?? undefined));
     reply({ evaluators });
@@ -327,8 +384,8 @@ function usable(context, r, values) {
 function replyActive(context, reply) {
   withValues(context, (values) => {
     const evaluators = [...context.evaluators.values()]
-      .filter((r) => visible(r) && r.id !== YOURS)
-      .concat(values ? [yours(context)] : [])
+      .filter((r) => visible(r) && !builtIn(r.id))
+      .concat(builtIns(context, values))
       .sort(byPosition)
       .map((r) => usable(context, r, values))
       .filter(Boolean)
@@ -404,7 +461,8 @@ function judged(evaluator, text, answers) {
 function replyEvaluate(context, payload, reply) {
   const { evaluator: id, texts } = payload ?? {};
   const run = (values) => {
-    const r = id === YOURS ? (values ? yours(context) : null) : live(context, id);
+    const r =
+      id === YOURS ? (values ? yours(context) : null) : id === EISENHOWER ? (eisenhowerShown(context) ? eisenhower(context) : null) : live(context, id);
     if (!r || r.removing) return reply({ error: "not-found" });
     const evaluator = usable(context, r, values);
     if (!evaluator) return reply({ error: "no-questions" });
@@ -482,9 +540,10 @@ const outboxRow = (r, baseVersion) => ({
   ...(r.deleted ? { deleted: true } : {}),
 });
 
-// Your values is always there to switch or move, stored or not.
+// Your values and Eisenhower are always there to switch or move, stored or not.
 const live = (context, id) => {
   if (id === YOURS) return yours(context);
+  if (id === EISENHOWER) return eisenhower(context);
   const r = context.evaluators.get(id);
   return visible(r) ? r : null;
 };
@@ -535,8 +594,9 @@ function saveOnce(context, event, enqueue) {
 // admin's sheet shows the ticks; the server keeps starterFor only from the admin (5).
 // Each tick is a step (12, Undo).
 function applyTick(context, { evaluator, page, on }, enqueue) {
-  // Your values is built from each user's own values, so it is never a starter.
-  if (evaluator === YOURS) return;
+  // Your values is built from each user's own values, and Eisenhower is in every account,
+  // so neither is ever a starter.
+  if (builtIn(evaluator)) return;
   const was = live(context, evaluator);
   if (!was) return;
   const starterFor = pagesOf(on ? [...was.starterFor, page] : was.starterFor.filter((p) => p !== page));
@@ -640,8 +700,8 @@ function applyMove(context, event, enqueue) {
 // kept by what an evaluator asks, stay; signed in it rides the outbox alone, or on the row
 // of an edit not yet sent.
 function place(context, enqueue, current, position, placeStep) {
-  // Your values not yet stored is written whole, so the server has a row to place.
-  if (current.id === YOURS && !visible(context.evaluators.get(YOURS))) return commit(context, enqueue, { ...current, position, placeStep });
+  // A built-in evaluator not yet stored is written whole, so the server has a row to place.
+  if (builtIn(current.id) && !visible(context.evaluators.get(current.id))) return commit(context, enqueue, { ...current, position, placeStep });
   const r = { ...current, position, placeStep };
   context.evaluators.set(r.id, r);
   enqueue(() => context.store.put(r).catch(() => {}));
@@ -674,7 +734,7 @@ function applySwitch(context, { id, on }, enqueue) {
 function applySettle(context, { kind, id }, enqueue) {
   const marked = (x) => x.id === id && x.removing;
   const keep = (x) => !marked(x);
-  for (const r of [...context.evaluators.values()].filter((x) => visible(x) && x.id !== YOURS)) {
+  for (const r of [...context.evaluators.values()].filter((x) => visible(x) && !builtIn(x.id))) {
     if (kind === "evaluator" && marked(r)) commit(context, enqueue, { ...r, removing: false, deleted: true });
     else if (kind === "question" && r.questions.some(marked)) commit(context, enqueue, { ...r, questions: r.questions.filter(keep) });
     else if (kind === "option" && r.questions.some((q) => q.options.some(marked)))
@@ -690,7 +750,7 @@ function applySettle(context, { kind, id }, enqueue) {
 function startOver(context, enqueue) {
   if (!context.tryPage) return;
   const step = context.mint();
-  const gone = [...context.evaluators.values()].filter((x) => visible(x) && x.id !== YOURS);
+  const gone = [...context.evaluators.values()].filter((x) => visible(x) && !builtIn(x.id));
   for (const r of gone) commit(context, enqueue, { ...r, removing: false, deleted: true, step });
   context.restarting = { id: step, gone: gone.map((r) => ({ id: r.id, ...textOf(r), deleted: false, ...priorOf(r.step) })) };
   enqueue.assign({ restarting: context.restarting });
@@ -701,7 +761,7 @@ function startOver(context, enqueue) {
 // (evaluator.discarded). It goes at once and is one step, shown with the short notice
 // (12, Undo).
 function applyDiscard(context, { id }, enqueue) {
-  if (id === YOURS) return;
+  if (builtIn(id)) return;
   const r = live(context, id);
   if (!r) return;
   const step = context.mint();
@@ -839,7 +899,7 @@ function applyStep(context, event, enqueue) {
   const undoing = event.type === "step.undone";
   const expected = (entry) => (undoing ? event.id : priorStamp(entry, event.id));
   const leaves = (entry) => (undoing ? priorStamp(entry, event.id) : event.id);
-  const current = typeof p.id === "string" ? (p.id === YOURS ? live(context, YOURS) : context.evaluators.get(p.id)) : null;
+  const current = typeof p.id === "string" ? (builtIn(p.id) ? live(context, p.id) : context.evaluators.get(p.id)) : null;
   const wrote = (entry) => (entry.deleted === true || (typeof entry.name === "string" && Array.isArray(entry.questions)));
   if (p.kind === "evaluator" && current && wrote(p)) {
     if (current.step !== expected(p)) return settle("refused", "changed");
@@ -1014,7 +1074,7 @@ export const machine = setup({
       const { store, ask, api } = input;
       // Which features are hidden (3.1), asked beside the store so no query is answered
       // before it is known; flags.changed is held for us until the reply lands.
-      const flags = ask ? Promise.resolve().then(() => ask("flags", "read", {})).then(hiddenOf, () => []) : Promise.resolve([]);
+      const flags = ask ? Promise.resolve().then(() => ask("flags", "read", {})).catch(() => null) : Promise.resolve(null);
       await claim(store, ask, api);
       const [evaluators, outbox, cursor, userId, hidden] = await Promise.all([
         store.all(),
@@ -1023,7 +1083,7 @@ export const machine = setup({
         store.metaGet("userId"),
         flags,
       ]);
-      return { evaluators, outbox, cursor: cursor ?? 0, userId: userId ?? null, hidden };
+      return { evaluators, outbox, cursor: cursor ?? 0, userId: userId ?? null, hidden: hiddenOf(hidden), flagged: Array.isArray(hidden?.hidden) };
     }),
     // Missing (a Node test) is treated as signed out, so the fact still works headless.
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
@@ -1112,7 +1172,17 @@ export const machine = setup({
       "changes nothing, and it is never a starter. On a page without the values fact, such as a " +
       "try page, it is not listed, nor while Values and Choice Points is hidden (`flags`) or " +
       "before `flags` answers; what is stored of it stays and comes back when the feature is " +
-      "shown again. The admin ticks evaluators as starters for a try " +
+      "shown again. It also has Eisenhower built in, kept with the Journal under a fixed id, " +
+      "with fixed ids for its two questions, by which matrices asks it where each task of an " +
+      "Eisenhower Matrix goes: \"Is this task urgent?\" and \"Is this task important?\", yes / no " +
+      "questions with what yes and no mean and no answer expected, and the description \"Decides " +
+      "where a task goes in the Eisenhower Matrix.\" The user can reword its name, description " +
+      "and questions and switch a question off, as for any evaluator. Nothing of it is stored " +
+      "until the user changes something; from then on it is an ordinary row, whole. It cannot be " +
+      "deleted and is never a starter. It is listed only while the Eisenhower Matrix is shown " +
+      "(`flags`), not before `flags` answers and not on a try page; what is stored of it stays " +
+      "and comes back when the feature is shown again. Until moved, it and Your values go at " +
+      "the end of the list, Eisenhower first. The admin ticks evaluators as starters for a try " +
       "page (`starterFor`, by the page's name); the server keeps a copy of the ticked ones for " +
       "visitors. On a try page, a visitor whose browser holds no evaluators yet gets a copy of " +
       "each of that page's starters before anything is listed, with new ids, switched on and " +
@@ -1172,6 +1242,8 @@ export const machine = setup({
     values: null,
     // The features `flags` reports hidden (3.1); null until it answers.
     hidden: null,
+    // Whether `flags` itself answered or announced, rather than being absent from the page.
+    flagged: false,
     userId: null,
     cursor: 0,
     queued: [],
@@ -1200,8 +1272,13 @@ export const machine = setup({
     "flags.changed": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         const was = yoursHidden(context);
+        const wasShown = eisenhowerShown(context);
         context.hidden = hiddenOf(event);
-        enqueue.assign({ hidden: context.hidden });
+        context.flagged = true;
+        enqueue.assign({ hidden: context.hidden, flagged: true });
+        const shown = eisenhowerShown(context);
+        if (shown && !wasShown) say(context, enqueue, eisenhower(context));
+        if (wasShown && !shown) enqueue.emit({ type: "evaluator.deleted", id: EISENHOWER, book: JOURNAL });
         const now = yoursHidden(context);
         if (was === now || typeof context.ask !== "function") return;
         if (now) enqueue.emit({ type: "evaluator.deleted", id: YOURS, book: JOURNAL });
@@ -1236,6 +1313,7 @@ export const machine = setup({
             cursor: ({ event }) => event.output.cursor,
             userId: ({ event }) => event.output.userId,
             hidden: ({ context, event }) => context.hidden ?? event.output.hidden,
+            flagged: ({ context, event }) => context.flagged || event.output.flagged,
           }),
         },
         onError: {

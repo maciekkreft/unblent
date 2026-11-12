@@ -218,5 +218,5 @@ test("Start over means nothing off a try page", async () => {
   actor.send({ type: "trial.restarted" });
   await flush();
   assert.deepEqual(api.asked, []);
-  assert.deepEqual((await list(actor)).map((e) => e.name), ["Mine"]);
+  assert.deepEqual((await list(actor)).map((e) => e.name), ["Mine", "Eisenhower"], "off a try page Eisenhower is listed too");
 });
