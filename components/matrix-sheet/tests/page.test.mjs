@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // What only a browser shows: the places drawn from one matrix and the place button that moves
-// a task, the layout on a wide and a narrow page, the keyboard's way in, through and out of
+// a task, pulling a task by its handle, the layout on a wide and a narrow page, the keyboard's way in, through and out of
 // the sheet, and lines pasted into the Add a task line. The decisions are tested in Node. A
 // matrix is seeded through the API under the test's own login.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
@@ -161,6 +161,53 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("k");
         await until(async () => (await at(page)) === null);
         await press("j", "card");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: a gesture.
+    test("pulling a task by its handle moves it inside its place and to another place", async () => {
+      const D = "01K7TEST00000000000000TAK4";
+      const tasks = [...TASKS, { id: D, text: "Pay the rent", place: "do", done: false }];
+      // Tall enough that every place stands inside the page around, which scrolls and clips.
+      const { context, page, problems, sheet } = await open(browser, { tasks, viewport: { width: 900, height: 1300 } });
+      // The tasks a list shows while one is pulled, the line where it will land among them,
+      // leaving out the copy that follows the pointer.
+      const landing = (place) =>
+        page.evaluate(
+          (place) => [...document.querySelector("matrix-sheet").shadowRoot.querySelector(`[data-place="${place}"]`).children].filter((el) => el.matches(".task:not(.sortable-fallback)")).map((el) => el.dataset.id),
+          place,
+        );
+      // Sortable follows the pointer, so the mouse moves in steps as a hand would, and lets go
+      // once the line shows where the task lands.
+      const drag = async (id, target, place, want) => {
+        const from = await sheet.locator(`.task[data-id="${id}"] .grip`).boundingBox();
+        const to = await target.boundingBox();
+        const x0 = from.x + from.width / 2;
+        const y0 = from.y + from.height / 2;
+        const x1 = to.x + to.width / 2;
+        const y1 = to.y + to.height * 0.8;
+        await page.mouse.move(x0, y0);
+        await page.mouse.down();
+        for (let i = 1; i <= 12; i++) await page.mouse.move(x0 + ((x1 - x0) * i) / 12, y0 + ((y1 - y0) * i) / 12);
+        await until(async () => (await landing(place)).join() === want.join());
+        await page.mouse.up();
+      };
+      try {
+        await sheet.locator(".card").click();
+        await sheet.locator(".sheet").waitFor();
+        assert.equal(await sheet.locator(".task .grip").count(), 4, "every task has a handle");
+        await drag(A, sheet.locator(`.task[data-id="${D}"]`), "do", [D, A]);
+        await until(async () => (await places(page)).do.join() === "Pay the rent,Send the invoice");
+        await drag(C, sheet.locator(".quad.delegate"), "delegate", [C]);
+        await until(async () => (await places(page)).delegate.join() === "Sort the photos");
+        assert.deepEqual(await places(page), { tray: [], do: ["Pay the rent", "Send the invoice"], schedule: ["Book the dentist"], delegate: ["Sort the photos"], drop: [] });
+        assert.equal(await sheet.locator(".task").count(), 4, "nothing is left behind by the drag");
+        await sheet.locator(".buttons .done").click();
+        await sheet.locator(".card").click();
+        assert.deepEqual((await places(page)).do, ["Pay the rent", "Send the invoice"], "drawn again from what was saved");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

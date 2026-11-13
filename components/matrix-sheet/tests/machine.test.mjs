@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, shownPlace, ordered, neighbor, tagOf, cardOf, copiedLabel, linesOf, taskKey, pathTarget, dayName } from "../machine.js";
+import { machine, shownPlace, ordered, neighbor, dropped, tagOf, cardOf, copiedLabel, linesOf, taskKey, pathTarget, dayName } from "../machine.js";
 
 // matrix-sheet's decisions, against the machine alone: what it saves for each gesture, what a
 // new day's matrix starts as, what follows the fact, and where its keys go.
@@ -151,6 +151,39 @@ test("each gesture is one save that says finished: tick, place, a neighbor, new 
   actor.send({ type: "_delete", id: T2 });
   assert.deepEqual(last(), [], "the last delete sends no task, which takes the matrix away");
   assert.ok(emitted.every((e) => e.finished === true && e.id === KEPT));
+});
+
+test("a drop puts the task before the one at its index in the place dropped on, or after the last there, and makes the place the user's", () => {
+  const T4 = "01K6TEST000000000000000TA4";
+  const tasks = [task(T1, "A", { place: "do" }), task(T2, "B"), task(T3, "C", { place: "do" }), task(T4, "D", { suggested: { place: "schedule", sure: true } })];
+  const ids = (ts) => ts.map((t) => t.id.at(-1) + ":" + t.place);
+  assert.deepEqual(ids(dropped(tasks, T3, "do", 0)), ["3:do", "1:do", "2:null", "4:null"], "up inside Do");
+  assert.deepEqual(ids(dropped(tasks, T1, "do", 1)), ["2:null", "3:do", "1:do", "4:null"], "down inside Do, after the last there");
+  assert.deepEqual(ids(dropped(tasks, T2, "schedule", 0)), ["1:do", "3:do", "2:schedule", "4:null"], "before the task suggested there");
+  assert.equal(dropped(tasks, T4, "schedule", 0), null, "dropped where it stands at its suggestion saves nothing");
+  const both = dropped(dropped(tasks, T2, "schedule", 0), T4, "schedule", 0);
+  assert.deepEqual(ids(both), ["1:do", "3:do", "4:schedule", "2:schedule"], "moved inside the suggested place, the place is now the user's");
+  assert.deepEqual(ids(dropped(tasks, T1, "drop", 0)), ["2:null", "3:do", "4:null", "1:drop"], "into an empty place, at the end");
+  assert.deepEqual(ids(dropped(tasks, T3, null, 0)), ["1:do", "3:null", "2:null", "4:null"], "To sort takes the place away");
+  assert.equal(dropped(tasks, T1, "do", 0), null, "where it started saves nothing");
+  assert.equal(dropped(tasks, T2, null, 0), null);
+  assert.equal(dropped(tasks, "01K6TEST000000000000000TA9", "do", 0), null, "an unknown task");
+  assert.equal(dropped(tasks, T1, "elsewhere", 0), null, "an unknown place");
+});
+
+test("a drop is one save that says finished, and one where it started sends nothing", async () => {
+  const { actor, emitted, ctx } = await start([matrix(KEPT, TODAY, [task(T1, "A", { place: "do" }), task(T2, "B", { place: "do" })])]);
+  actor.send({ type: "_open" });
+  actor.send({ type: "_placing", id: T1 });
+  actor.send({ type: "_drop", id: T1, to: "do", index: 0 });
+  assert.equal(emitted.length, 0);
+  actor.send({ type: "_drop", id: T1, to: "do", index: 1 });
+  assert.equal(emitted.length, 1);
+  assert.deepEqual(emitted[0].tasks.map((t) => t.id), [T2, T1]);
+  assert.equal(emitted[0].finished, true);
+  assert.equal(ctx().placing, null, "a drop closes the places");
+  actor.send({ type: "_drop", id: T2, to: "delegate", index: 0 });
+  assert.deepEqual(emitted.at(-1).tasks.map((t) => [t.id, t.place]), [[T1, "do"], [T2, "delegate"]]);
 });
 
 test("pasted lines add one task each and keep what was typed; empty lines add nothing", async () => {

@@ -140,6 +140,24 @@ const move = change((tasks, event) => {
   return tasks.map((t) => (t === task ? { ...t, place: to } : t));
 });
 
+// A task dragged to `to` (a place, or null for To sort) at `index` among the tasks shown there
+// without it. The order of the tasks is the order inside each place, so it goes in before the
+// task that stood at that index, or after the last one shown there. A place dropped on is the
+// user's, also the suggested one; To sort clears it. A drop where it started changes nothing.
+export function dropped(tasks, id, to, index) {
+  const task = tasks.find((t) => t.id === id);
+  if (!task || !(to === null || isPlace(to)) || !Number.isInteger(index) || index < 0) return null;
+  const rest = tasks.filter((t) => t !== task);
+  const there = rest.filter((t) => shownPlace(t) === to);
+  const before = there[index];
+  const at = before ? rest.indexOf(before) : there.length ? rest.indexOf(there.at(-1)) + 1 : rest.length;
+  const was = tasks.slice(0, tasks.indexOf(task)).filter((t) => shownPlace(t) === to).length;
+  if (shownPlace(task) === to && was === Math.min(index, there.length)) return null;
+  return [...rest.slice(0, at), { ...task, place: to }, ...rest.slice(at)];
+}
+
+const drop = change((tasks, event) => dropped(tasks, event.id, event.to, event.index));
+
 // Empty words keep the task as it was: deleting is its own gesture.
 const words = change((tasks, event) => {
   const text = typeof event.text === "string" ? event.text.trim() : "";
@@ -312,12 +330,15 @@ export const machine = setup({
       "up arrow from the first task goes to the Add a task line and the down arrow comes back; " +
       "with Vim keys on o goes there too. Shift with an arrow, or with Vim keys on H, J, K and L, " +
       "moves the task to the neighboring place, left being urgent and up important, and the " +
-      "opposite key moves it back. Space ticks or unticks, Delete or with Vim keys on dd deletes " +
+      "opposite key moves it back. On a day that can be written each task also has a handle on its " +
+      "left, drawn as six dots: pulling it with the mouse or a finger moves the task to another " +
+      "place, or up and down inside one, or out of To sort, never into it; a line shows where it will land, and a drop is the user's place and order, " +
+      "saved as one Undo step, while a drop where it started saves nothing. Space ticks or unticks, Delete or with Vim keys on dd deletes " +
       "the task and moves the keyboard to the next one, and Escape closes the places, then folds " +
       "the sheet. Past the first task and past Done, j and k go on to the page around, and " +
       "coming back they land on the first task from above and on Done from below. A matrix is " +
       "written exactly while the day's own text is, as the journal page says; an earlier day " +
-      "is read only, with no Add a task line, no tick boxes to press, no place buttons and with " +
+      "is read only, with no Add a task line, no tick boxes to press, no place buttons, no handles and with " +
       "Close in place of Done.",
     kind: "view",
     emits: ["matrix.saved"],
@@ -446,6 +467,7 @@ export const machine = setup({
         _tick: { guard: ({ context, event }) => writing({ context }) && hasTask({ context, event }), actions: tick },
         _place: { guard: writing, actions: [place, assign({ placing: null })] },
         _move: { guard: writing, actions: move },
+        _drop: { guard: writing, actions: [drop, assign({ placing: null })] },
         _placing: {
           guard: ({ context, event }) => writing({ context }) && hasTask({ context, event }),
           actions: assign({ placing: ({ context, event }) => (context.placing === event.id ? null : event.id), editing: null }),

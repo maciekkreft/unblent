@@ -2,6 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask, send } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
+import Sortable from "sortablejs";
 import { machine, PLACES, writable, shownMatrix, shownPlace, ordered, tagOf, cardOf, copiedLabel, taskKey, pathTarget } from "./machine.js";
 import saved from "./events/matrix.saved.json" with { type: "json" };
 import add from "./commands/add.json" with { type: "json" };
@@ -9,6 +10,11 @@ import add from "./commands/add.json" with { type: "json" };
 // The view sits in journal-entry's slot, under the day's text inside its scrolling page, so it
 // scrolls with the day it is about. It is drawn like wheel-sheet: the same section, card,
 // sheet and buttons.
+
+// Section 10: SortableJS only reports where a task was dropped; the view puts the element back
+// and the actor saves, so the page is drawn only from the fact. Native drag and drop fails in
+// WebKit, so Sortable's own pointer dragging is used for the mouse as for a finger.
+const SORTING = { group: "matrix", handle: ".grip", draggable: ".task", forceFallback: true, animation: 150 };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -209,6 +215,40 @@ class MatrixSheet extends LitElement {
       grid-template-columns: auto minmax(0, 1fr) auto auto;
       align-items: start;
     }
+    .row.grab {
+      grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    }
+    /* touch-action keeps a finger's pull on the handle from scrolling the page. */
+    .grip {
+      display: grid;
+      place-items: center;
+      align-self: stretch;
+      padding: 0 var(--space-2xs);
+      font-size: var(--text-body);
+      color: var(--color-body-mid);
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .grip:hover {
+      color: var(--color-ink);
+    }
+    /* Where the pulled task will land. */
+    .task.sortable-ghost {
+      background: var(--color-accent-subtle);
+      box-shadow: inset 0 0 0 var(--border-width) var(--color-accent);
+    }
+    .task.sortable-ghost > * {
+      visibility: hidden;
+    }
+    .task.sortable-fallback {
+      background: var(--color-canvas);
+      box-shadow: var(--shadow-card);
+    }
+    .quad:has(.task) .none {
+      display: none;
+    }
     .tick,
     .txt,
     .bin {
@@ -268,7 +308,7 @@ class MatrixSheet extends LitElement {
     }
     /* The place button draws the matrix, the task's own place filled. */
     .placebtn {
-      grid-column: 4;
+      grid-column: -2;
       align-self: center;
       display: inline-grid;
       grid-template-columns: repeat(2, calc(var(--space-xs) + var(--space-2xs)));
@@ -429,6 +469,9 @@ class MatrixSheet extends LitElement {
       .placebtn {
         padding: var(--space-sm);
       }
+      .grip {
+        padding: 0 var(--space-sm);
+      }
       .seg button {
         padding-block: var(--space-sm);
       }
@@ -448,6 +491,11 @@ class MatrixSheet extends LitElement {
   #byPress = false;
   // The key pressed just before and when, for gg and dd.
   #last = { key: null, at: 0 };
+  // The Sortable of each list, by its element; whether a task is being pulled, and where its
+  // element stood before.
+  #sorting = new Map();
+  #dragging = false;
+  #back = null;
 
   #send(event, focus) {
     this.#focusNext = focus ?? null;
@@ -473,7 +521,14 @@ class MatrixSheet extends LitElement {
     this.toggleAttribute("idle", !shows);
   }
 
+  // While a task is pulled Sortable holds its element where it would land; a render then would
+  // draw over it, so it waits for the drop.
+  shouldUpdate() {
+    return !this.#dragging;
+  }
+
   updated() {
+    this.#sortables();
     const context = this.#context();
     if (context && context.landing !== this.#landed) {
       this.#landed = context.landing;
@@ -489,6 +544,50 @@ class MatrixSheet extends LitElement {
     // What held the keyboard went (the last task deleted, an Undo, a new matrix not kept).
     if (this.#holding && !this.#byPress) this.#actor.send({ type: "_handBack" });
   }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    for (const sortable of this.#sorting.values()) sortable.destroy();
+    this.#sorting.clear();
+    this.#dragging = false;
+  }
+
+  // One Sortable per list drawn on a day that can be written, made when the list appears and
+  // destroyed when it goes, so renders never stack them and a removed tag leaves none.
+  // Tasks are pulled out of To sort but never into it: a task with a suggestion would show
+  // straight back at its suggested place, and the drop would seem to do nothing.
+  #sortables() {
+    const context = this.#context();
+    const lists = context && context.open && writable(context) ? [...this.renderRoot.querySelectorAll(".tray, .quad")] : [];
+    for (const [el, sortable] of this.#sorting) {
+      if (lists.includes(el)) continue;
+      sortable.destroy();
+      this.#sorting.delete(el);
+    }
+    for (const el of lists) {
+      if (!this.#sorting.has(el)) this.#sorting.set(el, Sortable.create(el, { ...SORTING, ...(el.matches(".tray") ? { group: { name: "matrix", put: false } } : {}), onStart: this.#pulled, onEnd: this.#dropped }));
+    }
+  }
+
+  #pulled = (event) => {
+    this.#dragging = true;
+    this.#byPress = true;
+    this.#back = { parent: event.from, next: event.item.nextSibling };
+  };
+
+  // The element goes back where Lit drew it, before its old next sibling: Lit's comment markers
+  // are children too, so a position counted by Sortable would put it elsewhere.
+  #dropped = (event) => {
+    const { item, to } = event;
+    const id = item.dataset.id;
+    let index = 0;
+    for (let el = item.previousElementSibling; el; el = el.previousElementSibling) if (el.classList.contains("task")) index++;
+    const place = to.dataset.place || null;
+    this.#back?.parent.insertBefore(item, this.#back.next);
+    this.#back = null;
+    this.#dragging = false;
+    this.#send({ type: "_drop", id, to: place, index });
+  };
 
   #focusTask(id) {
     this.renderRoot.querySelector(`.txt[data-id="${id}"]`)?.focus();
@@ -636,7 +735,8 @@ class MatrixSheet extends LitElement {
     const at = shownPlace(task);
     const label = PLACES.find((p) => p.id === at)?.name ?? "To sort";
     return html`<div class="task ${task.done ? "done" : ""} ${placing ? "placing" : ""}" data-id=${task.id}>
-      <div class="row">
+      <div class="row ${write ? "grab" : ""}">
+        ${write ? html`<span class="grip" aria-hidden="true" title="Drag to move">${icon("dots-six-vertical")}</span>` : nothing}
         ${write
           ? html`<button type="button" class="tick" tabindex="-1" aria-pressed=${task.done ? "true" : "false"} aria-label="Done: ${task.text}" @click=${() => this.#send({ type: "_tick", id: task.id })}>
               ${icon(task.done ? "check-square" : "square")}
@@ -686,7 +786,7 @@ class MatrixSheet extends LitElement {
 
   #quad(context, tasks, p, write) {
     const list = tasks.filter((t) => shownPlace(t) === p.id);
-    return html`<div class="quad ${p.id}" role="group" aria-label=${p.name}>
+    return html`<div class="quad ${p.id}" role="group" aria-label=${p.name} data-place=${p.id}>
       <div class="qhead"><b>${p.name}</b><span>${p.hint}</span><span class="where">· ${p.where}</span></div>
       ${list.length ? list.map((t) => this.#task(context, t, write)) : html`<span class="none">Nothing here</span>`}
     </div>`;
@@ -713,7 +813,7 @@ class MatrixSheet extends LitElement {
           </div>`
         : nothing}
       ${toSort.length
-        ? html`<div class="tray" role="group" aria-label="To sort">
+        ? html`<div class="tray" role="group" aria-label="To sort" data-place="">
             <span class="cap">To sort</span>
             ${toSort.map((t) => this.#task(context, t, write))}
           </div>`
