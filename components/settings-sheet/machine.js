@@ -212,14 +212,14 @@ const featureShown = (hidden) => hidden !== null && !hidden.includes("choice-poi
 // (`hidden` is null) it is hidden, the same as `flags` itself (3.1).
 export const checksShown = ({ checks, hidden }) => checks !== null && featureShown(hidden);
 
-// The lookups that read the choice points and the values (7.7): Settings lists them only
-// while Values and Choice Points is shown, as `conversations` offers them only then.
-const FEATURE_TOOLS = ["choice-points: list", "values: read"];
+// The lookups of a feature `flags` can hide (7.7), each mapped to its feature: Settings
+// lists one only while its feature is shown, as `conversations` offers it only then.
+const FEATURE_TOOLS = { "choice-points: list": "choice-points", "values: read": "choice-points", "matrices: list": "eisenhower-matrix" };
 
 // The tool switches Settings shows: the switch of a hidden tool keeps its saved state, so
 // it comes back as it was when the feature is shown again.
 export const toolsShown = (toolList, hidden) =>
-  featureShown(hidden) ? toolList : toolList.filter((t) => !FEATURE_TOOLS.includes(t.key));
+  toolList.filter((t) => !(t.key in FEATURE_TOOLS) || (hidden !== null && !hidden.includes(FEATURE_TOOLS[t.key])));
 
 // The two lines of a value the values checks name, as value-checks.edited carries them.
 export const VALUE_LINES = ["values", "examples"];
@@ -376,8 +376,9 @@ export const machine = setup({
       "while `flags` reports Values and Choice Points hidden or has not answered. The choice point checks part is " +
       "hidden on a page without `choice-point-checks`, and while `flags` reports Values and " +
       "Choice Points hidden, or has not answered (a page without `flags` hides nothing); so are " +
-      "the lookups Choice points and Values in What the chat may read, whose switches keep " +
-      "their state until they show again. The Vim keys list names the chat box " +
+      "the lookups Choice points and Values in What the chat may read, and the lookup " +
+      "Eisenhower Matrix there while `flags` reports the Eisenhower Matrix hidden or has not " +
+      "answered; their switches keep their state until they show again. The Vim keys list names the chat box " +
       "only on a page where `conversations` answers. Saving, replacing or removing the API key or the Jev key " +
       "happens at once, and `llm` makes it a step with the short notice whose Undo brings the key " +
       "before back. While Reading aloud is shown and `voice` answers, the sheet holds Reading " +

@@ -585,9 +585,14 @@ test("only the tools whose owner is on this page are offered (7.7)", async () =>
   assert.deepEqual(h.calls.completes[0].tools.map((t) => `${t.target}: ${t.name}`), ["books: chapter"]);
 });
 
-test("the Choice points and Values lookups are offered only while flags shows Values and Choice Points (3.1)", async () => {
+test("each feature's lookups are offered only while flags shows that feature (3.1)", async () => {
   const contracts = {
-    queries: [CHAPTER_TOOL, toolQuery("choice-points", "list", other("choice-points", "queries", "list")), toolQuery("values", "read", other("values", "queries", "read"))],
+    queries: [
+      CHAPTER_TOOL,
+      toolQuery("choice-points", "list", other("choice-points", "queries", "list")),
+      toolQuery("values", "read", other("values", "queries", "read")),
+      toolQuery("matrices", "list", other("matrices", "queries", "list")),
+    ],
   };
   let answer;
   const h = start({ contracts, flags: () => new Promise((r) => (answer = r)) });
@@ -601,12 +606,17 @@ test("the Choice points and Values lookups are offered only while flags shows Va
   await feed(h, [plainAnswer(ANSWER, "One.")]);
   submit(h, { turn: { id: U("Y1"), text: "again" } });
   await until(() => h.calls.completes.length === 2, "the second question");
-  assert.deepEqual(offered(1), ["books: chapter", "choice-points: list", "values: read"]);
+  assert.deepEqual(offered(1), ["books: chapter", "choice-points: list", "matrices: list", "values: read"]);
   h.actor.send({ type: "flags.changed", off: [], hidden: ["choice-points"] });
   await feed(h, [plainAnswer(h.calls.completes[1].id, "Two.")]);
   submit(h, { turn: { id: U("Y2"), text: "and again" } });
   await until(() => h.calls.completes.length === 3, "the third question");
-  assert.deepEqual(offered(2), ["books: chapter"], "hidden again");
+  assert.deepEqual(offered(2), ["books: chapter", "matrices: list"], "only Values and Choice Points hidden");
+  h.actor.send({ type: "flags.changed", off: [], hidden: ["eisenhower-matrix"] });
+  await feed(h, [plainAnswer(h.calls.completes[2].id, "Three.")]);
+  submit(h, { turn: { id: U("Y3"), text: "once more" } });
+  await until(() => h.calls.completes.length === 4, "the fourth question");
+  assert.deepEqual(offered(3), ["books: chapter", "choice-points: list", "values: read"], "only the Eisenhower Matrix hidden");
 });
 
 test("a tool round asks the lookup and feeds its result back to the model (7.7)", async () => {

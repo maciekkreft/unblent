@@ -644,11 +644,12 @@ test("the choice point checks part is hidden while flags hides Values and Choice
   assert.equal(checksShown({ checks, hidden: ["undo"] }), true);
 });
 
-test("the Choice points and Values lookups are listed only while Values and Choice Points is shown", () => {
-  const list = [{ key: "choice-points: list" }, { key: "notes: read" }, { key: "values: read" }];
+test("each feature's lookups are listed only while that feature is shown", () => {
+  const list = [{ key: "choice-points: list" }, { key: "matrices: list" }, { key: "notes: read" }, { key: "values: read" }];
   assert.deepEqual(toolsShown(list, []), list);
   assert.deepEqual(toolsShown(list, null).map((t) => t.key), ["notes: read"], "flags has not answered");
-  assert.deepEqual(toolsShown(list, ["choice-points"]).map((t) => t.key), ["notes: read"]);
+  assert.deepEqual(toolsShown(list, ["choice-points"]).map((t) => t.key), ["matrices: list", "notes: read"]);
+  assert.deepEqual(toolsShown(list, ["eisenhower-matrix"]).map((t) => t.key), ["choice-points: list", "notes: read", "values: read"]);
 });
 
 test("Beta releases: hidden where updates does not answer; on a Mac it flips and follows updates.changed", async () => {

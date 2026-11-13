@@ -545,11 +545,11 @@ const convertReply = (reply, replySchema) => {
 // schema and label (kept for converting results and naming the lookup). A tool the user
 // keeps off (7.7) is kept in the metadata but left out of what is offered; a tool whose
 // owner set `switch: false` has no switch in Settings, so the map cannot turn it off.
-// The lookups of Values and Choice Points (3.1), offered only while `flags` reports the
-// feature shown; until it answers (`hidden` is null) they are not offered, the same as a
-// flagged view (8). Their switches stay as the user left them.
-const FEATURE_TOOLS = ["choice-points: list", "values: read"];
-const featureHidden = (hidden) => hidden === null || hidden.includes("choice-points");
+// The lookups of a feature `flags` can hide (3.1), each mapped to its feature: offered only
+// while `flags` reports that feature shown; until it answers (`hidden` is null) none is
+// offered, the same as a flagged view (8). Their switches stay as the user left them.
+const FEATURE_TOOLS = { "choice-points: list": "choice-points", "values: read": "choice-points", "matrices: list": "eisenhower-matrix" };
+const featureHidden = (key, hidden) => key in FEATURE_TOOLS && (hidden === null || hidden.includes(FEATURE_TOOLS[key]));
 
 const buildTools = (context, reply) => {
   const queries = (reply && reply.queries) || [];
@@ -562,7 +562,7 @@ const buildTools = (context, reply) => {
     for (const field of ["items", "itemName", "itemExcerpt", "total", "opens", "openId", "openChapter"]) if (q.tool[field] !== undefined) meta[key][field] = q.tool[field];
     if (q.tool.switch !== false && context.tools[key] === false) continue;
     if (!context.answered(q.target, q.name)) continue; // its owner is not on this page (7.7)
-    if (FEATURE_TOOLS.includes(key) && featureHidden(context.hidden)) continue;
+    if (featureHidden(key, context.hidden)) continue;
     offered.push({ key, target: q.target, name: q.name, description: q.tool.description, payload: q.payload });
   }
   offered.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -1792,7 +1792,8 @@ export const machine = setup({
       "was created; the user links a chat to another chapter or to the whole book from the " +
       "open chat, and like a rename that keeps its time and its place. While Values and " +
       "Choice Points is hidden (`flags`), or before `flags` answers, the lookups Choice points " +
-      "and Values are not offered, and their switches keep their state.",
+      "and Values are not offered, nor is the lookup Eisenhower Matrix while the Eisenhower " +
+      "Matrix is hidden or before `flags` answers, and their switches keep their state.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",

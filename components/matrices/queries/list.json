@@ -141,5 +141,10 @@
   "supersededBy": [
     "matrix.changed",
     "matrix.deleted"
-  ]
+  ],
+  "tool": {
+    "description": "Returns the reader's Eisenhower Matrices, newest day first: each is kept with one journal day (its date) and holds that day's tasks in the reader's own words, each with its place (do: urgent and important; schedule: important, not urgent; delegate: urgent, not important; drop: neither), whether it is done (ticked), and, while the reader has not placed it, the place the app suggests and whether that suggestion is sure. A task with no place shows in its suggested place; with neither it is still to sort. A matrix copied from an earlier day names that day in from. Give day (YYYY-MM-DD) for one journal day's matrix, or nothing for the 20 newest; total says how many there are in all.",
+    "label": "Reading your Eisenhower Matrix", "title": "Eisenhower Matrix", "group": "Journal", "order": 335,
+    "items": "/matrices", "itemName": "/day", "total": "/total"
+  }
 }
