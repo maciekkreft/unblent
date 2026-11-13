@@ -162,14 +162,23 @@ const todayFrom = (picture) => (isDay(picture?.today) ? picture.today : null);
 // What a matrix undone back past every step this browser knows of is stamped with.
 const before = (e, step) => e.prior ?? `^${step}`;
 
+// Whether a save only took tasks away, leaving the rest as they were and in their order.
+function droppedOnly(before, after) {
+  if (after.length === 0 || after.length >= before.length) return false;
+  const kept = own(before).filter((t) => after.some((a) => a.id === t.id));
+  return JSON.stringify(kept) === JSON.stringify(own(after));
+}
+
 // Every save that changes a matrix's tasks is a step. One stretch of typing in one matrix
 // is one step, from its first save until a save says `finished`; a save while that stretch
 // last wrote it joins it. Adding one is the first save's step, whose Undo deletes it again;
-// a delete is a step of its own, which asks for the notice.
+// a delete, of the matrix or of some of its tasks, is a step of its own, which asks for the
+// notice.
 function recordStep(context, enqueue, was, next, event) {
   const open = context.stretch;
   const removing = Boolean(next.deleted);
-  const joins = !removing && open != null && open.id === next.id && was?.step === open.step;
+  const dropping = !removing && Boolean(was) && droppedOnly(was.tasks, next.tasks);
+  const joins = !removing && !dropping && open != null && open.id === next.id && was?.step === open.step;
   const step = joins ? open.step : context.mint();
   const first = joins ? open.before : was ? entry(was) : entry({ ...next, deleted: true }, null);
   commit(context, enqueue, { ...next, step });
@@ -177,12 +186,12 @@ function recordStep(context, enqueue, was, next, event) {
     type: "step.recorded",
     id: step,
     owner: "matrices",
-    label: `${removing ? "delete" : first.deleted ? "add" : "edit"} Eisenhower Matrix`,
+    label: dropping ? (next.tasks.length === was.tasks.length - 1 ? "delete task" : "delete tasks") : `${removing ? "delete" : first.deleted ? "add" : "edit"} Eisenhower Matrix`,
     undo: first,
     redo: entry({ ...next, step }, first.prior ?? null),
-    ...(removing ? { notice: true } : {}),
+    ...(removing || dropping ? { notice: true } : {}),
   });
-  const stretch = removing || event.finished === true ? null : { step, id: next.id, before: first };
+  const stretch = removing || dropping || event.finished === true ? null : { step, id: next.id, before: first };
   context.stretch = stretch;
   enqueue.assign({ stretch });
 }
@@ -536,7 +545,7 @@ export const machine = setup({
       "suggestion and is not asked again. An error, such as no key or being offline, leaves the " +
       "task without a suggestion until the next load; earlier days are not asked about. Writing a " +
       "suggestion is not a step and Undo never removes one. A matrix with no task is not kept, and " +
-      "a save that leaves none deletes it at once with the short notice. Every change the user " +
+      "a save that leaves none deletes it at once with the short notice; a save that only takes tasks away is a step of its own with the short notice too. Every change the user " +
       "makes is a step Undo and Redo reverse (section 12): one stretch of changes to one matrix, " +
       "from its first save until a save says finished, and a delete; Undo of a new matrix's first " +
       "stretch deletes it, and a deleted one comes back with a restore write. A step compares only " +

@@ -12,6 +12,8 @@ const { mount, unmount, send, ask } = await import("bus");
 const NOW = new Date(2026, 9, 14, 9, 30).getTime();
 const ID = "01ARZ3NDEKTSV4RRFFQ69G5CP1";
 const CP = "01ARZ3NDEKTSV4RRFFQ69G5CP2";
+const MX = "01ARZ3NDEKTSV4RRFFQ69G5CP3";
+const TX = "01ARZ3NDEKTSV4RRFFQ69G5CP4";
 
 const memory = () => {
   const held = new Map();
@@ -30,13 +32,14 @@ const memory = () => {
 const json = (path) => JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
 
 async function page() {
-  const wired = await wire(["wheels", "choice-points", "values"], {
+  const wired = await wire(["wheels", "matrices", "choice-points", "values"], {
     wheels: { store: memory() },
+    matrices: { store: memory(), now: () => NOW },
     "choice-points": { store: memory() },
     values: { store: { ...memory(), placesAll: async () => [], placePut: async () => {} }, now: () => NOW },
   });
-  const [{ machine: picker }, { machine: wheel }, { machine: cards }, { machine: values }] = await Promise.all(
-    ["sheet-picker", "wheel-sheet", "choice-point-cards", "values-sheet"].map((n) => import(`../../${n}/machine.js`)),
+  const [{ machine: picker }, { machine: wheel }, { machine: cards }, { machine: values }, { machine: matrix }] = await Promise.all(
+    ["sheet-picker", "wheel-sheet", "choice-point-cards", "values-sheet", "matrix-sheet"].map((n) => import(`../../${n}/machine.js`)),
   );
   const input = (m, more = {}) => ({
     ask: (target, name, payload) => ask(m, target, name, payload),
@@ -50,6 +53,11 @@ async function page() {
       input: input(wheel, { mint: () => ID }),
       events: { "wheel.saved": json("wheel-sheet/events/wheel.saved.json") },
       commands: { add: json("wheel-sheet/commands/add.json") },
+    }),
+    matrix: mount(matrix, {
+      input: input(matrix, { mint: (() => { const ids = [MX, TX]; return () => ids.shift(); })() }),
+      events: { "matrix.saved": json("matrix-sheet/events/matrix.saved.json") },
+      commands: { add: json("matrix-sheet/commands/add.json") },
     }),
     cards: mount(cards, {
       input: input(cards, { mint: () => CP }),
@@ -90,6 +98,24 @@ test("picking the Wheel of Life opens a wheel through the bus; once it is kept i
   }
 });
 
+test("picking the Eisenhower Matrix opens one through the bus; once it holds a task it leaves the list, and deleting it puts it back", async () => {
+  const { sheets, finish, ctx } = await page();
+  try {
+    await until(() => sheets.matrix.getSnapshot().matches("ready") && ctx().matrices !== null);
+    sheets.picker.send({ type: "_toggle" });
+    sheets.picker.send({ type: "_pick", id: "matrix" });
+    const sheet = () => sheets.matrix.getSnapshot().context;
+    assert.deepEqual([sheet().open, sheet().landing, sheet().fresh.id], [true, 1, MX]);
+    sheets.matrix.send({ type: "_add", text: "Call the bank" });
+    await until(() => ctx().matrices.some((m) => m.id === MX));
+    assert.equal(sheet().fresh, null, "the fact keeps it");
+    sheets.matrix.send({ type: "_delete", id: TX });
+    await until(() => !ctx().matrices.some((m) => m.id === MX));
+  } finally {
+    finish();
+  }
+});
+
 test("picking Choice point opens a new one through the bus, and picking it again another", async () => {
   const { sheets, finish } = await page();
   try {
@@ -123,7 +149,8 @@ test("a sheet handing the keyboard back reaches the picker's focus command throu
     sheets.wheel.send({ type: "_handBack" });
     sheets.cards.send({ type: "_handBack" });
     sheets.values.send({ type: "_handBack" });
-    assert.equal(ctx().landing, 3);
+    sheets.matrix.send({ type: "_handBack" });
+    assert.equal(ctx().landing, 4);
   } finally {
     finish();
   }
@@ -137,6 +164,9 @@ test("add is ignored by each sheet on a day that cannot be written", async () =>
     sheets.wheel.send(closed);
     sheets.cards.send(closed);
     sheets.values.send(closed);
+    sheets.matrix.send(closed);
+    sheets.matrix.send({ type: "add" });
+    assert.equal(sheets.matrix.getSnapshot().context.open, false);
     sheets.wheel.send({ type: "add" });
     sheets.cards.send({ type: "add" });
     sheets.values.send({ type: "add" });

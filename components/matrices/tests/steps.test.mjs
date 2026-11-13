@@ -154,6 +154,21 @@ test("a save that leaves no task is one step that asks for the notice; Undo brin
   assert.equal(await s.held(), undefined);
 });
 
+test("a save that only takes a task away is a step of its own that asks for the notice; Undo brings the task back", async () => {
+  const s = await start();
+  s.save({ tasks: [task(), task({ id: T2, text: "B" })] });
+  s.save({ tasks: [task({ id: T2, text: "B" })] });
+  const removal = s.steps.at(-1);
+  assert.equal(s.steps.length, 2, "it does not join the stretch still open");
+  assert.deepEqual([removal.label, removal.notice], ["delete task", true]);
+  s.save({ tasks: [task({ id: T2, text: "B", done: true })] });
+  assert.equal(s.steps.length, 3, "nor does the next change join it");
+  assert.equal(s.steps.at(-1).notice, undefined, "a tick asks for no notice");
+  s.actor.send(undo(s.steps.at(-1)));
+  s.actor.send(undo(removal));
+  assert.deepEqual((await s.held()).tasks, [task(), task({ id: T2, text: "B" })]);
+});
+
 test("changing another matrix starts a step of its own, and an empty new matrix records none", async () => {
   const s = await start();
   s.save({ tasks: [task()] });

@@ -3,7 +3,7 @@ import { setup, assign, enqueueActions, fromPromise, spawnChild, stopChild } fro
 // The view component behind the + Add sheet row (6.4). It owns only UI state: whether the list
 // is open and which entry the keys are on. What it lists follows from facts it asks and follows
 // (4.3, fourth rule): `flags` for the features shown, `values` for whether the shown day shows
-// Your values, `wheels` for the day's wheels, and journal-entry's day.shown for the day. The
+// Your values, `wheels` and `matrices` for the day's wheels and matrix, and journal-entry's day.shown for the day. The
 // asks, the send and the clock arrive through input, so the machine is importable in Node.
 
 // The fixed list, here so the journal knows no kind of sheet. Your values shares the feature of
@@ -33,6 +33,14 @@ export const SHEETS = [
     category: "Coaching",
     what: "Rate eight areas of your life, and see where the gap is biggest between what you have and what you want.",
   },
+  {
+    id: "matrix",
+    target: "matrix-sheet",
+    feature: "eisenhower-matrix",
+    name: "Eisenhower Matrix",
+    category: "Planning",
+    what: "Sort your tasks by urgent and important, and see what to do today.",
+  },
 ];
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -56,6 +64,7 @@ const offered = {
   values: (context) => context.placed === false,
   "choice-point": () => true,
   wheel: (context) => context.wheels !== null && !context.wheels.some((w) => w.day === context.day),
+  matrix: (context) => context.matrices !== null && !context.matrices.some((m) => m.day === context.day),
 };
 
 // What the list holds now; an empty list means no row.
@@ -101,6 +110,8 @@ export const machine = setup({
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     wheels: fromPromise(({ input }) => input.ask("wheels", "list", {})),
+    // The newest days' matrices, which hold every day a sheet can still be added to.
+    matrices: fromPromise(({ input }) => input.ask("matrices", "list", {})),
     // The day rides along so a reply for a day left meanwhile is dropped.
     placed: fromPromise(({ input }) => input.ask("values", "read", { day: input.day }).then((reply) => ({ day: input.day, reply }))),
   },
@@ -111,8 +122,8 @@ export const machine = setup({
       "The last row of today's journal page, + Add sheet, which opens a list of the sheets in " +
       "place, each with its name, one line of description and a category label. It keeps that " +
       "fixed list itself, so the journal knows no kind of sheet: Your values (ACT), Choice point " +
-      "(ACT) and Wheel of Life (Coaching). Your values and Wheel of Life leave the list while " +
-      "they are on the day; Choice point stays, because a day can hold several. A sheet whose " +
+      "(ACT), Wheel of Life (Coaching) and Eisenhower Matrix (Planning). Your values, Wheel of " +
+      "Life and Eisenhower Matrix leave the list while they are on the day; Choice point stays, because a day can hold several. A sheet whose " +
       "feature is hidden is not listed, and with nothing to list the row is hidden and takes no " +
       "room. An earlier day, or a day that can no longer be written, has no row. Pressing the row " +
       "opens the list with the keyboard on its first entry; the list closes with Escape or a " +
@@ -126,8 +137,8 @@ export const machine = setup({
       "on this row; on a day without the row it goes to the day's text.",
     kind: "view",
     emits: [],
-    asks: ["values: read", "wheels: list", "flags: read", "settings: read"],
-    sends: ["values-sheet: add", "choice-point-cards: add", "wheel-sheet: add"],
+    asks: ["values: read", "wheels: list", "matrices: list", "flags: read", "settings: read"],
+    sends: ["values-sheet: add", "choice-point-cards: add", "wheel-sheet: add", "matrix-sheet: add"],
     attributes: [],
   },
   context: ({ input }) => ({
@@ -137,11 +148,12 @@ export const machine = setup({
     day: dateOf(input.now()),
     // Whether the journal page says the shown day can be written; null until it has.
     dayWritable: null,
-    // The features hidden, whether the shown day shows Your values, and every wheel as
+    // The features hidden, whether the shown day shows Your values, every wheel and every matrix as
     // { id, day }: each null until its fact has answered.
     hidden: null,
     placed: null,
     wheels: null,
+    matrices: null,
     vimKeys: false,
     open: false,
     cursor: 0,
@@ -172,6 +184,15 @@ export const machine = setup({
       },
       onError: { actions: [] },
     },
+    {
+      src: "matrices",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: {
+        guard: ({ event }) => Array.isArray(event.output?.matrices),
+        actions: assign({ matrices: ({ event }) => event.output.matrices.map(({ id, day }) => ({ id, day })) }),
+      },
+      onError: { actions: [] },
+    },
   ],
   entry: askPlaced,
   on: {
@@ -193,6 +214,14 @@ export const machine = setup({
     "wheel.deleted": {
       guard: ({ context }) => context.wheels !== null,
       actions: assign({ wheels: ({ context, event }) => context.wheels.filter((w) => w.id !== event.id) }),
+    },
+    "matrix.changed": {
+      guard: ({ context }) => context.matrices !== null,
+      actions: assign({ matrices: ({ context, event }) => [...context.matrices.filter((m) => m.id !== event.matrix.id), { id: event.matrix.id, day: event.matrix.day }] }),
+    },
+    "matrix.deleted": {
+      guard: ({ context }) => context.matrices !== null,
+      actions: assign({ matrices: ({ context, event }) => context.matrices.filter((m) => m.id !== event.id) }),
     },
     "day.shown": [
       {

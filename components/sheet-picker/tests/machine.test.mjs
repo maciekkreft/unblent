@@ -9,13 +9,14 @@ const EARLIER = "2026-10-06";
 const W = "01K6TEST000000000000000WH1";
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-async function start({ hidden = [], placed = {}, wheels = [], vimKeys = false, noFlags = false } = {}) {
+async function start({ hidden = [], placed = {}, wheels = [], matrices = [], vimKeys = false, noFlags = false } = {}) {
   const sent = [];
   const asked = [];
   const answers = {
     "settings read": () => ({ vimKeys }),
     "flags read": () => (noFlags ? { error: "no-answerer" } : { off: [], hidden }),
     "wheels list": () => ({ wheels }),
+    "matrices list": () => ({ matrices, total: matrices.length }),
     "values read": (payload) => ({ day: null, values: [], changedSince: false, placed: placed[payload.day] === true }),
   };
   const actor = createActor(machine, {
@@ -38,16 +39,17 @@ test("the fixed list says each sheet's name, category and description", () => {
     ["Your values", "ACT", "values-sheet", "choice-points"],
     ["Choice point", "ACT", "choice-point-cards", "choice-points"],
     ["Wheel of Life", "Coaching", "wheel-sheet", "wheel-of-life"],
+    ["Eisenhower Matrix", "Planning", "matrix-sheet", "eisenhower-matrix"],
   ]);
   assert.ok(SHEETS.every((s) => s.what.endsWith(".")));
 });
 
 test("a sheet whose feature is hidden is not listed, and with nothing to list there is no row", async () => {
-  const { ctx, ids, actor } = await start({ hidden: ["wheel-of-life"] });
+  const { ctx, ids, actor } = await start({ hidden: ["wheel-of-life", "eisenhower-matrix"] });
   assert.deepEqual(ids(), ["values", "choice-point"]);
   actor.send({ type: "flags.changed", off: [], hidden: ["choice-points"] });
-  assert.deepEqual(ids(), ["wheel"]);
-  actor.send({ type: "flags.changed", off: [], hidden: ["choice-points", "wheel-of-life"] });
+  assert.deepEqual(ids(), ["wheel", "matrix"]);
+  actor.send({ type: "flags.changed", off: [], hidden: ["choice-points", "wheel-of-life", "eisenhower-matrix"] });
   assert.deepEqual(ids(), []);
   actor.send({ type: "_toggle" });
   assert.equal(ctx().open, false, "no row to press");
@@ -55,7 +57,7 @@ test("a sheet whose feature is hidden is not listed, and with nothing to list th
 
 test("a page without flags hides nothing, as journal-entry reads it", async () => {
   const { ids } = await start({ noFlags: true });
-  assert.deepEqual(ids(), ["values", "choice-point", "wheel"]);
+  assert.deepEqual(ids(), ["values", "choice-point", "wheel", "matrix"]);
 });
 
 test("nothing is listed until flags has said, and a sheet held once only when its fact has said", async () => {
@@ -75,16 +77,18 @@ test("nothing is listed until flags has said, and a sheet held once only when it
   assert.deepEqual(listed(actor.getSnapshot().context).map((s) => s.id), ["choice-point"], "Choice point needs no fact to be offered");
 });
 
-test("Your values and Wheel of Life leave the list while on the shown day, and Choice point stays", async () => {
+test("Your values, Wheel of Life and Eisenhower Matrix leave the list while on the shown day, and Choice point stays", async () => {
   const { actor, ids } = await start();
-  assert.deepEqual(ids(), ["values", "choice-point", "wheel"]);
+  assert.deepEqual(ids(), ["values", "choice-point", "wheel", "matrix"]);
   actor.send({ type: "values.changed", day: TODAY, values: [], placed: true });
-  assert.deepEqual(ids(), ["choice-point", "wheel"]);
+  assert.deepEqual(ids(), ["choice-point", "wheel", "matrix"]);
   actor.send({ type: "wheel.changed", wheel: { id: W, day: TODAY, actual: [], wanted: [], version: 1 } });
+  actor.send({ type: "matrix.changed", matrix: { id: W, day: TODAY, tasks: [], version: 1 } });
   assert.deepEqual(ids(), ["choice-point"]);
   actor.send({ type: "wheel.deleted", id: W, day: TODAY });
+  actor.send({ type: "matrix.deleted", id: W, day: TODAY });
   actor.send({ type: "values.changed", day: TODAY, values: [], placed: false });
-  assert.deepEqual(ids(), ["values", "choice-point", "wheel"], "taking them off puts them back");
+  assert.deepEqual(ids(), ["values", "choice-point", "wheel", "matrix"], "taking them off puts them back");
   actor.send({ type: "values.changed", day: EARLIER, values: [], placed: true });
   assert.ok(ids().includes("values"), "another day's placement is not this day's");
 });
@@ -92,7 +96,7 @@ test("Your values and Wheel of Life leave the list while on the shown day, and C
 test("a wheel on another day leaves the Wheel of Life listed; what is on the day comes from the facts' first answers", async () => {
   const other = await start({ wheels: [{ id: W, day: EARLIER }] });
   assert.ok(other.ids().includes("wheel"));
-  const same = await start({ wheels: [{ id: W, day: TODAY }], placed: { [TODAY]: true } });
+  const same = await start({ wheels: [{ id: W, day: TODAY }], matrices: [{ id: W, day: TODAY }], placed: { [TODAY]: true } });
   assert.deepEqual(same.ids(), ["choice-point"]);
 });
 
@@ -152,7 +156,7 @@ test("the row opens and closes the list, and a pick sends add to that sheet and 
   assert.equal(listOpen(ctx()), true);
   actor.send({ type: "_toggle" });
   assert.equal(listOpen(ctx()), false);
-  for (const [id, target] of [["values", "values-sheet"], ["choice-point", "choice-point-cards"], ["wheel", "wheel-sheet"]]) {
+  for (const [id, target] of [["values", "values-sheet"], ["choice-point", "choice-point-cards"], ["wheel", "wheel-sheet"], ["matrix", "matrix-sheet"]]) {
     actor.send({ type: "_toggle" });
     actor.send({ type: "_pick", id });
     assert.deepEqual(sent.at(-1), [target, "add", {}]);
@@ -170,10 +174,10 @@ test("a pick that is no longer listed sends nothing", async () => {
 test("the cursor stays inside a list that got shorter, and a new opening starts at the top", async () => {
   const { actor, ctx } = await start();
   actor.send({ type: "_toggle" });
-  actor.send({ type: "_cursor", to: 2 });
-  assert.equal(cursorOf(ctx()), 2);
+  actor.send({ type: "_cursor", to: 3 });
+  assert.equal(cursorOf(ctx()), 3);
   actor.send({ type: "values.changed", day: TODAY, values: [], placed: true });
-  assert.equal(cursorOf(ctx()), 1);
+  assert.equal(cursorOf(ctx()), 2);
   actor.send({ type: "_close" });
   actor.send({ type: "_toggle" });
   assert.equal(cursorOf(ctx()), 0);
