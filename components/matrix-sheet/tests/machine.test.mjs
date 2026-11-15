@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, shownPlace, ordered, neighbor, dropped, tagOf, cardOf, copiedLabel, linesOf, taskKey, pathTarget, dayName } from "../machine.js";
+import { machine, shownMatrix, shownPlace, ordered, neighbor, dropped, tagOf, cardOf, copiedLabel, linesOf, taskKey, pathTarget, dayName } from "../machine.js";
 
 // matrix-sheet's decisions, against the machine alone: what it saves for each gesture, what a
 // new day's matrix starts as, what follows the fact, and where its keys go.
@@ -120,18 +120,13 @@ test("a copy of a matrix whose tasks were all ticked starts empty and names no d
   assert.equal(emitted.length, 0);
 });
 
-test("each gesture is one save that says finished: tick, place, a neighbor, new words, delete", async () => {
+test("each gesture is one save that says finished: tick, a neighbor, new words, delete", async () => {
   const { actor, emitted, ctx } = await start([matrix(KEPT, TODAY, [task(T1, "A", { suggested: { place: "do", sure: true } }), task(T2, "B")])]);
   actor.send({ type: "_open" });
   const last = () => emitted.at(-1).tasks;
   actor.send({ type: "_tick", id: T1 });
   assert.equal(last()[0].done, true);
   assert.equal(last()[0].suggested, undefined, "the suggestion is the fact's and is never sent");
-  actor.send({ type: "_placing", id: T2 });
-  assert.equal(ctx().placing, T2);
-  actor.send({ type: "_place", id: T2, place: "delegate" });
-  assert.equal(last()[1].place, "delegate");
-  assert.equal(ctx().placing, null, "a place picked closes the places");
   actor.send({ type: "_move", id: T1, dir: "right" });
   assert.equal(last()[0].place, "schedule", "right of Do, the suggested place, is Schedule");
   actor.send({ type: "_move", id: T1, dir: "left" });
@@ -151,6 +146,56 @@ test("each gesture is one save that says finished: tick, place, a neighbor, new 
   actor.send({ type: "_delete", id: T2 });
   assert.deepEqual(last(), [], "the last delete sends no task, which takes the matrix away");
   assert.ok(emitted.every((e) => e.finished === true && e.id === KEPT));
+});
+
+test("Reset empties the sheet and sends nothing until the fold; a task added meanwhile saves that task alone", async () => {
+  const { actor, emitted, ctx } = await start([matrix(KEPT, TODAY, [task(T1, "A"), task(T2, "B")])]);
+  actor.send({ type: "_open" });
+  actor.send({ type: "_reset" });
+  assert.deepEqual(shownMatrix(ctx()).tasks, []);
+  assert.equal(emitted.length, 0, "nothing is sent while the sheet is open");
+  actor.send({ type: "matrix.changed", matrix: matrix(KEPT, TODAY, [task(T1, "A", { suggested: { place: "do", sure: true } }), task(T2, "B")], { version: 2 }) });
+  assert.deepEqual(shownMatrix(ctx()).tasks, [], "a change from the fact does not undo the reset");
+  actor.send({ type: "_reset" });
+  assert.equal(emitted.length, 0);
+  actor.send({ type: "_add", text: "C" });
+  assert.deepEqual(emitted.at(-1).tasks.map((t) => t.text), ["C"]);
+  assert.equal(ctx().cleared, null);
+  actor.send({ type: "_reset" });
+  actor.send({ type: "_fold" });
+  assert.deepEqual([emitted.at(-1).id, emitted.at(-1).tasks], [KEPT, []], "the fold sends the empty save the fact deletes");
+  assert.equal(ctx().cleared, null);
+});
+
+test("Reset of a matrix left empty is sent when the day changes, and dropped when the day closes to writing", async () => {
+  const { actor, emitted, ctx } = await start([matrix(KEPT, TODAY, [task(T1, "A")])]);
+  actor.send({ type: "_open" });
+  actor.send({ type: "_reset" });
+  actor.send({ type: "day.shown", day: EARLIER, writable: false });
+  assert.deepEqual(emitted.at(-1).tasks, []);
+  const count = emitted.length;
+  actor.send({ type: "day.shown", day: TODAY, writable: true });
+  actor.send({ type: "matrix.changed", matrix: matrix(KEPT, TODAY, [task(T1, "A")], { version: 5 }) });
+  actor.send({ type: "_open" });
+  actor.send({ type: "_reset" });
+  actor.send({ type: "day.shown", day: TODAY, writable: false });
+  assert.deepEqual(shownMatrix(ctx()).tasks.map((t) => t.id), [T1], "what was last saved shows again");
+  actor.send({ type: "_fold" });
+  assert.equal(emitted.length, count, "and nothing is sent");
+});
+
+test("Delete sends a kept matrix with no task and folds; a new one never kept just goes; nothing to reset is refused", async () => {
+  const { actor, emitted, ctx } = await start([matrix(KEPT, TODAY, [task(T1, "A")])]);
+  actor.send({ type: "_open" });
+  actor.send({ type: "_discard" });
+  assert.deepEqual([emitted.length, emitted[0].id, emitted[0].tasks, ctx().open], [1, KEPT, [], false]);
+  actor.send({ type: "matrix.deleted", id: KEPT, day: TODAY });
+  actor.send({ type: "add" });
+  assert.deepEqual(ctx().fresh.tasks, []);
+  actor.send({ type: "_reset" });
+  assert.equal(ctx().cleared, null, "an empty matrix has nothing to reset");
+  actor.send({ type: "_discard" });
+  assert.deepEqual([emitted.length, ctx().fresh, ctx().open], [1, null, false]);
 });
 
 test("a drop puts the task before the one at its index in the place dropped on, or after the last there, and makes the place the user's", () => {
@@ -174,14 +219,12 @@ test("a drop puts the task before the one at its index in the place dropped on, 
 test("a drop is one save that says finished, and one where it started sends nothing", async () => {
   const { actor, emitted, ctx } = await start([matrix(KEPT, TODAY, [task(T1, "A", { place: "do" }), task(T2, "B", { place: "do" })])]);
   actor.send({ type: "_open" });
-  actor.send({ type: "_placing", id: T1 });
   actor.send({ type: "_drop", id: T1, to: "do", index: 0 });
   assert.equal(emitted.length, 0);
   actor.send({ type: "_drop", id: T1, to: "do", index: 1 });
   assert.equal(emitted.length, 1);
   assert.deepEqual(emitted[0].tasks.map((t) => t.id), [T2, T1]);
   assert.equal(emitted[0].finished, true);
-  assert.equal(ctx().placing, null, "a drop closes the places");
   actor.send({ type: "_drop", id: T2, to: "delegate", index: 0 });
   assert.deepEqual(emitted.at(-1).tasks.map((t) => [t.id, t.place]), [[T1, "do"], [T2, "delegate"]]);
 });
@@ -224,12 +267,9 @@ test("a shown day it does not hold is asked for by itself; the fact's changes ar
   assert.deepEqual([ctx().matrices, ctx().open], [[], false], "one that is gone closes");
 });
 
-test("Escape closes the places first, then folds", async () => {
+test("Escape folds the sheet", async () => {
   const { actor, ctx } = await start([matrix(KEPT, TODAY, [task(T1, "A")])]);
   actor.send({ type: "_open" });
-  actor.send({ type: "_placing", id: T1 });
-  actor.send({ type: "_escape" });
-  assert.deepEqual([ctx().placing, ctx().open], [null, true]);
   actor.send({ type: "_escape" });
   assert.equal(ctx().open, false);
 });

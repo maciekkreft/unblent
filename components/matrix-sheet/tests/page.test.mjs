@@ -1,7 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// What only a browser shows: the places drawn from one matrix and the place button that moves
+// What only a browser shows: the places drawn from one matrix and the delete button that removes
 // a task, pulling a task by its handle, the layout on a wide and a narrow page, the keyboard's way in, through and out of
 // the sheet, and lines pasted into the Add a task line. The decisions are tested in Node. A
 // matrix is seeded through the API under the test's own login.
@@ -79,27 +79,24 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: rendering and layout.
-    test("each task shows where it stands with its tag, the place button opens the places under it, and a pick moves it", async () => {
+    test("each task shows its tag and a direct delete button", async () => {
       const { context, page, problems, sheet } = await open(browser);
       try {
         await sheet.locator(".card").click();
         await sheet.locator(".sheet").waitFor();
         assert.deepEqual(await places(page), { tray: ["Sort the photos"], do: ["Send the invoice"], schedule: ["Book the dentist"], delegate: [], drop: [] });
         assert.deepEqual(await sheet.locator(".tag").allTextContents(), ["Not sure"]);
-        const button = sheet.locator(`.task[data-id="${B}"] .placebtn`);
-        assert.deepEqual(await button.locator("i").evaluateAll((is) => is.map((i) => i.className)), ["", "on", "", ""], "the suggested place is filled");
-
-        await sheet.getByRole("button", { name: "Book the dentist, in Schedule" }).click();
-        assert.equal(await sheet.locator(".place").count(), 0, "pressing the words does not open the places");
-        await sheet.locator(".words").press("Escape");
-
-        await button.click();
-        const under = sheet.locator(`.task[data-id="${B}"] .place`);
-        await under.waitFor();
-        await under.getByRole("button", { name: "Delegate", exact: true }).click();
-        await until(async () => (await places(page)).delegate.includes("Book the dentist"));
-        assert.equal(await sheet.locator(".place").count(), 0, "a pick closes the places");
-        assert.deepEqual(await sheet.locator(".tag").allTextContents(), [], "a place the user chose has no tag");
+        assert.equal(await sheet.locator(".placebtn, .place").count(), 0);
+        const row = sheet.locator(`.task[data-id="${B}"] .row`);
+        const [grip, tick, words, tag, bin] = await row.locator(":scope > *").evaluateAll((els) => els.map((el) => {
+          const { x, y, width, height } = el.getBoundingClientRect();
+          return { x, y, width, height };
+        }));
+        assert.ok(grip.x < tick.x && tick.x < words.x && words.x < tag.x && tag.x < bin.x, "task controls stay in order on one row");
+        assert.ok(Math.max(tick.y, words.y, bin.y) < Math.min(tick.y + tick.height, words.y + words.height, bin.y + bin.height), "checkbox, words and delete overlap vertically");
+        await sheet.locator(`.task[data-id="${B}"]`).getByRole("button", { name: "Delete this task" }).click();
+        await until(async () => !(await places(page)).schedule.includes("Book the dentist"));
+        assert.equal(await sheet.locator(".bin").count(), 2);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -161,6 +158,47 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("k");
         await until(async () => (await at(page)) === null);
         await press("j", "card");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: a gesture.
+    test("Reset empties the open sheet, and Done then deletes it with the notice", async () => {
+      const { context, page, problems, sheet } = await open(browser);
+      const notice = () => page.locator("notice-stack").evaluate((el) => el.shadowRoot.textContent);
+      try {
+        await sheet.locator(".card").click();
+        await sheet.locator(".reset").click();
+        await until(async () => (await sheet.locator(".txt").count()) === 0);
+        assert.equal(await at(page), "add", "the keyboard waits on the Add a task line");
+        assert.equal(await sheet.locator(".reset").isDisabled(), true);
+        await sheet.locator(".done").click();
+        await until(async () => (await sheet.locator("section").count()) === 0);
+        await until(async () => /Eisenhower Matrix/.test(await notice()));
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: focus and keys.
+    test("Delete by key takes the matrix away at once, the keyboard on + Add sheet, and Undo brings it back", async () => {
+      const { context, page, problems, sheet } = await open(browser);
+      try {
+        await sheet.locator(".card").click();
+        await sheet.locator(".done").focus();
+        await page.keyboard.press("Shift+Tab");
+        await page.keyboard.press("Shift+Tab");
+        assert.equal(await at(page), "delete");
+        await page.keyboard.press("Enter");
+        await until(async () => (await sheet.locator("section").count()) === 0);
+        await until(() => page.evaluate(() => document.querySelector("sheet-picker").shadowRoot.activeElement?.className === "new"));
+        await page.locator("notice-stack .undo").click();
+        await sheet.locator(`.card[data-id="${ID}"]`).waitFor();
+        await sheet.locator(".card").click();
+        assert.equal(await sheet.locator(".txt").count(), 3, "Undo brings every task back");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

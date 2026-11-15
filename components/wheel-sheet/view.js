@@ -1289,7 +1289,7 @@ class WheelSheet extends LitElement {
         <span class="caption legend"><b></b>Actual<em></em>Gap<i></i>Wanted</span>
         <div class="buttons">
           ${write
-            ? html`<button type="button" class="delete" @click=${() => this.#delete()}>Delete</button>
+            ? html`<button type="button" class="delete" @click=${() => this.#delete()}>Remove from this day</button>
                 <button type="button" class="reset" ?disabled=${!holdsAny(draft) && !draft.focus.some(Boolean)} @click=${() => this.#reset()}>Reset</button>
                 <button type="button" class="done" @click=${() => this.#done()}>Done</button>`
             : html`<button type="button" class="close" @click=${() => this.#done()}>Close</button>`}

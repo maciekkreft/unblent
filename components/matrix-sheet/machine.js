@@ -56,11 +56,23 @@ export const shownPlace = (task) => (isPlace(task.place) ? task.place : isPlace(
 // Do, Schedule, Delegate and Drop, each in the order the tasks are kept.
 export const ordered = (tasks) => [null, ...PLACES.map((p) => p.id)].flatMap((place) => tasks.filter((t) => shownPlace(t) === place));
 
-// The matrix of the shown day: one not kept yet, or the one the fact keeps.
-export function shownMatrix(context) {
+// The matrix of the shown day as kept: one not kept yet, or the one the fact keeps.
+function keptMatrix(context) {
   if (context.fresh && context.fresh.day === context.day) return context.fresh;
   return context.matrices.filter((m) => m.day === context.day).at(-1) ?? null;
 }
+
+// The matrix of the shown day as the sheet draws it. One the user reset shows no task while
+// its empty save waits for the fold, so a task can be added again before it is deleted; what
+// the fact announces meanwhile still updates the kept copy underneath.
+export function shownMatrix(context) {
+  const m = keptMatrix(context);
+  return m && context.cleared === m.id ? { ...m, tasks: [] } : m;
+}
+
+// Whether the fact holds the matrix, so taking it away needs a save: a new one is sent once
+// it holds a task.
+const isKept = (context, m) => context.matrices.some((x) => x.id === m.id) || m.tasks.length > 0;
 
 // The matrix a new one on this day is copied from: the newest of the days before it.
 export function carriedFrom(context, day) {
@@ -97,6 +109,7 @@ const change = (make) =>
     const next = { ...m, tasks };
     if (context.fresh?.id === m.id) enqueue.assign({ fresh: next });
     else enqueue.assign({ matrices: context.matrices.map((x) => (x.id === m.id ? next : x)) });
+    if (context.cleared === m.id) enqueue.assign({ cleared: null });
     if (tasks.length || context.fresh?.id !== m.id) enqueue.emit(saved(next));
   });
 
@@ -115,13 +128,6 @@ const addTasks = change((tasks, event, context) => {
 });
 
 const tick = change((tasks, event) => (tasks.some((t) => t.id === event.id) ? tasks.map((t) => (t.id === event.id ? { ...t, done: !t.done } : t)) : null));
-
-// A place chosen is the user's, also when it is the suggested one, so the tag goes.
-const place = change((tasks, event) => {
-  const task = tasks.find((t) => t.id === event.id);
-  if (!task || !isPlace(event.place) || task.place === event.place) return null;
-  return tasks.map((t) => (t === task ? { ...t, place: event.place } : t));
-});
 
 // The neighboring place a Shift+arrow moves a task to: left is urgent, up is important, as
 // the places stand. A task in To sort moves as if from Do.
@@ -169,8 +175,30 @@ const words = change((tasks, event) => {
 // The last task's delete takes the matrix away: the fact deletes one left with no task.
 const remove = change((tasks, event) => (tasks.some((t) => t.id === event.id) ? tasks.filter((t) => t.id !== event.id) : null));
 
+// The empty save a Reset held back, sent when the sheet folds or the day changes: the fact
+// deletes a matrix left with no task, with the short notice.
+const sendCleared = enqueueActions(({ context, enqueue }) => {
+  const m = keptMatrix(context);
+  if (m && context.cleared === m.id && isKept(context, m)) enqueue.emit(saved({ ...m, tasks: [] }));
+  enqueue.assign({ cleared: null });
+});
+
 // Folding drops a new matrix that was never kept; it has nothing to read.
-const fold = assign(({ context }) => ({ open: false, placing: null, editing: null, fresh: context.fresh?.tasks.length ? context.fresh : null }));
+const fold = [
+  sendCleared,
+  assign(({ context }) => ({ open: false, editing: null, fresh: context.fresh?.tasks.length ? context.fresh : null })),
+];
+
+// Reset empties the sheet, as the very first matrix starts; nothing is sent until the fold.
+const reset = assign(({ context }) => ({ cleared: keptMatrix(context).id, editing: null }));
+
+// Delete takes the whole matrix away at once: the fact deletes one saved with no task, with
+// the short notice whose Undo brings it back. A new one never kept just goes.
+const discard = enqueueActions(({ context, enqueue }) => {
+  const m = keptMatrix(context);
+  if (isKept(context, m)) enqueue.emit(saved({ ...m, tasks: [] }));
+  enqueue.assign({ open: false, editing: null, fresh: null, cleared: null });
+});
 
 // A change the fact announces. An older version than the one held is stale (4.3); an equal
 // one may carry a suggestion or a pending flag, so it is taken. The new matrix not kept yet
@@ -192,7 +220,8 @@ const gone = assign(({ context, event }) => {
   return {
     matrices,
     ...(context.fresh?.id === event.id ? { fresh: null } : {}),
-    ...(closes ? { open: false, placing: null, editing: null } : {}),
+    ...(context.cleared === event.id ? { cleared: null } : {}),
+    ...(closes ? { open: false, editing: null } : {}),
   };
 });
 
@@ -311,9 +340,7 @@ export const machine = setup({
       "the four places Do, Schedule, Delegate and Drop side by side as the matrix stands, Urgent " +
       "on the left and Important on top, stacked Do first under each other on a narrow page, " +
       "each then saying what it means. Each task has a tick box, its words, a Suggested or a " +
-      "dashed Not sure tag while the user has not placed it, and a place button drawn as four " +
-      "small squares with the task's own place filled, which opens the four places and a delete " +
-      "button under the task; a place picked there is the user's and closes them. A task shows " +
+      "dashed Not sure tag while the user has not placed it, and a delete button. A task shows " +
       "at the place the user chose, else at the suggested one, else in To sort. Pressing a " +
       "task's words, or Enter on them, lets the user change them; Enter or leaving keeps them, " +
       "Escape gives the old words back, and empty words keep the old ones. A ticked task is " +
@@ -334,12 +361,20 @@ export const machine = setup({
       "left, drawn as six dots: pulling it with the mouse or a finger moves the task to another " +
       "place, or up and down inside one, or out of To sort, never into it; a line shows where it will land, and a drop is the user's place and order, " +
       "saved as one Undo step, while a drop where it started saves nothing. Space ticks or unticks, Delete or with Vim keys on dd deletes " +
-      "the task and moves the keyboard to the next one, and Escape closes the places, then folds " +
+      "the task and moves the keyboard to the next one, and Escape folds " +
       "the sheet. Past the first task and past Done, j and k go on to the page around, and " +
       "coming back they land on the first task from above and on Done from below. A matrix is " +
       "written exactly while the day's own text is, as the journal page says; an earlier day " +
-      "is read only, with no Add a task line, no tick boxes to press, no place buttons, no handles and with " +
-      "Close in place of Done.",
+      "is read only, with no Add a task line, no tick boxes to press, no delete buttons, no handles and with " +
+      "Close in place of Done. Remove from this day, Reset and Done stand at the foot of a sheet that can be " +
+      "written. Remove from this day takes the whole matrix away at once with the short notice whose Undo " +
+      "brings it back with its tasks; a new one never kept just closes. Reset empties every " +
+      "task, as the very first matrix starts, and leaves the keyboard on the Add a task line; " +
+      "a task added then saves the matrix with that task alone, and one still empty when the " +
+      "sheet folds or the day changes is deleted then with the notice, so the tasks can be " +
+      "written again first. Reset is greyed while there is no task. When the day closes to " +
+      "writing first, the matrix shows what was last saved. After a key, a matrix that goes " +
+      "this way puts the keyboard on the + Add sheet row; after a press nothing moves.",
     kind: "view",
     emits: ["matrix.saved"],
     asks: ["matrices: list", "settings: read"],
@@ -358,10 +393,11 @@ export const machine = setup({
     matrices: [],
     // A new matrix not kept yet: { id, day, from?, tasks }, or null.
     fresh: null,
+    // The id of the matrix the user reset, whose empty save waits for the fold, or null.
+    cleared: null,
     // Whether the shown day's matrix is open as a sheet rather than folded as a card.
     open: false,
-    // The task whose places are open, and the task whose words are being changed.
-    placing: null,
+    // The task whose words are being changed.
     editing: null,
     // What is typed in the Add a task line and not added yet.
     adding: "",
@@ -391,13 +427,13 @@ export const machine = setup({
       {
         guard: ({ context, event }) => isDay(event.day) && event.day !== context.day,
         actions: [
+          sendCleared,
           stopChild("day"),
           assign({
             day: ({ event }) => event.day,
             dayWritable: ({ event }) => (typeof event.writable === "boolean" ? event.writable : null),
             open: false,
             fresh: null,
-            placing: null,
             editing: null,
             adding: "",
             addWaiting: false,
@@ -409,8 +445,9 @@ export const machine = setup({
         guard: ({ event }) => isDay(event.day),
         actions: assign(({ context, event }) => {
           const dayWritable = typeof event.writable === "boolean" ? event.writable : null;
-          // The day closing at 2:00 leaves the open sheet to be read; a new one not kept goes.
-          return dayWritable === false ? { dayWritable, placing: null, editing: null, fresh: null } : { dayWritable };
+          // The day closing at 2:00 leaves the open sheet to be read; a new one not kept goes,
+          // and one reset shows what was last saved, as nothing was sent.
+          return dayWritable === false ? { dayWritable, editing: null, fresh: null, cleared: null } : { dayWritable };
         }),
       },
     ],
@@ -444,7 +481,6 @@ export const machine = setup({
             enqueue.assign({
               ...(fresh ? { fresh } : {}),
               open: true,
-              placing: null,
               editing: null,
               landing: context.landing + 1,
             });
@@ -453,34 +489,28 @@ export const machine = setup({
         },
         _open: {
           guard: ({ context }) => Boolean(shownMatrix(context)) && !context.open,
-          actions: assign({ open: true, placing: null, editing: null }),
+          actions: assign({ open: true, editing: null }),
         },
         _fold: { guard: ({ context }) => context.open, actions: fold },
-        // Escape takes one step back at a time: the places first, then the sheet.
-        _escape: [
-          { guard: ({ context }) => context.placing !== null, actions: assign({ placing: null }) },
-          { guard: ({ context }) => context.open, actions: fold },
-        ],
+        _escape: { guard: ({ context }) => context.open, actions: fold },
         _draft: { guard: ({ event }) => typeof event.text === "string", actions: assign({ adding: ({ event }) => event.text }) },
         // Lines pasted are added as they are; what was typed in the line before stays there.
         _add: { guard: writing, actions: [addTasks, assign({ adding: ({ context, event }) => (event.pasted === true ? context.adding : "") })] },
         _tick: { guard: ({ context, event }) => writing({ context }) && hasTask({ context, event }), actions: tick },
-        _place: { guard: writing, actions: [place, assign({ placing: null })] },
         _move: { guard: writing, actions: move },
-        _drop: { guard: writing, actions: [drop, assign({ placing: null })] },
-        _placing: {
-          guard: ({ context, event }) => writing({ context }) && hasTask({ context, event }),
-          actions: assign({ placing: ({ context, event }) => (context.placing === event.id ? null : event.id), editing: null }),
-        },
+        _drop: { guard: writing, actions: drop },
         _edit: {
           guard: ({ context, event }) => writing({ context }) && hasTask({ context, event }),
-          actions: assign({ editing: ({ event }) => event.id, placing: null }),
+          actions: assign({ editing: ({ event }) => event.id }),
         },
         _words: { guard: ({ context, event }) => context.editing === event.id, actions: [words, assign({ editing: null })] },
         _unedit: { actions: assign({ editing: null }) },
+        // A matrix already empty has nothing to reset.
+        _reset: { guard: ({ context }) => writing({ context }) && shownMatrix(context).tasks.length > 0, actions: reset },
+        _discard: { guard: writing, actions: discard },
         _delete: {
           guard: ({ context, event }) => writing({ context }) && hasTask({ context, event }),
-          actions: [remove, assign(({ context, event }) => (context.placing === event.id ? { placing: null } : {}))],
+          actions: remove,
         },
         "matrix.changed": { actions: follow },
         "matrix.deleted": { actions: gone },

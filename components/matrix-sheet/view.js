@@ -200,12 +200,9 @@ class MatrixSheet extends LitElement {
       flex-direction: column;
       border-radius: var(--radius-sm);
     }
-    .task.placing,
     .task:focus-within {
       background: var(--color-surface-hover);
     }
-    .quad.do .task.placing,
-    .quad.drop .task.placing,
     .quad.do .task:focus-within,
     .quad.drop .task:focus-within {
       background: var(--color-surface-active);
@@ -306,68 +303,9 @@ class MatrixSheet extends LitElement {
       border-style: dashed;
       color: var(--color-mute);
     }
-    /* The place button draws the matrix, the task's own place filled. */
-    .placebtn {
+    .bin {
       grid-column: -2;
       align-self: center;
-      display: inline-grid;
-      grid-template-columns: repeat(2, calc(var(--space-xs) + var(--space-2xs)));
-      gap: var(--space-2xs);
-      padding: var(--space-xs);
-      margin: 0 var(--space-xs);
-      border-radius: var(--radius-sm);
-    }
-    .placebtn:hover {
-      background: var(--color-surface-active);
-    }
-    .placebtn[aria-expanded="true"] {
-      box-shadow: var(--focus-ring);
-    }
-    .placebtn i {
-      width: calc(var(--space-xs) + var(--space-2xs));
-      height: calc(var(--space-xs) + var(--space-2xs));
-      border-radius: var(--border-width);
-      background: var(--color-mute);
-    }
-    .placebtn i.on {
-      background: var(--color-accent);
-    }
-    .place {
-      display: flex;
-      align-items: center;
-      gap: var(--space-sm);
-      padding: var(--space-xs) var(--space-xs) var(--space-sm);
-    }
-    .seg {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      flex: 1;
-      min-width: 0;
-      border: var(--border-width) solid var(--color-border-strong);
-      border-radius: var(--radius-sm);
-      overflow: hidden;
-      background: var(--color-canvas);
-    }
-    .seg button {
-      border: 0;
-      border-radius: 0;
-      padding: var(--space-xs) var(--space-sm);
-      font-size: var(--text-caption);
-      color: var(--color-body);
-      box-shadow: 0 0 0 var(--border-width) var(--color-border);
-    }
-    .seg button:hover {
-      background: var(--color-surface-hover);
-    }
-    .seg button[aria-pressed="true"] {
-      background: var(--color-accent);
-      color: var(--color-accent-text);
-      font-weight: var(--weight-semibold);
-    }
-    .seg button:focus-visible {
-      box-shadow: inset 0 0 0 var(--space-2xs) var(--color-accent);
-    }
-    .bin {
       display: grid;
       place-items: center;
       padding: var(--space-sm);
@@ -383,8 +321,11 @@ class MatrixSheet extends LitElement {
       align-items: center;
       gap: var(--space-sm);
     }
+    /* Delete, Reset and Done wrap rather than run past the sheet. */
     .buttons {
       display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
       gap: var(--space-sm);
       margin-left: auto;
     }
@@ -394,6 +335,12 @@ class MatrixSheet extends LitElement {
     }
     .buttons button:hover {
       background: var(--color-surface-hover);
+    }
+    .buttons button[disabled],
+    .buttons button[disabled]:hover {
+      cursor: default;
+      background: var(--color-canvas);
+      color: var(--color-mute);
     }
     .buttons .done {
       background: var(--color-accent);
@@ -466,14 +413,8 @@ class MatrixSheet extends LitElement {
       .txt {
         padding-block: var(--space-sm);
       }
-      .placebtn {
-        padding: var(--space-sm);
-      }
       .grip {
         padding: 0 var(--space-sm);
-      }
-      .seg button {
-        padding-block: var(--space-sm);
       }
     }
   `;
@@ -596,7 +537,7 @@ class MatrixSheet extends LitElement {
   // Where a move on the sheet's path landed (pathTarget).
   #focusAt(to, tasks) {
     if (to === "add") return this.renderRoot.querySelector(".add input")?.focus();
-    if (to === "done") return this.renderRoot.querySelector(".buttons button")?.focus();
+    if (to === "done") return this.renderRoot.querySelector(".buttons .done, .buttons .close")?.focus();
     return this.#focusTask(tasks[to].id);
   }
 
@@ -629,8 +570,7 @@ class MatrixSheet extends LitElement {
     const id = target.closest?.(".task")?.dataset.id ?? null;
     if (event.key === "Escape" && context.open) {
       this.#take(event);
-      const placing = context.placing;
-      return this.#send({ type: "_escape" }, placing ? `.txt[data-id="${placing}"]` : ".card");
+      return this.#send({ type: "_escape" }, ".card");
     }
     if (!onTask && !onDone) return;
     const after = Date.now() - this.#last.at < 1000 ? this.#last.key : null;
@@ -729,12 +669,11 @@ class MatrixSheet extends LitElement {
   }
 
   #task(context, task, write) {
-    const placing = context.placing === task.id;
     const editing = context.editing === task.id;
     const tag = tagOf(task);
     const at = shownPlace(task);
     const label = PLACES.find((p) => p.id === at)?.name ?? "To sort";
-    return html`<div class="task ${task.done ? "done" : ""} ${placing ? "placing" : ""}" data-id=${task.id}>
+    return html`<div class="task ${task.done ? "done" : ""}" data-id=${task.id}>
       <div class="row ${write ? "grab" : ""}">
         ${write ? html`<span class="grip" aria-hidden="true" title="Drag to move">${icon("dots-six-vertical")}</span>` : nothing}
         ${write
@@ -756,31 +695,9 @@ class MatrixSheet extends LitElement {
             : html`<span class="txt" tabindex="0" data-id=${task.id} aria-label="${task.text}, in ${label}">${task.text}</span>`}
         ${tag ? html`<span class="tag ${tag.sure ? "" : "unsure"}" title=${tag.title}>${tag.label}</span>` : nothing}
         ${write
-          ? html`<button
-              type="button"
-              class="placebtn"
-              tabindex="-1"
-              aria-expanded=${placing ? "true" : "false"}
-              aria-label="Place: ${label}"
-              @click=${() => this.#send({ type: "_placing", id: task.id })}
-            >
-              ${PLACES.map((p) => html`<i class=${p.id === at ? "on" : ""}></i>`)}
-            </button>`
+          ? html`<button type="button" class="bin" aria-label="Delete this task" @click=${() => this.#delete(task.id)}>${icon("trash-simple")}</button>`
           : nothing}
       </div>
-      ${placing
-        ? html`<div class="place">
-            <div class="seg" role="group" aria-label="Where this task goes">
-              ${PLACES.map(
-                (p) =>
-                  html`<button type="button" data-place=${p.id} aria-pressed=${p.id === at ? "true" : "false"} @click=${() => this.#send({ type: "_place", id: task.id, place: p.id }, `.txt[data-id="${task.id}"]`)}>
-                    ${p.name}
-                  </button>`,
-              )}
-            </div>
-            <button type="button" class="bin" aria-label="Delete this task" @click=${() => this.#delete(task.id)}>${icon("trash-simple")}</button>
-          </div>`
-        : nothing}
     </div>`;
   }
 
@@ -827,7 +744,9 @@ class MatrixSheet extends LitElement {
       <div class="foot">
         <div class="buttons">
           ${write
-            ? html`<button type="button" class="done" @click=${() => this.#send({ type: "_fold" }, ".card")}>Done</button>`
+            ? html`<button type="button" class="delete" @click=${() => this.#send({ type: "_discard" })}>Remove from this day</button>
+                <button type="button" class="reset" ?disabled=${!m.tasks.length} @click=${() => this.#send({ type: "_reset" }, ".add input")}>Reset</button>
+                <button type="button" class="done" @click=${() => this.#send({ type: "_fold" }, ".card")}>Done</button>`
             : html`<button type="button" class="close" @click=${() => this.#send({ type: "_fold" }, ".card")}>Close</button>`}
         </div>
       </div>

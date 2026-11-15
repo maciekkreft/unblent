@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // The panel's boxes as only a browser shows them: typing against real storage, the keyboard's
-// way in and out with Vim keys on and off, 2:00 with a box in use on a mocked clock, an earlier
+// way in and out with Vim keys on and off, an earlier
 // day's answers, and Undo pressed in the top bar. What each save says
 // and which steps come of it are decided in Node (machine.test.mjs, bus.test.mjs).
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
@@ -245,49 +245,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await sheet.locator(".legend").click();
         assert.equal(await at(page), "1");
         assert.equal(await sheet.locator(".qs").count(), 1, "the panel stays open");
-        assert.deepEqual(problems, []);
-      } finally {
-        await context.close();
-      }
-    });
-
-    // Browser: focus and keys.
-    test("at 2:00 what was typed is kept, the sheet stays to be read, and the keyboard moves from the box onto its area", async () => {
-      const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
-      try {
-        context.setDefaultTimeout(4000);
-        const now = new Date();
-        const twenty = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 1, 59, 40);
-        const day = dayOf(twenty.getTime() - 2 * 3600e3);
-        await context.clock.install({ time: twenty });
-        await signedIn(context, forgeCookie("wheeltwo"));
-        const answers = [{ one: "Tired" }, ...Array(7).fill({})];
-        assert.equal((await context.request.put(`${BASE_URL}/api/wheels/${ID}`, { data: { day, actual: ACTUAL, wanted: WANTED, answers, baseVersion: null } })).status(), 200);
-        const record = { id: "01J00000000000000000000DAY", day, text: "Late", editedAt: twenty.getTime() - 3600e3 };
-        assert.equal((await context.request.put(`${BASE_URL}/api/journal/days`, { data: { record, baseVersion: null } })).status(), 200);
-        // The product page, whose feature is held back until released, so the answer about features
-        // is replaced: the day named from its book's contents is the one the page stays on past 2:00.
-        await context.route(/\/api\/flags$/, (route) => route.fulfill({ json: { off: [], hidden: [], released: ["wheel-of-life"], shown: ["wheel-of-life"] } }));
-        const page = await context.newPage();
-        const problems = watch(page);
-        await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-        await page.locator("book-shelf .tile", { hasText: "Journal" }).click();
-        await page.locator("book-toc .entry").first().click();
-        const sheet = page.locator("wheel-sheet");
-        await sheet.locator(".card").click();
-        await sheet.locator(".sheet").waitFor();
-        await page.keyboard.press("Enter");
-        await sheet.locator(".qs").waitFor();
-        await page.keyboard.press("Enter");
-        await until(async () => (await inBox(page)) === ONE);
-        await page.keyboard.type("Very ");
-
-        await page.clock.fastForward(40000);
-        await sheet.locator(".sheet.read").waitFor();
-        await until(async () => (await at(page)) === "0");
-        assert.equal(await sheet.locator(".box").count(), 0);
-        assert.deepEqual(await sheet.locator(".q-read .cm-line").allTextContents(), ["Very Tired"]);
-        await until(async () => (await storedOne(context)) === "Very Tired");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

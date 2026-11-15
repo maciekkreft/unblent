@@ -4,6 +4,25 @@ All notable changes to Unblent for Mac are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] — 2026-11-15
+
+### Added
+
+- An Eisenhower Matrix sheet in the journal. Add tasks and sort them by urgent and
+  important into Do, Schedule, Delegate and Drop. Drag tasks between places and reorder
+  them, or move them with the keyboard, including Vim shortcuts. Tick completed tasks,
+  edit their words or remove them with the trash icon. Every change can be undone.
+- Suggested places for tasks, using the built-in Eisenhower evaluator's questions about
+  urgency and importance. Suggestions stay marked until you place a task yourself.
+- A new day's matrix carries forward unfinished tasks from the last matrix. Done folds
+  it into a card showing what to do today; Reset clears it to start again. Past days
+  stay available to read, and the chat can look up your matrices.
+
+### Changed
+
+- The Eisenhower Matrix and Wheel of Life use “Remove from this day” for the button
+  that removes the whole sheet. Undo brings it back.
+
 ## [0.8.0] — 2026-11-11
 
 ### Added

@@ -543,7 +543,7 @@ export const machine = setup({
       "switch the tab. On an area they change the score of the chosen tab, and from any area " +
       "Shift+Left or Shift+H chooses Actual and Shift+Right or Shift+L chooses Wanted, changing no " +
       "score. On the row of areas to focus on they move between the names, and Space or Enter " +
-      "chooses or drops one. These keys also work with the keyboard on Delete, Reset or Done, and " +
+      "chooses or drops one. These keys also work with the keyboard on Remove from this day, Reset or Done, and " +
       "up or down from one first goes to the area the keys act on. Enter on an area opens its " +
       "panel, and Enter again goes into its first box. With Vim keys on and the panel open on a day" +
       " that can be written, j and k walk through the panel, and the arrows still move from area to" +
@@ -562,7 +562,7 @@ export const machine = setup({
       "areas, and under it Your next step with each chosen area's answer to what would move it one " +
       "point closer; with none chosen it says to open the wheel to choose them, or on an earlier " +
       "day that none were chosen. Pressing the card opens it again, with Actual chosen. One sheet " +
-      "is open at a time: opening another card folds the first. Delete takes the wheel away with " +
+      "is open at a time: opening another card folds the first. Remove from this day takes the wheel away with " +
       "the short notice whose Undo shows it again with its answers; one emptied while rating or " +
       "typing, or by Reset, is deleted only when the sheet folds, so a score or an answer can be " +
       "cleared and set again. After a key, a wheel that goes this way puts the keyboard on the + " +
