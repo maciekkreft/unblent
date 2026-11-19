@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, parseMarkdown, pieces, marks, toCriticMarkup } from "./machine.js";
+import { machine, parseMarkdown, pieces, marks, toCriticMarkup, highlightsOnly } from "./machine.js";
 import saved from "./events/redline.saved.json" with { type: "json" };
 
 // The gap between a fragment's last line and the comment box under it, in px; the
@@ -133,10 +133,10 @@ class RedlineEditor extends LitElement {
       padding: var(--space-sm);
       background: var(--color-canvas-soft);
       border-radius: var(--radius-sm);
-      overflow-x: auto;
       font-family: var(--font-mono);
       font-size: var(--text-sm);
-      overflow-wrap: normal;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
     article pre code {
       font-family: inherit;
@@ -164,6 +164,7 @@ class RedlineEditor extends LitElement {
       overflow-x: auto;
     }
     table {
+      max-width: 100%;
       border-collapse: collapse;
       font-size: var(--text-sm);
     }
@@ -335,6 +336,7 @@ class RedlineEditor extends LitElement {
   #pointer = null;
   #focused = null;
   #copied = null;
+  #copiedHighlights = null;
   #copiedTimer;
   #source = null;
   #blocks = [];
@@ -414,7 +416,8 @@ class RedlineEditor extends LitElement {
         <button class="quiet" @click=${() => this.#actor.send({ type: "_clear" })}>New text</button>
         <span class="spacer"></span>
         <span class="count">${count === 1 ? "1 comment" : `${count} comments`}</span>
-        <button class="primary copy" @click=${() => this.#copy()}>${this.#copied ?? "Copy with comments"}</button>
+        <button class="quiet copy-highlights" @click=${() => this.#copy(highlightsOnly, "#copiedHighlights")}>${this.#copiedHighlights ?? "Copy highlights"}</button>
+        <button class="primary copy" @click=${() => this.#copy(toCriticMarkup, "#copied")}>${this.#copied ?? "Copy with comments"}</button>
       </div>
       <div
         class="page"
@@ -632,18 +635,19 @@ class RedlineEditor extends LitElement {
     this.renderRoot.getSelection?.()?.removeAllRanges?.();
   }
 
-  #copy() {
+  #copy(format, slot) {
     const { redline } = this.#context;
+    const set = (label) => (slot === "#copied" ? (this.#copied = label) : (this.#copiedHighlights = label));
     const flash = (label) => {
-      this.#copied = label;
+      set(label);
       this.requestUpdate();
       clearTimeout(this.#copiedTimer);
       this.#copiedTimer = setTimeout(() => {
-        this.#copied = null;
+        set(null);
         this.requestUpdate();
       }, COPIED_MS);
     };
-    const write = navigator.clipboard?.writeText?.(toCriticMarkup(redline.text, marks(this.#context)));
+    const write = navigator.clipboard?.writeText?.(format(redline.text, marks(this.#context)));
     if (!write) {
       flash("Could not copy");
       return;

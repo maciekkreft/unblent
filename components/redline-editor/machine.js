@@ -324,6 +324,15 @@ export const toCriticMarkup = (text, comments) =>
       text,
     );
 
+// Only the commented passages, each with its comment in the same CriticMarkup, one per
+// paragraph in reading order, for pasting the feedback without the rest of the text.
+export const highlightsOnly = (text, comments) =>
+  [...comments]
+    .filter((c) => c.text.trim() !== "")
+    .sort((a, b) => a.start - b.start)
+    .map((c) => `{==${text.slice(c.start, c.end)}==}{>>${c.text.trim()}<<}`)
+    .join("\n\n");
+
 // The comments to paint: the saved ones, with the one being written in its place (it
 // may not be saved yet, or be newer than what was saved), in reading order.
 export const marks = ({ redline, draft }) => {

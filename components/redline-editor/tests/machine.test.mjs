@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, parseMarkdown, pieces, trimRange, overlaps, toCriticMarkup, marks, normaliseText } from "../machine.js";
+import { machine, parseMarkdown, pieces, trimRange, overlaps, toCriticMarkup, highlightsOnly, marks, normaliseText } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAVED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "redline.saved.json"), "utf8"));
@@ -267,4 +267,14 @@ test("every redline.saved matches its schema", () => {
     const result = new Validator(SAVED, "2020-12").validate(rest);
     assert.ok(result.valid, JSON.stringify(result.errors?.[0]));
   }
+});
+
+test("copy highlights gives only the commented passages with their comments", () => {
+  const text = "A book was a path through the box.";
+  const comments = [
+    { id: "2", start: 13, end: 17, text: "shorter" },
+    { id: "1", start: 2, end: 6, text: "say app" },
+    { id: "3", start: 18, end: 25, text: "  " },
+  ];
+  assert.equal(highlightsOnly(text, comments), "{==book==}{>>say app<<}\n\n{==path==}{>>shorter<<}");
 });
