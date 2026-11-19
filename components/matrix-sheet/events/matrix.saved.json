@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user changed an Eisenhower Matrix: the whole matrix as the user left it. A new id starts a new matrix on the given day; for one already kept the day and from are ignored. A save that leaves no task deletes a kept matrix, and on a new id keeps nothing.",
+  "description": "The user changed an Eisenhower Matrix: the whole matrix as the user left it. A new id starts a new matrix on the given day; for one already kept the day and from are ignored. An empty task list keeps an existing matrix on its day; on a new id it keeps nothing. Only deleted: true removes an existing matrix.",
   "type": "object",
   "properties": {
     "id": {
@@ -57,6 +57,10 @@
         "additionalProperties": false
       },
       "description": "The tasks, in the order they stand inside each place. A task carries no suggestion: only the matrices fact writes that, and keeps it while the task's words stay the same."
+    },
+    "deleted": {
+      "type": "boolean",
+      "description": "True removes the whole matrix from this day. Absent or false saves its tasks, including an empty list."
     },
     "finished": {
       "type": "boolean",

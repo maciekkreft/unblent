@@ -104,7 +104,7 @@ test("the view's saves reach matrices, its list answers them, and a suggestion a
     assert.deepEqual(reply.matrices[0].tasks[0].suggested, { place: "do", sure: true });
     assert.equal((await sheet.list({})).total, 1);
 
-    sheet.actor.send({ type: "go", body: { ...body, tasks: [] } });
+    sheet.actor.send({ type: "go", body: { ...body, tasks: [], deleted: true } });
     await until(() => heard.at(-1).type === "matrix.deleted");
     assert.equal(store.rows.get(ID).deleted, true);
   } finally {

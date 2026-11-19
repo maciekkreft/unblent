@@ -164,7 +164,7 @@ const before = (e, step) => e.prior ?? `^${step}`;
 
 // Whether a save only took tasks away, leaving the rest as they were and in their order.
 function droppedOnly(before, after) {
-  if (after.length === 0 || after.length >= before.length) return false;
+  if (after.length >= before.length) return false;
   const kept = own(before).filter((t) => after.some((a) => a.id === t.id));
   return JSON.stringify(kept) === JSON.stringify(own(after));
 }
@@ -226,18 +226,16 @@ function applyStep(context, event, enqueue) {
   suggest(context, enqueue);
 }
 
-// A new id adds a matrix to its day, unless it holds no task (that is not a matrix yet) or
-// the day already holds one (one per day). A save to one already kept changes its tasks
-// and keeps its day and `from`, except that leaving no task removes it: that is how the
-// view says it is gone. Its tombstone keeps what it had, so it can still be restored. A
-// deleted id stays deleted (5).
+// A new matrix needs a task and a day of its own. An existing matrix stays on its day
+// when emptied; only an explicit deletion removes it. Its tombstone keeps its tasks for
+// Undo, and a deleted id stays deleted (5).
 function applySave(context, event, enqueue) {
   if (!isId(event.id)) return;
   const was = context.matrices.get(event.id);
   if (was?.deleted) return;
   const tasks = own(tasksOf(event.tasks));
   if (!was) {
-    if (!isDay(event.day) || tasks.length === 0) return;
+    if (event.deleted === true || !isDay(event.day) || tasks.length === 0) return;
     if ([...context.matrices.values()].some((r) => visible(r) && r.day === event.day)) return;
     const from = isDay(event.from) && event.from < event.day ? event.from : undefined;
     const source = from ? [...context.matrices.values()].find((r) => visible(r) && r.day === from) : null;
@@ -251,7 +249,7 @@ function applySave(context, event, enqueue) {
     recordStep(context, enqueue, null, next, event);
     return suggest(context, enqueue);
   }
-  if (tasks.length === 0) return recordStep(context, enqueue, was, { ...was, deleted: true }, event);
+  if (event.deleted === true) return recordStep(context, enqueue, was, { ...was, deleted: true }, event);
   const next = { ...was, tasks: keepSuggested(tasks, was.tasks) };
   if (same(was, next)) {
     // A fold with nothing new to save still ends the stretch of typing.
@@ -544,8 +542,8 @@ export const machine = setup({
       "suggestion, so an unplaced task is asked about again; a task copied to a new day keeps its " +
       "suggestion and is not asked again. An error, such as no key or being offline, leaves the " +
       "task without a suggestion until the next load; earlier days are not asked about. Writing a " +
-      "suggestion is not a step and Undo never removes one. A matrix with no task is not kept, and " +
-      "a save that leaves none deletes it at once with the short notice; a save that only takes tasks away is a step of its own with the short notice too. Every change the user " +
+      "suggestion is not a step and Undo never removes one. A new matrix with no task is not kept; an existing one stays when emptied. An explicit deletion removes it with the short notice; " +
+      "a save that only takes tasks away is a step of its own with the short notice too. Every change the user " +
       "makes is a step Undo and Redo reverse (section 12): one stretch of changes to one matrix, " +
       "from its first save until a save says finished, and a delete; Undo of a new matrix's first " +
       "stretch deletes it, and a deleted one comes back with a restore write. A step compares only " +

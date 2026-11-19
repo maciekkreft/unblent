@@ -196,12 +196,29 @@ test("a save changes the tasks and mints the next version; the same tasks are no
   assert.equal(changed.length, 4, "the order is a change");
 });
 
-test("a save that leaves no task removes the matrix, and its tombstone keeps the tasks", async () => {
+test("removing the last task keeps the empty matrix and saves it across sync", async () => {
+  const store = fakeStore();
+  const api = fakeApi();
+  const { actor, changed, deleted, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send(saved());
+  await drain(clock);
+  actor.send(saved({ tasks: [], finished: true }));
+  assert.deepEqual(changed.at(-1).tasks, []);
+  assert.equal(deleted.length, 0);
+  assert.deepEqual((await list(actor)).map((m) => [m.id, m.tasks]), [[ID, []]]);
+  await drain(clock);
+  assert.deepEqual(api.server.get(ID).tasks, []);
+  assert.equal(Boolean(api.server.get(ID).deleted), false);
+  assert.equal(Boolean(store.rows.get(ID).deleted), false);
+});
+
+test("explicit removal deletes the matrix, and its tombstone keeps the tasks", async () => {
   const store = fakeStore();
   const { actor, changed, deleted } = start(store);
   await ready(actor);
   actor.send(saved());
-  actor.send(saved({ tasks: [] }));
+  actor.send(saved({ tasks: [], deleted: true }));
   assert.equal(changed.length, 1, "no change is announced, only the deletion");
   assert.deepEqual(deleted, [{ type: "matrix.deleted", id: ID, day: DAY }]);
   assert.deepEqual(await list(actor), []);
@@ -284,14 +301,14 @@ test("signed in: edits within the window coalesce into one write", async () => {
   assert.deepEqual([api.puts[0].tasks[0].text, api.puts[0].baseVersion], ["Call the bank now", null]);
 });
 
-test("signed in: a save with no task is sent as a delete and drains", async () => {
+test("signed in: explicit removal is sent as a delete and drains", async () => {
   const store = fakeStore();
   const api = fakeApi();
   const { actor, clock, deleted } = start(store, { api, ask: askUser("u1") });
   await ready(actor);
   actor.send(saved());
   await drain(clock);
-  actor.send(saved({ tasks: [] }));
+  actor.send(saved({ tasks: [], deleted: true }));
   assert.equal(deleted.length, 1);
   await drain(clock);
   assert.deepEqual([api.puts[1].deleted, api.puts[1].baseVersion], [true, 1]);
@@ -378,7 +395,7 @@ test("sign-in uploads what was made signed out, with its history, tombstones inc
   actor.send(saved());
   actor.send(saved({ tasks: [task({ place: "do" })] }));
   actor.send(saved({ id: ID2, day: DAY2 }));
-  actor.send(saved({ id: ID2, day: DAY2, tasks: [] }));
+  actor.send(saved({ id: ID2, day: DAY2, tasks: [], deleted: true }));
   actor.send(saved({ id: ID3, day: "2026-10-12" }));
   actor.send({ type: "session.changed", userId: "u1" });
   await flush();

@@ -89,7 +89,7 @@ test("a new day's matrix is a copy without the ticked tasks, kept at once with i
   }
 });
 
-test("deleting a task asks for the notice, and deleting the last takes the matrix away", async () => {
+test("deleting the last task keeps the matrix until the whole sheet is explicitly removed", async () => {
   const { sheet, steps, ctx, finish } = await both([]);
   try {
     sheet.send({ type: "add" });
@@ -101,6 +101,10 @@ test("deleting a task asks for the notice, and deleting the last takes the matri
     assert.deepEqual([steps().at(-1).label, steps().at(-1).notice], ["delete task", true]);
     assert.equal(steps().at(-2).notice, undefined, "a tick asks for none");
     sheet.send({ type: "_delete", id: second.id });
+    await until(() => ctx().matrices[0]?.tasks.length === 0);
+    assert.equal(ctx().open, true);
+    assert.deepEqual([steps().at(-1).label, steps().at(-1).notice], ["delete task", true]);
+    sheet.send({ type: "_discard" });
     await until(() => ctx().matrices.length === 0);
     assert.deepEqual([steps().at(-1).label, steps().at(-1).notice], ["delete Eisenhower Matrix", true]);
   } finally {

@@ -39,7 +39,7 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Summaries of journal days, shown to the user beside each day; today the journal summary generator writes one sentence per day, which only the chat reads.
 - Summaries of book chapters, shown to the user beside each chapter.
 - Comparing Wheels of Life over time: today a wheel shows the gap between Actual and Wanted on its own day, and a new wheel starts from the previous wheel's Wanted scores and its answers on what 1 and 10 look like; a view of how the scores and answers changed from one wheel to the next is left for later.
-- An Eisenhower Matrix sheet, in which the user sorts tasks by urgent and important, with a decision model such as Jev helping to place each task, and possibly breaking a bigger task into smaller steps, following the method of *One Small Step Can Change Your Life: The Kaizen Way* by Robert Maurer.
+- An Eisenhower Matrix sheet, in which the user sorts tasks into the four standard quadrants by urgent and important (Do, Schedule, Delegate, Drop), with a decision model such as Jev helping to place each task.
 - Getting books from https://standardebooks.org/ebooks and other places whose books are legal to download, from inside the app.
 - Versions of a note, as a new feature: each version of a note is kept, and the user can compare two versions and see what changed between them, with a vendored library that finds the differences.
 - A set of example goals for the Therapy Goal evaluator, each with the answer it should get, run again after a change to the evaluator's options to show which answers moved (sketch: `~/.claude/plans/evaluator-dataset.md`).

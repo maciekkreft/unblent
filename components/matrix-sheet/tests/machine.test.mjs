@@ -144,7 +144,7 @@ test("each gesture is one save that says finished: tick, a neighbor, new words, 
   actor.send({ type: "_delete", id: T1 });
   assert.deepEqual(last().map((t) => t.id), [T2]);
   actor.send({ type: "_delete", id: T2 });
-  assert.deepEqual(last(), [], "the last delete sends no task, which takes the matrix away");
+  assert.deepEqual(last(), [], "the last delete saves the empty matrix");
   assert.ok(emitted.every((e) => e.finished === true && e.id === KEPT));
 });
 
@@ -163,7 +163,7 @@ test("Reset empties the sheet and sends nothing until the fold; a task added mea
   assert.equal(ctx().cleared, null);
   actor.send({ type: "_reset" });
   actor.send({ type: "_fold" });
-  assert.deepEqual([emitted.at(-1).id, emitted.at(-1).tasks], [KEPT, []], "the fold sends the empty save the fact deletes");
+  assert.deepEqual([emitted.at(-1).id, emitted.at(-1).tasks], [KEPT, []], "the fold saves the empty matrix");
   assert.equal(ctx().cleared, null);
 });
 
@@ -184,11 +184,11 @@ test("Reset of a matrix left empty is sent when the day changes, and dropped whe
   assert.equal(emitted.length, count, "and nothing is sent");
 });
 
-test("Delete sends a kept matrix with no task and folds; a new one never kept just goes; nothing to reset is refused", async () => {
+test("Remove from this day explicitly deletes a kept matrix and folds; a new one never kept just goes; nothing to reset is refused", async () => {
   const { actor, emitted, ctx } = await start([matrix(KEPT, TODAY, [task(T1, "A")])]);
   actor.send({ type: "_open" });
   actor.send({ type: "_discard" });
-  assert.deepEqual([emitted.length, emitted[0].id, emitted[0].tasks, ctx().open], [1, KEPT, [], false]);
+  assert.deepEqual([emitted.length, emitted[0].id, emitted[0].deleted, ctx().open], [1, KEPT, true, false]);
   actor.send({ type: "matrix.deleted", id: KEPT, day: TODAY });
   actor.send({ type: "add" });
   assert.deepEqual(ctx().fresh.tasks, []);

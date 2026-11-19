@@ -63,7 +63,7 @@ function keptMatrix(context) {
 }
 
 // The matrix of the shown day as the sheet draws it. One the user reset shows no task while
-// its empty save waits for the fold, so a task can be added again before it is deleted; what
+// its empty save waits for the fold, so a task can be added again before it is saved; what
 // the fact announces meanwhile still updates the kept copy underneath.
 export function shownMatrix(context) {
   const m = keptMatrix(context);
@@ -172,11 +172,10 @@ const words = change((tasks, event) => {
   return tasks.map((t) => (t === task ? { id: t.id, text, place: t.place, done: t.done } : t));
 });
 
-// The last task's delete takes the matrix away: the fact deletes one left with no task.
+// Removing a task keeps the sheet, including when its last task goes.
 const remove = change((tasks, event) => (tasks.some((t) => t.id === event.id) ? tasks.filter((t) => t.id !== event.id) : null));
 
-// The empty save a Reset held back, sent when the sheet folds or the day changes: the fact
-// deletes a matrix left with no task, with the short notice.
+// Reset keeps the empty matrix on its day once the sheet folds or the day changes.
 const sendCleared = enqueueActions(({ context, enqueue }) => {
   const m = keptMatrix(context);
   if (m && context.cleared === m.id && isKept(context, m)) enqueue.emit(saved({ ...m, tasks: [] }));
@@ -192,11 +191,10 @@ const fold = [
 // Reset empties the sheet, as the very first matrix starts; nothing is sent until the fold.
 const reset = assign(({ context }) => ({ cleared: keptMatrix(context).id, editing: null }));
 
-// Delete takes the whole matrix away at once: the fact deletes one saved with no task, with
-// the short notice whose Undo brings it back. A new one never kept just goes.
+// Removing the whole sheet is explicit, so clearing its tasks alone keeps it on the day.
 const discard = enqueueActions(({ context, enqueue }) => {
   const m = keptMatrix(context);
-  if (isKept(context, m)) enqueue.emit(saved({ ...m, tasks: [] }));
+  if (isKept(context, m)) enqueue.emit({ ...saved(m), deleted: true });
   enqueue.assign({ open: false, editing: null, fresh: null, cleared: null });
 });
 
@@ -346,7 +344,7 @@ export const machine = setup({
       "Escape gives the old words back, and empty words keep the old ones. A ticked task is " +
       "muted and struck through and stays where it is. Every change is saved at once as one " +
       "Undo step; deleting a task shows the short Deleted notice with Undo, and deleting the " +
-      "last one takes the matrix away. The add command opens the matrix the day already has, or " +
+      "last one leaves the matrix empty on its day. The add command opens the matrix the day already has, or " +
       "adds a copy of the newest earlier matrix without its ticked tasks, saved at once as one " +
       "step whose Undo takes it away, with a line under the places naming the day it came from; " +
       "the very first matrix starts empty and is kept once it holds a task. The keyboard lands " +
@@ -371,7 +369,7 @@ export const machine = setup({
       "brings it back with its tasks; a new one never kept just closes. Reset empties every " +
       "task, as the very first matrix starts, and leaves the keyboard on the Add a task line; " +
       "a task added then saves the matrix with that task alone, and one still empty when the " +
-      "sheet folds or the day changes is deleted then with the notice, so the tasks can be " +
+      "sheet folds or the day changes is saved empty, so the tasks can be " +
       "written again first. Reset is greyed while there is no task. When the day closes to " +
       "writing first, the matrix shows what was last saved. After a key, a matrix that goes " +
       "this way puts the keyboard on the + Add sheet row; after a press nothing moves.",

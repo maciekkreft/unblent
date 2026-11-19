@@ -141,10 +141,23 @@ test("Undo of a stretch goes back to before it; Undo and Redo of words, place, t
   assert.equal(s.steps.length, count, "applying records nothing");
 });
 
-test("a save that leaves no task is one step that asks for the notice; Undo brings the matrix back", async () => {
+test("deleting the last task keeps the matrix, and Undo and Redo restore and empty its tasks", async () => {
+  const s = await start();
+  s.save({ tasks: [task()], finished: true });
+  s.save({ tasks: [], finished: true });
+  const removal = s.steps.at(-1);
+  assert.deepEqual([removal.label, removal.notice], ["delete task", true]);
+  assert.deepEqual((await s.held()).tasks, []);
+  s.actor.send(undo(removal));
+  assert.deepEqual((await s.held()).tasks, [task()]);
+  s.actor.send(redo(removal));
+  assert.deepEqual((await s.held()).tasks, []);
+});
+
+test("explicit removal is one step that asks for the notice; Undo brings the matrix back", async () => {
   const s = await start();
   s.save({ tasks: [task({ place: "schedule" })], finished: true });
-  s.save({ tasks: [] });
+  s.save({ tasks: [], deleted: true });
   const removal = s.steps.at(-1);
   assert.deepEqual([removal.label, removal.notice], ["delete Eisenhower Matrix", true]);
   assert.equal(await s.held(), undefined);
@@ -222,7 +235,7 @@ test("signed in, Undo of a delete is a restore write naming the tombstone's vers
   const api = fakeApi();
   const s = await start({ userId: "u1", api });
   s.save({ tasks: [task({ place: "do" })], finished: true });
-  s.save({ tasks: [] });
+  s.save({ tasks: [], deleted: true });
   s.actor.send({ type: "_sync", pull: false });
   await flush();
   const tombstone = api.server.get(ID);

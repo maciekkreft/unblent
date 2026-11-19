@@ -97,6 +97,18 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await sheet.locator(`.task[data-id="${B}"]`).getByRole("button", { name: "Delete this task" }).click();
         await until(async () => !(await places(page)).schedule.includes("Book the dentist"));
         assert.equal(await sheet.locator(".bin").count(), 2);
+        await sheet.locator(".bin").first().click();
+        await sheet.locator(".bin").first().click();
+        await sheet.locator(".add input").waitFor();
+        assert.equal(await sheet.locator(".txt").count(), 0);
+        assert.equal(await sheet.locator(".sheet").count(), 1, "the last task leaves the sheet open");
+        await until(async () => {
+          const { matrices } = await (await context.request.get(`${BASE_URL}/api/matrices?day=${today()}`)).json();
+          return matrices.some((m) => m.id === ID && m.tasks.length === 0);
+        });
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await sheet.locator(".card").click();
+        assert.equal(await sheet.locator(".txt").count(), 0, "the empty matrix survives a reload");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -165,9 +177,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: a gesture.
-    test("Reset empties the open sheet, and Done then deletes it with the notice", async () => {
+    test("Reset empties the sheet and Done keeps its empty card", async () => {
       const { context, page, problems, sheet } = await open(browser);
-      const notice = () => page.locator("notice-stack").evaluate((el) => el.shadowRoot.textContent);
       try {
         await sheet.locator(".card").click();
         await sheet.locator(".reset").click();
@@ -175,8 +186,10 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await at(page), "add", "the keyboard waits on the Add a task line");
         assert.equal(await sheet.locator(".reset").isDisabled(), true);
         await sheet.locator(".done").click();
-        await until(async () => (await sheet.locator("section").count()) === 0);
-        await until(async () => /Eisenhower Matrix/.test(await notice()));
+        await sheet.locator(".card").waitFor();
+        await sheet.locator(".card").click();
+        assert.equal(await sheet.locator(".txt").count(), 0);
+        assert.equal(await sheet.locator(".sheet").count(), 1);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

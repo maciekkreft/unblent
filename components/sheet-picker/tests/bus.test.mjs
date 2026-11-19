@@ -110,6 +110,10 @@ test("picking the Eisenhower Matrix opens one through the bus; once it holds a t
     await until(() => ctx().matrices.some((m) => m.id === MX));
     assert.equal(sheet().fresh, null, "the fact keeps it");
     sheets.matrix.send({ type: "_delete", id: TX });
+    await until(() => sheet().matrices.find((m) => m.id === MX)?.tasks.length === 0);
+    assert.ok(ctx().matrices.some((m) => m.id === MX), "the picker still lists the matrix on this day");
+    assert.equal(sheet().open, true, "the empty matrix stays on its day");
+    sheets.matrix.send({ type: "_discard" });
     await until(() => !ctx().matrices.some((m) => m.id === MX));
   } finally {
     finish();
