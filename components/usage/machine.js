@@ -329,6 +329,8 @@ export const machine = setup({
       "choice-point.saved": "choice",
       "wheel.saved": "journal",
       "matrix.saved": "journal",
+      "prompt-sheet.saved": "journal",
+      "prompt-set.saved": "journal",
       "values.saved": "values",
       "values.placed": "values",
       "settings.edited": "other",

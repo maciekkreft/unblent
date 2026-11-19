@@ -38,6 +38,11 @@ export const FEATURES = [
     name: "Eisenhower Matrix",
     says: "A sheet on a journal day that sorts your tasks by urgent and important into Do, Schedule, Delegate and Drop.",
   },
+  {
+    id: "journal-prompts",
+    name: "Journal prompts",
+    says: "A sheet on a journal day that asks your own questions, from sets you write in the Prompts tab or start from ten sets based on well-known books.",
+  },
 ];
 
 const key = (column, id) => `${column}:${id}`;
@@ -96,7 +101,7 @@ export const machine = setup({
   meta: {
     description:
       "The Features tab of the gear's sheet, shown to everyone. One row per feature that " +
-      "`flags` can hide, named as people know it (Values and Choice Points, Usage, Slip-Box, Reading aloud, Book experts, Wheel of Life, and Eisenhower Matrix), with " +
+      "`flags` can hide, named as people know it (Values and Choice Points, Usage, Slip-Box, Reading aloud, Book experts, Wheel of Life, Eisenhower Matrix, and Journal prompts), with " +
       "what it holds under the name, and two switches. Release gives the feature to " +
       "everyone; it is shown only to the admin on the website, not while viewing as someone, " +
       "and only then is a feature that is not released shown as a row. Show hides or shows " +

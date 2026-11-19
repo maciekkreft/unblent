@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user changed a prompt set in the Prompts tab: the whole set as the user left it. A new id adds a set. Only deleted: true removes one.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "The set's id; each starter set has a fixed one, so two devices never add it twice."
+    },
+    "name": {
+      "type": "string",
+      "description": "The set's name, such as Evening review."
+    },
+    "occasion": {
+      "type": "string",
+      "description": "A short label for when the set is meant to be used, such as Morning, Evening or Hard moment; empty when none."
+    },
+    "basedOn": {
+      "type": "string",
+      "description": "The book the set is based on and its author, as people read it, such as The Happiness Trap, Russ Harris; empty when none."
+    },
+    "prompts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The prompts, the questions the user answers, in the order they are asked."
+    },
+    "position": {
+      "type": "string",
+      "description": "The set's place in the list: a key that sorts by plain comparison, the list in ascending order (5)."
+    },
+    "deleted": {
+      "type": "boolean",
+      "description": "True when the user deleted the set. False when absent."
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "occasion",
+    "basedOn",
+    "prompts",
+    "position"
+  ],
+  "additionalProperties": false
+}

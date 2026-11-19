@@ -1,0 +1,136 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Which sheets are wanted: one day's, one set's, or both; when both are left out, the newest of any day.",
+    "type": "object",
+    "properties": {
+      "day": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      },
+      "setId": {
+        "type": "string",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      }
+    },
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "At most 20 sheets, newest day first, each whole as prompt-sheet.changed carries it; total is how many match in all.",
+    "type": "object",
+    "properties": {
+      "sheets": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "day": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "description": "The journal day the sheet is kept with, as its date; it never changes."
+            },
+            "setId": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "The prompt set the sheet was started from."
+            },
+            "setName": {
+              "type": "string",
+              "description": "The set's name when the sheet was last written, kept so the sheet still reads after the set changes or is gone."
+            },
+            "basedOn": {
+              "type": "string",
+              "description": "The book and author the set was based on when the sheet was last written; empty when none."
+            },
+            "answers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "description": "The prompt as the sheet asked it, stored with the answer."
+                  },
+                  "answer": {
+                    "type": "string",
+                    "description": "The user's answer in their own words; empty while not answered."
+                  },
+                  "fits": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ],
+                    "description": "Whether the answer responds to what the prompt asks, as the built-in Answers the prompt evaluator judged it; written only by the prompt-sheets fact, null while not judged or when it could not be. \"I don't know\" counts as an answer."
+                  }
+                },
+                "required": [
+                  "prompt",
+                  "answer",
+                  "fits"
+                ],
+                "additionalProperties": false
+              },
+              "description": "One answer per prompt, in the order the prompts are asked."
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When the sheet was added."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "pending": {
+              "type": "boolean",
+              "description": "A change the server has not acknowledged yet (5)."
+            }
+          },
+          "required": [
+            "id",
+            "day",
+            "setId",
+            "setName",
+            "basedOn",
+            "answers",
+            "createdAt",
+            "version",
+            "pending"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "total": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "How many sheets match in all, of which the reply holds at most 20."
+      }
+    },
+    "required": [
+      "sheets",
+      "total"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "prompt-sheet.changed",
+    "prompt-sheet.deleted"
+  ],
+  "tool": {
+    "description": "Returns the reader's journal prompts sheets, newest day first: each is kept with one journal day (its date) and holds the answers the reader wrote to one set of their own questions (setName, and basedOn, the book the set is based on). Each answer is stored with its prompt; fits is false when the answer may respond to something other than its prompt, and null when not judged. Give day (YYYY-MM-DD) for one journal day's sheets, setId for one set's, or nothing for the 20 newest; total says how many match in all.",
+    "label": "Reading journal prompts",
+    "title": "Journal prompts",
+    "group": "Journal",
+    "order": 336,
+    "items": "/sheets",
+    "itemName": "/day",
+    "itemExcerpt": "/answers/0/answer",
+    "total": "/total"
+  }
+}

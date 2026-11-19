@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A journal prompts sheet now looks like this: the whole sheet (4, third rule), pending until the server acknowledges it (5).",
+  "type": "object",
+  "properties": {
+    "sheet": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "day": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "The journal day the sheet is kept with, as its date; it never changes."
+        },
+        "setId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "The prompt set the sheet was started from."
+        },
+        "setName": {
+          "type": "string",
+          "description": "The set's name when the sheet was last written, kept so the sheet still reads after the set changes or is gone."
+        },
+        "basedOn": {
+          "type": "string",
+          "description": "The book and author the set was based on when the sheet was last written; empty when none."
+        },
+        "answers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "type": "string",
+                "description": "The prompt as the sheet asked it, stored with the answer."
+              },
+              "answer": {
+                "type": "string",
+                "description": "The user's answer in their own words; empty while not answered."
+              },
+              "fits": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "Whether the answer responds to what the prompt asks, as the built-in Answers the prompt evaluator judged it; written only by the prompt-sheets fact, null while not judged or when it could not be. \"I don't know\" counts as an answer."
+              }
+            },
+            "required": [
+              "prompt",
+              "answer",
+              "fits"
+            ],
+            "additionalProperties": false
+          },
+          "description": "One answer per prompt, in the order the prompts are asked."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the sheet was added."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pending": {
+          "type": "boolean",
+          "description": "A change the server has not acknowledged yet (5)."
+        }
+      },
+      "required": [
+        "id",
+        "day",
+        "setId",
+        "setName",
+        "basedOn",
+        "answers",
+        "createdAt",
+        "version",
+        "pending"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "sheet"
+  ],
+  "additionalProperties": false
+}

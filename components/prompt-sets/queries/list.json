@@ -1,0 +1,79 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "list takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every prompt set of the account, in list order, each whole as prompt-set.changed carries it.",
+    "type": "object",
+    "properties": {
+      "sets": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "The set's id; each starter set has a fixed one, so two devices never add it twice."
+            },
+            "name": {
+              "type": "string",
+              "description": "The set's name, such as Evening review."
+            },
+            "occasion": {
+              "type": "string",
+              "description": "A short label for when the set is meant to be used, such as Morning, Evening or Hard moment; empty when none."
+            },
+            "basedOn": {
+              "type": "string",
+              "description": "The book the set is based on and its author, as people read it, such as The Happiness Trap, Russ Harris; empty when none."
+            },
+            "prompts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The prompts, the questions the user answers, in the order they are asked."
+            },
+            "position": {
+              "type": "string",
+              "description": "The set's place in the list: a key that sorts by plain comparison, the list in ascending order (5)."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "pending": {
+              "type": "boolean",
+              "description": "A change the server has not acknowledged yet (5)."
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "occasion",
+            "basedOn",
+            "prompts",
+            "position",
+            "version",
+            "pending"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "sets"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "prompt-set.changed",
+    "prompt-set.deleted"
+  ]
+}
