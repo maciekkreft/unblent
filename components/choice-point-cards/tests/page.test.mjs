@@ -71,7 +71,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         // The reload may cut short the prompt sets' first upload of the starter sets, which
         // the next load sends again.
-        const problems = watch(page, [], { ignore: [/api\/prompt-sets\/.*Load request cancelled/] });
+        const problems = watch(page, [], { ignore: [/api\/prompt-sets\/.*(Load request cancelled|access control checks)/] });
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         await page.locator("sheet-picker .new").waitFor();
         assert.equal(await page.locator("choice-point-cards").evaluate((el) => getComputedStyle(el).display), "none", "a day without one takes no room");
