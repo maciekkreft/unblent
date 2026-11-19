@@ -41,6 +41,14 @@ export const SHEETS = [
     category: "Planning",
     what: "Sort your tasks by urgent and important, and see what to do today.",
   },
+  {
+    id: "prompts",
+    target: "prompt-sheet",
+    feature: "journal-prompts",
+    name: "Journal prompts",
+    category: "Writing",
+    what: "Answer a set of questions you chose: your own, or one based on a book.",
+  },
 ];
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -63,6 +71,7 @@ export const writable = (context) => context.dayWritable ?? context.day === date
 const offered = {
   values: (context) => context.placed === false,
   "choice-point": () => true,
+  prompts: () => true,
   wheel: (context) => context.wheels !== null && !context.wheels.some((w) => w.day === context.day),
   matrix: (context) => context.matrices !== null && !context.matrices.some((m) => m.day === context.day),
 };
@@ -122,8 +131,8 @@ export const machine = setup({
       "The last row of today's journal page, + Add sheet, which opens a list of the sheets in " +
       "place, each with its name, one line of description and a category label. It keeps that " +
       "fixed list itself, so the journal knows no kind of sheet: Your values (ACT), Choice point " +
-      "(ACT), Wheel of Life (Coaching) and Eisenhower Matrix (Planning). Your values, Wheel of " +
-      "Life and Eisenhower Matrix leave the list while they are on the day; Choice point stays, because a day can hold several. A sheet whose " +
+      "(ACT), Wheel of Life (Coaching) and Eisenhower Matrix (Planning) and Journal prompts (Writing). Your values, Wheel of " +
+      "Life and Eisenhower Matrix leave the list while they are on the day; Choice point and Journal prompts stay, because a day can hold several. A sheet whose " +
       "feature is hidden is not listed, and with nothing to list the row is hidden and takes no " +
       "room. An earlier day, or a day that can no longer be written, has no row. Pressing the row " +
       "opens the list with the keyboard on its first entry; the list closes with Escape or a " +
@@ -138,7 +147,7 @@ export const machine = setup({
     kind: "view",
     emits: [],
     asks: ["values: read", "wheels: list", "matrices: list", "flags: read", "settings: read"],
-    sends: ["values-sheet: add", "choice-point-cards: add", "wheel-sheet: add", "matrix-sheet: add"],
+    sends: ["values-sheet: add", "choice-point-cards: add", "wheel-sheet: add", "matrix-sheet: add", "prompt-sheet: add"],
     attributes: [],
   },
   context: ({ input }) => ({

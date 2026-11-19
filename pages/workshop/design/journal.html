@@ -50,6 +50,8 @@
     <script type="module" src="/static/components/choice-points/fact.js"></script>
     <script type="module" src="/static/components/wheels/fact.js"></script>
     <script type="module" src="/static/components/matrices/fact.js"></script>
+    <script type="module" src="/static/components/prompt-sets/fact.js"></script>
+    <script type="module" src="/static/components/prompt-sheets/fact.js"></script>
     <script type="module" src="/static/components/values/fact.js"></script>
     <script type="module" src="/static/components/choice-point-checks/fact.js"></script>
     <script type="module" src="/static/components/value-checks/fact.js"></script>
@@ -66,6 +68,7 @@
     <script type="module" src="/static/components/values-sheet/view.js"></script>
     <script type="module" src="/static/components/wheel-sheet/view.js"></script>
     <script type="module" src="/static/components/matrix-sheet/view.js"></script>
+    <script type="module" src="/static/components/prompt-sheet/view.js"></script>
     <script type="module" src="/static/components/sheet-picker/view.js"></script>
   </head>
   <body>
@@ -73,7 +76,7 @@
     <undo-bar></undo-bar>
     <notice-stack></notice-stack>
     <journal-days></journal-days>
-    <journal-entry><values-sheet></values-sheet><choice-point-cards></choice-point-cards><wheel-sheet></wheel-sheet><matrix-sheet flag="eisenhower-matrix"></matrix-sheet><sheet-picker></sheet-picker></journal-entry>
+    <journal-entry><values-sheet></values-sheet><choice-point-cards></choice-point-cards><wheel-sheet></wheel-sheet><matrix-sheet flag="eisenhower-matrix"></matrix-sheet><prompt-sheet flag="journal-prompts"></prompt-sheet><sheet-picker></sheet-picker></journal-entry>
     <viewport-switch></viewport-switch>
   </body>
 </html>
