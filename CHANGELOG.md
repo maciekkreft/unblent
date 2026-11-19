@@ -4,6 +4,34 @@ All notable changes to Unblent for Mac are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] — 2026-11-20
+
+### Added
+
+- A Journal prompts sheet in the journal. Pick a set of questions from + Add sheet and
+  answer each one under the day's text. A day can hold several sets, such as one in the
+  morning and one in the evening. Earlier days keep the questions they were answered
+  with, even after you change the set.
+- Ten starter sets, each based on a well-known book, such as The Seven Principles for
+  Making Marriage Work, The Happiness Trap, Self-Compassion and Atomic Habits. The
+  questions are written in our own words, and every set is yours to change or delete.
+- A Prompts tab in Settings to write your own sets: name, occasion, the book a set is
+  based on, and its questions, which you can add, reorder and remove. Every change can
+  be undone.
+- A built-in evaluator, Answers the prompt. When an answer seems to be about something
+  other than its question, a small question mark appears beside it and the question is
+  shown again under it. Nothing is shown when the answer fits. On a Mac it runs with
+  Kev in Ollama, offline and free.
+- The chat can read your journal prompts and answers. Turn this off in Settings under
+  What the chat may read.
+
+### Changed
+
+- Removing the last task from an Eisenhower Matrix leaves the empty matrix on its day.
+  Only Remove from this day takes the matrix away.
+- Copying from a redlined text can copy only the commented passages, each with its
+  comment.
+
 ## [0.9.0] — 2026-11-15
 
 ### Added
