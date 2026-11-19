@@ -6,7 +6,7 @@ import { EditorState, Compartment, Annotation, Prec } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, duplicateNames, OPTION_ICONS, removable, shownOf, TRY_PATH, stopKey, boxEdge, EISENHOWER } from "./machine.js";
+import { machine, duplicateNames, OPTION_ICONS, removable, shownOf, TRY_PATH, stopKey, boxEdge, builtIn } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import discarded from "./events/evaluator.discarded.json" with { type: "json" };
 
@@ -852,7 +852,7 @@ class EvaluatorSettings extends LitElement {
   }
 
   #evaluator(d, context) {
-    const kept = context.evaluators.some((r) => r.id === d.id) && d.id !== EISENHOWER;
+    const kept = context.evaluators.some((r) => r.id === d.id) && !builtIn(d.id);
     const questions = d.questions.filter((q) => !q.removing);
     const name = d.name.trim() || "New evaluator";
     const open = !context.folded.has(d.id);

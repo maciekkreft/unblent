@@ -19,7 +19,9 @@ const str = (v) => (typeof v === "string" ? v : "");
 const YOURS_ID = "0000000000000000000000YVAS";
 // The Eisenhower evaluator's fixed id (see "Eisenhower" below).
 const EISENHOWER_ID = "0000000000000000000000EMTX";
-const builtIn = (id) => id === YOURS_ID || id === EISENHOWER_ID;
+// The Answers the prompt evaluator's fixed id (see "Answers the prompt" below).
+const PROMPT_ID = "0000000000000000000000PRMT";
+const builtIn = (id) => id === YOURS_ID || id === EISENHOWER_ID || id === PROMPT_ID;
 
 // --- Records --------------------------------------------------------------------------
 
@@ -133,8 +135,8 @@ export function between(after, before) {
 // first: its key is "z", its id and "V", so it sorts after every key `between` makes for
 // a new evaluator and among its kind by id, the same on every device. The key is written
 // down only when it is moved, so an edit never moves it.
-// Your values and Eisenhower, until moved, go after them all: "zz" sorts after every such
-// key, and between the two by id.
+// The built-in evaluators, until moved, go after them all: "zz" sorts after every such
+// key, and among them by id.
 export const positionOf = (r) => (isPosition(r.position) ? r.position : builtIn(r.id) ? "zz" : `z${r.id}V`);
 
 // List order: by key, then by id where two keys are equal.
@@ -297,10 +299,44 @@ const eisenhower = (context) => {
 // known that the feature is shown.
 const eisenhowerShown = (context) => context.flagged === true && !context.hidden.includes("eisenhower-matrix") && !context.tryPage;
 
+// --- Answers the prompt ------------------------------------------------------------------
+
+// Answers the prompt is built in: prompt-sheets asks it whether each answer of a journal
+// prompts sheet responds to its prompt, and finds it and its one question by these fixed
+// ids. Kept with the Journal, stored and shown like Eisenhower.
+export const PROMPT = PROMPT_ID;
+export const ANSWERS = "0000000000000000000000NSWR";
+const PROMPT_DEFAULT = {
+  id: PROMPT,
+  book: JOURNAL,
+  name: "Answers the prompt",
+  description: "Decides whether an answer in a journal prompts sheet responds to its prompt.",
+  on: true,
+  questions: [
+    {
+      id: ANSWERS,
+      kind: "yesno",
+      text: "Does the answer respond to what the prompt asks?",
+      yes: "The answer is about what the prompt asks, including an honest short answer such as \"I don't know\", \"nothing today\" or \"not sure\".",
+      no: "The answer is about something else than what the prompt asks.",
+    },
+  ],
+};
+
+const answersPrompt = (context) => {
+  const r = context.evaluators.get(PROMPT);
+  return visible(r) ? r : record(PROMPT_DEFAULT);
+};
+
+// Listed only while `flags` reports Journal prompts shown (3.1), by the same rule as
+// Eisenhower.
+const promptShown = (context) => context.flagged === true && !context.hidden.includes("journal-prompts") && !context.tryPage;
+
 // The built-in evaluators a list holds, beside the user's own.
 const builtIns = (context, values, book) => [
   ...(values ? [yours(context)] : []),
   ...(eisenhowerShown(context) && (book === undefined || book === JOURNAL) ? [eisenhower(context)] : []),
+  ...(promptShown(context) && (book === undefined || book === JOURNAL) ? [answersPrompt(context)] : []),
 ];
 
 // Your values is news only where the values fact is known to be, and while it is shown;
@@ -308,6 +344,7 @@ const builtIns = (context, values, book) => [
 function say(context, enqueue, r) {
   if (r.id === YOURS && (context.values === null || yoursHidden(context))) return;
   if (r.id === EISENHOWER && !eisenhowerShown(context)) return;
+  if (r.id === PROMPT && !promptShown(context)) return;
   const evaluator = announce(context, r);
   enqueue.emit({ type: "evaluator.changed", evaluator });
 }
@@ -462,7 +499,19 @@ function replyEvaluate(context, payload, reply) {
   const { evaluator: id, texts } = payload ?? {};
   const run = (values) => {
     const r =
-      id === YOURS ? (values ? yours(context) : null) : id === EISENHOWER ? (eisenhowerShown(context) ? eisenhower(context) : null) : live(context, id);
+      id === YOURS
+        ? values
+          ? yours(context)
+          : null
+        : id === EISENHOWER
+          ? eisenhowerShown(context)
+            ? eisenhower(context)
+            : null
+          : id === PROMPT
+            ? promptShown(context)
+              ? answersPrompt(context)
+              : null
+            : live(context, id);
     if (!r || r.removing) return reply({ error: "not-found" });
     const evaluator = usable(context, r, values);
     if (!evaluator) return reply({ error: "no-questions" });
@@ -540,10 +589,11 @@ const outboxRow = (r, baseVersion) => ({
   ...(r.deleted ? { deleted: true } : {}),
 });
 
-// Your values and Eisenhower are always there to switch or move, stored or not.
+// The built-in evaluators are always there to switch or move, stored or not.
 const live = (context, id) => {
   if (id === YOURS) return yours(context);
   if (id === EISENHOWER) return eisenhower(context);
+  if (id === PROMPT) return answersPrompt(context);
   const r = context.evaluators.get(id);
   return visible(r) ? r : null;
 };
@@ -1181,8 +1231,16 @@ export const machine = setup({
       "until the user changes something; from then on it is an ordinary row, whole. It cannot be " +
       "deleted and is never a starter. It is listed only while the Eisenhower Matrix is shown " +
       "(`flags`), not before `flags` answers and not on a try page; what is stored of it stays " +
-      "and comes back when the feature is shown again. Until moved, it and Your values go at " +
-      "the end of the list, Eisenhower first. The admin ticks evaluators as starters for a try " +
+      "and comes back when the feature is shown again. It also has Answers the prompt built in, " +
+      "kept with the Journal under a fixed id, with a fixed id for its one question, by which " +
+      "prompt-sheets asks whether each answer of a journal prompts sheet responds to its prompt: " +
+      "\"Does the answer respond to what the prompt asks?\", a yes / no question whose yes is an " +
+      "answer about what the prompt asks, an honest short answer such as \"I don't know\", " +
+      "\"nothing today\" or \"not sure\" included, and whose no is an answer about something " +
+      "else, with no answer expected. It is stored, reworded and kept from deletion and from " +
+      "being a starter as Eisenhower is, and listed only while Journal prompts is shown " +
+      "(`flags`), not before `flags` answers and not on a try page. Until moved, the built-in " +
+      "ones go at the end of the list: Eisenhower, Answers the prompt, then Your values. The admin ticks evaluators as starters for a try " +
       "page (`starterFor`, by the page's name); the server keeps a copy of the ticked ones for " +
       "visitors. On a try page, a visitor whose browser holds no evaluators yet gets a copy of " +
       "each of that page's starters before anything is listed, with new ids, switched on and " +
@@ -1273,12 +1331,16 @@ export const machine = setup({
       actions: enqueueActions(({ context, event, enqueue }) => {
         const was = yoursHidden(context);
         const wasShown = eisenhowerShown(context);
+        const promptWas = promptShown(context);
         context.hidden = hiddenOf(event);
         context.flagged = true;
         enqueue.assign({ hidden: context.hidden, flagged: true });
         const shown = eisenhowerShown(context);
         if (shown && !wasShown) say(context, enqueue, eisenhower(context));
         if (wasShown && !shown) enqueue.emit({ type: "evaluator.deleted", id: EISENHOWER, book: JOURNAL });
+        const promptNow = promptShown(context);
+        if (promptNow && !promptWas) say(context, enqueue, answersPrompt(context));
+        if (promptWas && !promptNow) enqueue.emit({ type: "evaluator.deleted", id: PROMPT, book: JOURNAL });
         const now = yoursHidden(context);
         if (was === now || typeof context.ask !== "function") return;
         if (now) enqueue.emit({ type: "evaluator.deleted", id: YOURS, book: JOURNAL });

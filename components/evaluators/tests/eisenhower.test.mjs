@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, EISENHOWER, URGENT, IMPORTANT } from "../machine.js";
+import { machine, EISENHOWER, URGENT, IMPORTANT, PROMPT } from "../machine.js";
 
 // The built-in Eisenhower evaluator, decided in the actor (3.2): driven with a fake store
 // and a fake ask for session and flags.
@@ -69,7 +69,7 @@ test("Eisenhower is built in with its fixed ids and wording, at the end of the J
   });
   await flush();
   const all = await list(actor, { book: JOURNAL });
-  assert.deepEqual(all.map((e) => e.id), [ID, EISENHOWER]);
+  assert.deepEqual(all.map((e) => e.id), [ID, EISENHOWER, PROMPT]);
   const e = all[1];
   assert.equal(e.name, "Eisenhower");
   assert.equal(e.description, "Decides where a task goes in the Eisenhower Matrix.");

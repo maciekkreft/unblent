@@ -165,9 +165,12 @@ const kinded = (draft, id, kind, mint) =>
 const liveQuestion = (context, id) => context.draft.questions.find((q) => q.id === id && !q.removing);
 const liveOption = (context, question, id) => liveQuestion(context, question)?.options.find((o) => o.id === id && !o.removing);
 
-// The built-in Eisenhower evaluator's fixed id, repeated from evaluators because components
-// never import each other: it can be reworded but never deleted.
+// The built-in Eisenhower and Answers the prompt evaluators' fixed ids, repeated from
+// evaluators because components never import each other: they can be reworded but never
+// deleted.
 export const EISENHOWER = "0000000000000000000000EMTX";
+const PROMPT = "0000000000000000000000PRMT";
+export const builtIn = (id) => id === EISENHOWER || id === PROMPT;
 
 // An option can be removed only once its name and description are cleared, so one press on
 // its x never takes written words away by accident.
@@ -317,7 +320,7 @@ export const machine = setup({
       "in its name. Whichever evaluator it opens, " +
       "picked or opened by itself after a reload, the list beside it marks. Signed out it shows no evaluator, " +
       "only \"Sign in to run evaluators.\", as the list beside it does, and signing in shows " +
-      "it again without a reload; on a try page a visitor not yet signed in edits the starters. Your values, which is built from the user's values, opens read only: its name, its fixed description, and each question with its answers and what each means, Serves marked expected, as words with nothing to type in, no Delete, and a line saying to change the values in the Values sheet, under the day's text in the Journal; with no values it says there is nothing to ask. The built-in Eisenhower opens like any evaluator and can be reworded, but has no Delete.",
+      "it again without a reload; on a try page a visitor not yet signed in edits the starters. Your values, which is built from the user's values, opens read only: its name, its fixed description, and each question with its answers and what each means, Serves marked expected, as words with nothing to type in, no Delete, and a line saying to change the values in the Values sheet, under the day's text in the Journal; with no values it says there is nothing to ask. The built-in Eisenhower and Answers the prompt open like any evaluator and can be reworded, but have no Delete.",
     kind: "view",
     emits: ["evaluator.saved", "evaluator.discarded", "evaluator.opened"],
     attributes: [],
@@ -497,7 +500,7 @@ export const machine = setup({
             // once, with the short notice and its Undo (12, Undo).
             _delete: {
               guard: ({ context }) =>
-                !context.draft.removing && !context.draft.derivedFrom && context.draft.id !== EISENHOWER && known(context, context.draft.id),
+                !context.draft.removing && !context.draft.derivedFrom && !builtIn(context.draft.id) && known(context, context.draft.id),
               target: ".clean",
               actions: [
                 save,

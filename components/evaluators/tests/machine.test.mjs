@@ -546,18 +546,18 @@ test("Your values is built only while flags shows Values and Choice Points, and 
   const value = { id: "01ARZ3NDEKTSV4RRFFQ69G5VA1", name: "Health", meaning: "" };
   const stored = { id: YOURS, book: JOURNAL, name: "Your values", on: false, questions: [], version: 1 };
   const ask = (target) =>
-    Promise.resolve(target === "flags" ? { off: [], hidden: ["choice-points", "eisenhower-matrix"] } : target === "values" ? { values: [value] } : { userId: null });
+    Promise.resolve(target === "flags" ? { off: [], hidden: ["choice-points", "eisenhower-matrix", "journal-prompts"] } : target === "values" ? { values: [value] } : { userId: null });
   const { actor, changed, deleted } = start(fakeStore([stored]), { api: fakeApi(), ask });
   await ready(actor);
   assert.deepEqual((await list(actor, JOURNAL)).map((e) => e.id), [], "not listed while hidden");
-  actor.send({ type: "flags.changed", off: [], hidden: ["eisenhower-matrix"] });
+  actor.send({ type: "flags.changed", off: [], hidden: ["eisenhower-matrix", "journal-prompts"] });
   await flush();
   const shown = changed.find((e) => e.id === YOURS);
   assert.ok(shown, "announced when the feature is shown");
   assert.equal(shown.on, false, "its stored switch came back");
   assert.deepEqual(shown.questions.map((q) => q.name), ["Health"]);
   assert.deepEqual((await list(actor, JOURNAL)).map((e) => e.id), [YOURS]);
-  actor.send({ type: "flags.changed", off: [], hidden: ["choice-points", "eisenhower-matrix"] });
+  actor.send({ type: "flags.changed", off: [], hidden: ["choice-points", "eisenhower-matrix", "journal-prompts"] });
   await flush();
   assert.deepEqual(deleted, [{ type: "evaluator.deleted", id: YOURS, book: JOURNAL }], "it leaves the lists");
   assert.deepEqual((await list(actor, JOURNAL)).map((e) => e.id), []);

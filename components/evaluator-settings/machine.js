@@ -76,9 +76,12 @@ export const duplicateNames = (q) => {
   return new Set(names).size < names.length;
 };
 
-// The built-in Eisenhower evaluator's fixed id, repeated from evaluators because components
-// never import each other: it can be reworded but never deleted.
+// The built-in Eisenhower and Answers the prompt evaluators' fixed ids, repeated from
+// evaluators because components never import each other: they can be reworded but never
+// deleted.
 export const EISENHOWER = "0000000000000000000000EMTX";
+const PROMPT = "0000000000000000000000PRMT";
+export const builtIn = (id) => id === EISENHOWER || id === PROMPT;
 
 // An option can be removed only once its name and description are cleared, so one press on
 // its x never takes written words away by accident.
@@ -344,7 +347,7 @@ const presses = (pending) => ({
   // offers no Delete, because leaving it already keeps nothing. It goes at once, with the
   // short notice and its Undo (12, Undo).
   _delete: {
-    guard: ({ context, event }) => editable(context, event.evaluator) && event.evaluator !== EISENHOWER && known(context, event.evaluator),
+    guard: ({ context, event }) => editable(context, event.evaluator) && !builtIn(event.evaluator) && known(context, event.evaluator),
     target: "clean",
     actions: [
       take(pending),
@@ -457,7 +460,7 @@ export const machine = setup({
       "happens at once, and so does deleting an evaluator, with the short notice and its Undo; " +
       "Undo and Redo take back each of them, as they do an edit (section 12). Your values, built from the user's values, is shown read only: its " +
       "questions and their answers as words, and a line saying to change the values in the " +
-      "Values sheet. The built-in Eisenhower is shown like any evaluator and can be reworded, but has no Delete evaluator. The multi-line fields are text boxes that grow with what is written and " +
+      "Values sheet. The built-in Eisenhower and Answers the prompt are shown like any evaluator and can be reworded, but have no Delete evaluator. The multi-line fields are text boxes that grow with what is written and " +
       "take Vim's keys when Vim keys is on. The keyboard moves through the tab top to bottom: " +
       "the up and down arrows move from a link, a button, a tick box, a choice or a one-line " +
       "field to the one before or after, and from a text box's first or last line out of it; " +
