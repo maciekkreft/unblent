@@ -12,6 +12,11 @@ export function openPromptSets() {
     outboxAll: () => db.all("outbox"),
     outboxPut: (row) => db.put("outbox", row),
     outboxDelete: (id) => db.delete("outbox", id),
+    // Sets and outbox rows stored together or not at all (the starter sets).
+    putAll: (sets, rows) =>
+      db.transaction(["sets", "outbox"], () =>
+        Promise.all([...sets.map((set) => db.put("sets", set)), ...rows.map((row) => db.put("outbox", row))]),
+      ),
     metaGet: async (key) => (await db.get("meta", key))?.value,
     metaPut: (key, value) => db.put("meta", { key, value }),
     // The browser is changing account (12): everything goes, outbox and cache together.

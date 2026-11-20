@@ -13,10 +13,6 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
 const FEATURES = ["journal-prompts"];
 
-// The starter sets are written on a new account's first load; one cancelled by a reload or
-// a closed page is retried later, so its failure is no fault of the tab.
-const IGNORE = [/api\/prompt-sets\/.*Load request cancelled/];
-
 async function open(browser, name, { vim = false } = {}) {
   const context = await browser.newContext({ viewport: { width: 1300, height: 1000 } });
   context.setDefaultTimeout(4000);
@@ -29,7 +25,7 @@ async function open(browser, name, { vim = false } = {}) {
 // The gear's sheet on its Prompts tab, the starter sets listed.
 async function tab(context) {
   const page = await context.newPage();
-  const problems = watch(page, [], { ignore: IGNORE });
+  const problems = watch(page);
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
   await page.locator("dock-desk .controls button.pill").click();
   await page.locator("settings-tabs").getByRole("tab", { name: "Prompts" }).click();

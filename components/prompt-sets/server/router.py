@@ -4,9 +4,9 @@ user's own SQLite file, so isolation holds by construction and the code reads as
 a single user. version is assigned here. The last write wins, so a write is never
 refused for a stale base; a delete always wins (5), so a write onto a tombstone comes
 back as the tombstone rather than reviving it, except a restore write, which names the
-tombstone's own version. A starter write adds a starter set only when no record of its
-id is held, live or deleted, and otherwise returns what is held, so the starter sets
-are written once per account however many devices write them.
+tombstone's own version. The starter sets arrive together at /starters, which adds each
+only when no record of its id is held, live or deleted, and otherwise returns what is
+held, so they are written once per account however many devices write them.
 """
 
 import json
@@ -73,6 +73,55 @@ def _reread(connection: sqlite3.Connection, set_id: str) -> dict:
     return _record(connection.execute("SELECT * FROM prompt_sets WHERE id = ?", (set_id,)).fetchone())
 
 
+def _fields(payload: dict):
+    """The stored fields of a written set, and its base version, or None when the body is
+    not a prompt set."""
+    base = payload.get("baseVersion")
+    name, occasion, based_on, position = (payload.get(key) for key in _TEXTS)
+    prompts = payload.get("prompts")
+    valid = (
+        all(isinstance(text, str) for text in (name, occasion, based_on, position))
+        and isinstance(prompts, list)
+        and all(isinstance(prompt, str) for prompt in prompts)
+        and (base is None or (isinstance(base, int) and not isinstance(base, bool) and base >= 1))
+    )
+    return ((name, occasion, based_on, json.dumps(prompts), position), base) if valid else None
+
+
+def _insert(connection: sqlite3.Connection, set_id: str, fields: tuple, base, deleted: bool) -> dict:
+    # A new id is an idempotent upsert of the browser's own ULID (5): it continues from the
+    # base the client held, or 1, so a set made signed out arrives with its history.
+    connection.execute(
+        "INSERT INTO prompt_sets (id, name, occasion, based_on, prompts, position, version, seq, deleted)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (set_id, *fields, (base or 0) + 1, _next_seq(connection), int(deleted)),
+    )
+    return _reread(connection, set_id)
+
+
+@router.post("/starters")
+async def add_starters(request: Request, user_id: str = Depends(require_user)):
+    """The starter sets in one request: each is added only when no record of its id is
+    held, live or deleted, and the reply holds every set as the server now holds it, in
+    the order sent."""
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    sets = payload.get("sets") if isinstance(payload, dict) else None
+    if not (isinstance(sets, list) and 0 < len(sets) <= 100 and all(isinstance(s, dict) and _is_id(s.get("id")) for s in sets)):
+        return JSONResponse(_BAD, status_code=400)
+    written = [_fields(s) for s in sets]
+    if any(w is None for w in written):
+        return JSONResponse(_BAD, status_code=400)
+    held = []
+    with _connect(user_id) as connection:
+        for s, (fields, base) in zip(sets, written):
+            row = connection.execute("SELECT * FROM prompt_sets WHERE id = ?", (s["id"],)).fetchone()
+            held.append(_record(row) if row is not None else _insert(connection, s["id"], fields, base, False))
+    return {"sets": held}
+
+
 @router.put("/{set_id}")
 async def put_prompt_set(set_id: str, request: Request, user_id: str = Depends(require_user)):
     try:
@@ -81,35 +130,16 @@ async def put_prompt_set(set_id: str, request: Request, user_id: str = Depends(r
         payload = None
     if not (_is_id(set_id) and isinstance(payload, dict)):
         return JSONResponse(_BAD, status_code=400)
-    base = payload.get("baseVersion")
-    deleted, starter = payload.get("deleted", False), payload.get("starter", False)
-    name, occasion, based_on, position = (payload.get(key) for key in _TEXTS)
-    prompts = payload.get("prompts")
-    valid = (
-        all(isinstance(text, str) for text in (name, occasion, based_on, position))
-        and isinstance(prompts, list)
-        and all(isinstance(prompt, str) for prompt in prompts)
-        and (base is None or (isinstance(base, int) and not isinstance(base, bool) and base >= 1))
-        and isinstance(deleted, bool)
-        and isinstance(starter, bool)
-    )
-    if not valid:
+    written = _fields(payload)
+    deleted = payload.get("deleted", False)
+    if written is None or not isinstance(deleted, bool):
         return JSONResponse(_BAD, status_code=400)
-    fields = (name, occasion, based_on, json.dumps(prompts), position)
+    fields, base = written
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM prompt_sets WHERE id = ?", (set_id,)).fetchone()
         if row is None:
-            # A new id is an idempotent upsert of the browser's own ULID (5): it continues
-            # from the base the client held, or 1, so a set made signed out arrives with its
-            # history. A tombstone can be born here, for one deleted before upload.
-            connection.execute(
-                "INSERT INTO prompt_sets (id, name, occasion, based_on, prompts, position, version, seq, deleted)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (set_id, *fields, (base or 0) + 1, _next_seq(connection), int(deleted)),
-            )
-            return _reread(connection, set_id)
-        if starter:
-            return _record(row)
+            # A tombstone can be born here, for one deleted before upload.
+            return _insert(connection, set_id, fields, base, deleted)
         # A restore write (5, Undo in 12) names the tombstone's own version as its base and
         # brings the set back as a new version. Any other write onto a tombstone, or a
         # second delete, returns the tombstone unchanged.

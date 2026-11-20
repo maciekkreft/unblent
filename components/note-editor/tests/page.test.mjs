@@ -292,13 +292,24 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
+      // A reload or a sign-out cuts short what the product still fetches after its first
+      // load (every fact's first pull), which the watch reports; so each waits for quiet.
+      const open = new Set();
+      page.on("request", (r) => open.add(r));
+      for (const done of ["requestfinished", "requestfailed"]) page.on(done, (r) => open.delete(r));
+      const settled = () => until(async () => {
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50))));
+        return open.size === 0;
+      });
       const content = () => page.evaluate(() => document.querySelector("#notes-editor").shadowRoot.querySelector(".cm-content")?.textContent ?? null);
       await page.goto(`${BASE_URL}/`);
       await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row:not(.draft)"));
       await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row:not(.draft)").click());
       await until(async () => (await content())?.includes("private words"));
+      await settled();
       await page.reload();
       await until(async () => (await content())?.includes("private words"));
+      await settled();
 
       await page.locator('session-switch button[aria-label="Sign out"]').click();
       await until(async () => (await page.evaluate(() => document.querySelector("#notes-editor").shadowRoot.textContent.trim())) === "Sign in to see your notes.");

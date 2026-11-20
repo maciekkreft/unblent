@@ -30,6 +30,7 @@ function fakeStore() {
     outboxAll: () => Promise.resolve([...outbox.values()]),
     outboxPut: (r) => (outbox.set(r.id, r), Promise.resolve()),
     outboxDelete: (id) => (outbox.delete(id), Promise.resolve()),
+    putAll: (sets, queued) => (sets.forEach((r) => rows.set(r.id, structuredClone(r))), queued.forEach((r) => outbox.set(r.id, r)), Promise.resolve()),
     metaGet: (k) => Promise.resolve(meta.get(k)),
     metaPut: (k, v) => (meta.set(k, v), Promise.resolve()),
   };
@@ -44,11 +45,16 @@ function fakeApi() {
   return {
     server,
     puts,
+    starters: async (rows) => ({
+      sets: rows.map(({ baseVersion, starter, ...rest }) => {
+        if (!server.has(rest.id)) server.set(rest.id, { ...rest, deleted: false, version: (baseVersion || 0) + 1, seq: ++seq });
+        return server.get(rest.id);
+      }),
+    }),
     put: async (row) => {
       puts.push(structuredClone(row));
       const held = server.get(row.id);
-      const { baseVersion, starter, ...rest } = row;
-      if (held && starter) return held;
+      const { baseVersion, ...rest } = row;
       if (held?.deleted && (row.deleted || baseVersion !== held.version)) return held;
       const r = { ...rest, deleted: Boolean(row.deleted), version: held ? held.version + 1 : (baseVersion || 0) + 1, seq: ++seq };
       server.set(row.id, r);

@@ -28,7 +28,6 @@ const body = (over = {}) => ({
   position: "6",
   baseVersion: null,
   deleted: false,
-  starter: false,
   ...over,
 });
 const put = (id, payload, cookie) =>
@@ -47,7 +46,7 @@ test("every route needs a signed-in user", async () => {
 test("a create continues from the base the browser held, and any later write wins", async () => {
   const cookie = freshCookie();
   const created = await (await put(ID, body({ baseVersion: 3 }), cookie)).json();
-  const { baseVersion, deleted, starter, ...fields } = body();
+  const { baseVersion, deleted, ...fields } = body();
   assert.deepEqual(created, { id: ID, ...fields, version: 4, deleted: false });
   const res = await put(ID, body({ prompts: ["Only one"], baseVersion: 1 }), cookie);
   assert.equal(res.status, 200);
@@ -56,17 +55,32 @@ test("a create continues from the base the browser held, and any later write win
   assert.equal(again.version, 5, "the same content is not a new version");
 });
 
-test("a starter is added only when nothing of its id is held, live or deleted", async () => {
+const starters = (sets, cookie) =>
+  fetch(`${BASE_URL}/api/prompt-sets/starters`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ sets }),
+  });
+const starter = (id, over = {}) => {
+  const { deleted, ...rest } = body(over);
+  return { id, ...rest };
+};
+
+test("the starters arrive in one request, each added only when nothing of its id is held, live or deleted", async () => {
+  assert.equal((await starters([starter(ID)])).status, 401);
   const cookie = freshCookie();
-  const first = await (await put(ID, body({ starter: true }), cookie)).json();
-  assert.equal(first.version, 1);
+  const first = await (await starters([starter(ID), starter(ID2, { name: "Other" })], cookie)).json();
+  assert.deepEqual(first.sets.map((s) => [s.id, s.version]), [[ID, 1], [ID2, 1]]);
   await put(ID, body({ name: "Edited", baseVersion: 1 }), cookie);
-  const twice = await (await put(ID, body({ starter: true }), cookie)).json();
-  assert.deepEqual([twice.name, twice.version], ["Edited", 2], "a starter never undoes an edit");
-  await put(ID2, body({ starter: true }), cookie);
   await put(ID2, body({ deleted: true, baseVersion: 1 }), cookie);
-  const gone = await (await put(ID2, body({ starter: true }), cookie)).json();
-  assert.deepEqual([gone.deleted, gone.version], [true, 2], "a deleted starter stays deleted");
+  const again = await (await starters([starter(ID), starter(ID2)], cookie)).json();
+  assert.deepEqual([again.sets[0].name, again.sets[0].version], ["Edited", 2], "a starter never undoes an edit");
+  assert.deepEqual([again.sets[1].deleted, again.sets[1].version], [true, 2], "a deleted starter stays deleted");
+  for (const bad of [[], [starter("not-an-id")], [starter(ID, { prompts: "one" })], "x"]) {
+    const res = await starters(bad, cookie);
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { error: "bad-request" });
+  }
 });
 
 test("a delete is a tombstone that always wins and is pulled like a change", async () => {
@@ -88,7 +102,7 @@ test("a delete is a tombstone that always wins and is pulled like a change", asy
 
 test("a body that is not a prompt set is refused with a fixed reply", async () => {
   const cookie = freshCookie();
-  for (const bad of [body({ name: 3 }), body({ prompts: "one" }), body({ prompts: [1] }), body({ position: null }), body({ baseVersion: true }), body({ deleted: "no" }), body({ starter: 1 })]) {
+  for (const bad of [body({ name: 3 }), body({ prompts: "one" }), body({ prompts: [1] }), body({ position: null }), body({ baseVersion: true }), body({ deleted: "no" })]) {
     const res = await put(ID, bad, cookie);
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { error: "bad-request" });

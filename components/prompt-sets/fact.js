@@ -21,7 +21,8 @@ const KEEPALIVE_MAX_BYTES = 32 * 1024;
 const api = {
   async put(row) {
     const { id, ...payload } = row;
-    const body = JSON.stringify({ ...payload, deleted: Boolean(row.deleted), starter: Boolean(row.starter) });
+    const { starter, ...rest } = payload;
+    const body = JSON.stringify({ ...rest, deleted: Boolean(row.deleted) });
     const res = await fetch(`/api/prompt-sets/${id}`, {
       method: "PUT",
       credentials: "same-origin",
@@ -31,6 +32,20 @@ const api = {
     });
     if (res.status === 401) return { error: "unauthorized" };
     if (!res.ok) throw new Error(`prompt-sets put ${res.status}`);
+    return await res.json();
+  },
+  // The starter sets in one request (machine.js, sync); the server answers each as it holds it.
+  async starters(rows) {
+    const body = JSON.stringify({ sets: rows.map(({ id, name, occasion, basedOn, prompts, position, baseVersion }) => ({ id, name, occasion, basedOn, prompts, position, baseVersion })) });
+    const res = await fetch("/api/prompt-sets/starters", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      body,
+      keepalive: document.visibilityState === "hidden" && new TextEncoder().encode(body).length <= KEEPALIVE_MAX_BYTES,
+    });
+    if (res.status === 401) return { error: "unauthorized" };
+    if (!res.ok) throw new Error(`prompt-sets starters ${res.status}`);
     return await res.json();
   },
   async pull(since) {

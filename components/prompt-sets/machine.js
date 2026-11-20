@@ -168,10 +168,19 @@ function commit(context, enqueue, next, starter = false) {
 
 // The starter sets are written the first time this browser knows no set of the account
 // at all, tombstones included, so a starter the user deleted is never written again. It
-// is not a step (12): the user did nothing.
+// is not a step (12): the user did nothing. All ten, with their outbox rows, are stored in
+// one transaction: a reload that cut separate writes short left some of them stored, so
+// the copy was no longer empty and the rest were never written again.
 function seed(context, enqueue) {
   if (context.sets.size > 0) return;
-  for (const s of STARTERS) commit(context, enqueue, toRecord(s), true);
+  const signedIn = context.userId != null;
+  const records = STARTERS.map((s) => ({ ...toRecord(s), version: 1 }));
+  const rows = signedIn ? records.map((r) => outboxRow(r, null, true)) : [];
+  for (const r of records) context.sets.set(r.id, r);
+  for (const row of rows) context.outbox.set(row.id, row);
+  enqueue(() => context.store.putAll(records, rows).catch(() => {}));
+  for (const r of records) enqueue.emit({ type: "prompt-set.changed", set: announce(context, r) });
+  if (signedIn) enqueue.raise({ type: "_drain" });
 }
 
 // --- Steps (12, Undo) -------------------------------------------------------------------
@@ -365,7 +374,26 @@ export const machine = setup({
     sync: fromPromise(async ({ input }) => {
       const { api, store, rows, cursor, pull } = input;
       const acks = [];
-      for (const row of [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+      // The starters go in one request, so a reload or a sign-out while they upload cuts
+      // one short request rather than a run of ten (the server adds each it holds no
+      // record of, and answers what it holds, in order).
+      const starters = rows.filter((row) => row.starter);
+      if (starters.length > 0) {
+        let result;
+        try {
+          result = await api.starters(starters);
+        } catch {
+          return { acks, networkError: true };
+        }
+        if (result.error === "unauthorized") return { acks, authFailed: true };
+        if (!Array.isArray(result.sets) || result.sets.length !== starters.length) return { acks, networkError: true };
+        for (const [i, row] of starters.entries()) {
+          if (result.sets[i]?.id !== row.id) return { acks, networkError: true };
+          acks.push(result.sets[i]);
+          await store.outboxDelete(row.id).catch(() => {});
+        }
+      }
+      for (const row of rows.filter((row) => !row.starter).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
         let result;
         try {
           result = await api.put(row);
@@ -400,8 +428,10 @@ export const machine = setup({
       "fixed ids and are written by the browser, not the server, the first time it knows no set " +
       "of the account at all, deleted ones included: signed out as soon as its copy is read, " +
       "signed in only after the first pull from the account has come back empty, so nothing is " +
-      "written while the account cannot be reached. Writing them is not a step. Each is sent to " +
-      "the server as a starter, which the server adds only when it holds no record of that id, " +
+      "written while the account cannot be reached. Writing them is not a step. They are stored " +
+      "in this browser all at once, so a reload never keeps only some of them, and sent to the " +
+      "server together in one request, as starters, each of which the server adds only when it " +
+      "holds no record of that id, " +
       "so two devices never add them twice, a starter deleted anywhere stays deleted, and one " +
       "edited anywhere keeps its edit; signing in sends a starter the user never changed the " +
       "same way. Every save that changes a set is one step Undo and Redo reverse (section 12): " +

@@ -43,6 +43,7 @@ function fakeStore(initial = [], outboxRows = []) {
     outboxAll: () => Promise.resolve([...outbox.values()]),
     outboxPut: (r) => (outbox.set(r.id, r), Promise.resolve()),
     outboxDelete: (id) => (outbox.delete(id), Promise.resolve()),
+    putAll: (sets, rows2) => (sets.forEach((r) => rows.set(r.id, r)), rows2.forEach((r) => outbox.set(r.id, r)), Promise.resolve()),
     metaGet: (k) => Promise.resolve(meta.get(k)),
     metaPut: (k, v) => (meta.set(k, v), Promise.resolve()),
     empty: () => (rows.clear(), outbox.clear(), meta.clear(), Promise.resolve()),
@@ -53,26 +54,38 @@ const askUser = (userId) => () => Promise.resolve({ userId, registrationOpen: fa
 
 // The server as a fake of prompt-sets/server: last write wins, a delete always wins, a
 // restore names the tombstone's version, a starter is added only when nothing is held.
+// The starters arrive together, in `batches`; every other write is one of `puts`.
 function fakeApi() {
   const server = new Map();
   const puts = [];
+  const batches = [];
   const pulls = [];
   let seq = 0;
   let offline = false;
   return {
     server,
     puts,
+    batches,
     pulls,
     set offline(v) {
       offline = v;
     },
     hold: (r) => server.set(r.id, { deleted: false, ...r, seq: ++seq }),
+    starters: async (rows) => {
+      if (offline) throw new Error("offline");
+      batches.push(structuredClone(rows));
+      return {
+        sets: rows.map(({ baseVersion, starter, ...rest }) => {
+          if (!server.has(rest.id)) server.set(rest.id, { ...rest, deleted: false, version: (baseVersion || 0) + 1, seq: ++seq });
+          return server.get(rest.id);
+        }),
+      };
+    },
     put: async (row) => {
       if (offline) throw new Error("offline");
       puts.push(structuredClone(row));
       const held = server.get(row.id);
-      const { baseVersion, starter, ...rest } = row;
-      if (held && starter) return held;
+      const { baseVersion, ...rest } = row;
       if (held?.deleted && (row.deleted || baseVersion !== held.version)) return held;
       const r = { ...rest, deleted: Boolean(row.deleted), version: held ? held.version + 1 : (baseVersion || 0) + 1, seq: ++seq };
       server.set(row.id, r);
@@ -169,9 +182,24 @@ test("signed in: the starters wait for the first pull and go to the server as st
   assert.equal((await list(actor)).length, 10);
   assert.ok([...store.outbox.values()].every((row) => row.starter === true && row.baseVersion === null));
   await drain(clock);
-  assert.equal(api.puts.length, 10);
+  assert.equal(api.puts.length, 0);
+  assert.deepEqual(api.batches.map((b) => b.length), [10], "the ten go in one request");
   assert.equal(store.outbox.size, 0);
   assert.equal(api.server.get(FIRST).version, 1);
+});
+
+test("the starters and their outbox rows are stored in one write, so a reload keeps all or none", async () => {
+  const store = fakeStore();
+  const writes = [];
+  for (const name of ["put", "outboxPut", "putAll"]) {
+    const write = store[name];
+    store[name] = (...args) => (writes.push(name), write(...args));
+  }
+  const { actor } = start(store, { api: fakeApi(), ask: askUser("u1") });
+  await ready(actor);
+  assert.deepEqual(writes, ["putAll"]);
+  assert.equal(store.rows.size, 10);
+  assert.equal(store.outbox.size, 10);
 });
 
 test("signed in and offline at the first load: no starters until the account has answered", async () => {
@@ -194,7 +222,7 @@ test("an account that deleted a starter elsewhere is not given the starters on a
   await ready(actor);
   await drain(clock);
   assert.deepEqual((await list(actor)).map((s) => s.id), STARTERS.slice(1).map((s) => s.id));
-  assert.equal(api.puts.length, 0);
+  assert.equal(api.puts.length + api.batches.length, 0);
 });
 
 test("two devices writing the starters keep one of each, and the account's edit of one stays", async () => {
@@ -227,9 +255,9 @@ test("sign-in sends an untouched starter as a starter and a changed one as a wri
   actor.send(saved({ id: FIRST, ...STARTERS[0], name: "My truths" }));
   actor.send({ type: "session.changed", userId: "u1" });
   await flush(20);
-  const rows = new Map(api.puts.map((p) => [p.id, p]));
-  assert.equal(rows.get(FIRST).starter, undefined);
-  assert.equal(rows.get(STARTERS[2].id).starter, true);
+  assert.deepEqual(api.puts.map((p) => p.id), [FIRST]);
+  assert.equal(api.puts[0].starter, undefined);
+  assert.deepEqual(api.batches.map((b) => b.map((r) => r.id)), [STARTERS.slice(1).map((s) => s.id)]);
   const sets = await list(actor);
   assert.equal(sets[0].name, "My truths");
   assert.equal(sets[2].name, "Edited on the phone", "the account's edit is not undone by this browser's starter");

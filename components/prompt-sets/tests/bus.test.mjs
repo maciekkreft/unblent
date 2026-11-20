@@ -18,6 +18,7 @@ const memory = () => {
     rows,
     all: async () => [...rows.values()],
     put: async (r) => void rows.set(r.id, r),
+    putAll: async (sets) => void sets.forEach((r) => rows.set(r.id, r)),
     outboxAll: async () => [],
     outboxPut: async () => {},
     outboxDelete: async () => {},
