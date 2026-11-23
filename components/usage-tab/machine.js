@@ -26,6 +26,7 @@ export const FEATURES = [
 const nameOf = (id) => FEATURES.find((f) => f.id === id)?.name ?? id;
 
 // How many days each range covers, today included; All is every day `usage` answers.
+// Week is at most this many: it starts on the first day of the week (weekSpanOf).
 export const RANGES = { week: 7, month: 30, all: 182 };
 export const DAYS = RANGES.all;
 
@@ -90,11 +91,15 @@ const sessionOf = (event) => {
   return picture;
 };
 
+// The days of this week so far, today included: the week begins on `weekStart`, the
+// first day of the week in the browser's language (1 Monday … 7 Sunday).
+export const weekSpanOf = (now, weekStart = 1) => ((new Date(now).getDay() || 7) - weekStart + 7) % 7 + 1;
+
 // Everything the tab draws for one range, from the summary `usage` answered. `focus`
 // is the feature followed, or null for all of them.
-export function pictureOf(summary, range, now, focus = null) {
+export function pictureOf(summary, range, now, focus = null, weekStart = 1) {
   const calendar = windowOf(now);
-  const span = RANGES[range] ?? RANGES.week;
+  const span = range in RANGES && range !== "week" ? RANGES[range] : weekSpanOf(now, weekStart);
   const inRange = new Set(calendar.slice(DAYS - span));
   const perDay = new Map(calendar.map((day) => [day, Object.fromEntries(FEATURES.map((f) => [f.id, 0]))]));
   for (const row of summary?.days ?? []) {
@@ -118,13 +123,18 @@ export function pictureOf(summary, range, now, focus = null) {
   // The flowing chart: one point per feature per day, or per week for All, each dated
   // by its last day; every feature in every point, in FEATURES order, so the chart's
   // colours keep their place.
+  // A week draws all seven of its days, those still to come at nothing, so the chart
+  // keeps its shape on the week's first day.
   const step = range === "all" ? 7 : 1;
-  const days = calendar.slice(DAYS - span);
+  const d = new Date(now);
+  const ahead = span < RANGES.week ? RANGES.week - span : 0;
+  const coming = Array.from({ length: ahead }, (_, i) => dayOf(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1 + i).getTime()));
+  const days = [...calendar.slice(DAYS - span), ...coming];
   const river = [];
   for (let s = 0; s < days.length; s += step) {
     const bucket = days.slice(s, s + step);
     for (const f of FEATURES) {
-      const ms = bucket.reduce((sum, day) => sum + perDay.get(day)[f.id], 0);
+      const ms = bucket.reduce((sum, day) => sum + (perDay.get(day)?.[f.id] ?? 0), 0);
       river.push([bucket.at(-1), Math.round(ms / 60000), f.name]);
     }
   }
@@ -188,7 +198,8 @@ export const machine = setup({
     description:
       "The Usage tab of the gear's sheet, shown to everyone while the Usage feature is " +
       "shown, whether or not the person shares: while the switch below is off it shows " +
-      "this device's own time, while on the account's. Week, Month or All; for the admin on the " +
+      "this device's own time, while on the account's. Week, from the first day of the " +
+      "week in the browser's language, the last 30 days, or All; for the admin on the " +
       "website, not while viewing as someone, also You or All accounts on the admin tint; " +
       "the total time and which feature took most of it; tiles sized by the time in each " +
       "feature, with a row of buttons naming them; a flowing chart of minutes per day " +
@@ -212,6 +223,7 @@ export const machine = setup({
   context: ({ input }) => ({
     ask: input.ask,
     now: input.now ?? Date.now,
+    weekStart: input.weekStart ?? 1,
     settings: null,
     session: null,
     who: "you",

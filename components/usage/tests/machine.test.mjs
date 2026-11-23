@@ -29,6 +29,12 @@ function memoryStore({ meta = {}, totals = [], outbox = [] } = {}) {
     log,
     all: async () => [...t.values()],
     put: async (r) => void t.set(r.id, r),
+    add: async (r, ms, queue) => {
+      const row = { ...r, ms: (t.get(r.id)?.ms ?? 0) + ms };
+      t.set(r.id, row);
+      if (queue) o.set(r.id, row);
+      return row;
+    },
     outboxAll: async () => [...o.values()],
     outboxPut: async (r) => void o.set(r.id, r),
     outboxDelete: async (id) => void o.delete(id),
@@ -370,4 +376,35 @@ test("a record of another tab's usage, arriving after the probe closed, does not
   await flush();
   assert.equal(actor.getSnapshot().context.tab, null);
   actor.stop();
+});
+
+test("while reading a pause of up to ten minutes counts, elsewhere up to two", async () => {
+  const { actor, store } = start();
+  await flush();
+  actor.send(act(T0, { name: "book.progressed", from: "book-reader" }));
+  actor.send(act(T0 + 8 * MIN, { name: "note.opened", from: "note-list" }));
+  actor.send(act(T0 + 16 * MIN, { name: "book.progressed", from: "book-reader" }));
+  actor.send(act(T0 + 27 * MIN, { name: "book.progressed", from: "book-reader" }));
+  await flush();
+  assert.equal(ms(store, "reading"), 8 * MIN, "a page read for eight minutes counts; eleven does not");
+  assert.equal(ms(store, "notes"), 0, "eight minutes after a note is a pause");
+  actor.stop();
+});
+
+const ID_NOTES = DEVICE + ":" + DAY + ":notes";
+test("two tabs of one browser add to the same totals", async () => {
+  const store = memoryStore();
+  const a = start({ store });
+  const b = start({ store });
+  await flush();
+  for (const { actor } of [a, b]) {
+    actor.send(act(T0, { name: "note.opened", from: "note-list" }));
+    actor.send(act(T0 + MIN, { name: "note.opened", from: "note-list" }));
+  }
+  await flush();
+  assert.equal(ms(store, "notes"), 2 * MIN);
+  assert.equal(store.o.get(ID_NOTES).ms, 2 * MIN, "the outbox holds the total of both tabs");
+  assert.equal(b.actor.getSnapshot().context.outbox.get(ID_NOTES).ms, 2 * MIN, "and so does what the later tab sends");
+  a.actor.stop();
+  b.actor.stop();
 });

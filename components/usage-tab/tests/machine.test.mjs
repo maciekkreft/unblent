@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, pictureOf, lineOf, formatMs, levelOf, windowOf, cellTip, whoOf, mayAllOf, onMacOf } from "../machine.js";
+import { machine, weekSpanOf, pictureOf, lineOf, formatMs, levelOf, windowOf, cellTip, whoOf, mayAllOf, onMacOf } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -36,7 +36,8 @@ test("a range keeps only its own days; the calendar keeps every day and marks th
       { day: "2026-06-01", feature: "chats", ms: 60 * MIN },
     ],
   };
-  const week = pictureOf(summary, "week", NOW);
+  // NOW is a Tuesday: a week that begins on Wednesday has all seven days behind it.
+  const week = pictureOf(summary, "week", NOW, null, 3);
   assert.equal(week.total, 50 * MIN, "28 October is the seventh day back; 27 October is not in the week");
   assert.deepEqual(week.totals.map((f) => [f.id, f.ms]), [["journal", 30 * MIN], ["reading", 20 * MIN]]);
   assert.equal(week.active, 2);
@@ -45,6 +46,13 @@ test("a range keeps only its own days; the calendar keeps every day and marks th
   assert.equal(week.cells.at(-1).today, true);
   assert.equal(week.river.length, 7 * 9, "one point per feature per day");
   assert.deepEqual(week.river.at(-9), ["2026-11-03", 30, "Journal"]);
+
+  const monday = pictureOf(summary, "week", NOW);
+  assert.equal(monday.span, 2, "a week that begins on Monday holds Monday and today");
+  assert.equal(monday.total, 30 * MIN, "28 October is in the week before");
+  assert.equal(monday.cells.filter((c) => !c.out).length, 2);
+  assert.equal(monday.river.length, 7 * 9, "the flowing chart draws the whole week");
+  assert.deepEqual(monday.river.at(-1), ["2026-11-08", 0, "Other"], "Sunday, still to come, at nothing");
 
   const all = pictureOf(summary, "all", NOW);
   assert.equal(all.total, 160 * MIN);
@@ -132,4 +140,13 @@ test("a feature is followed by a second click or Escape back to all", () => {
   actor.send({ type: "_clear" });
   assert.equal(actor.getSnapshot().context.focus, null);
   actor.stop();
+});
+
+test("a week begins on the first day of the week in the browser's language", () => {
+  const on = (day) => new Date(day + "T10:00:00").getTime();
+  assert.equal(weekSpanOf(on("2026-11-23")), 1, "Monday, in a week that begins on Monday");
+  assert.equal(weekSpanOf(on("2026-11-25")), 3, "Wednesday");
+  assert.equal(weekSpanOf(on("2026-11-29")), 7, "Sunday");
+  assert.equal(weekSpanOf(on("2026-11-23"), 7), 2, "Monday, in a week that begins on Sunday");
+  assert.equal(weekSpanOf(on("2026-11-22"), 7), 1, "Sunday, in a week that begins on Sunday");
 });

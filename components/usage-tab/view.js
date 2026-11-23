@@ -4,6 +4,19 @@ import * as echarts from "echarts";
 import { machine, FEATURES, pictureOf, lineOf, cellTip, formatMs, dayName, whoOf, mayAllOf, onMacOf } from "./machine.js";
 import settingsEdited from "./events/settings.edited.json" with { type: "json" };
 
+// The first day of the week in the browser's language, 1 Monday … 7 Sunday; WebKit and
+// Node read it as a getter, Chromium as a method, and a browser with neither starts on
+// Monday.
+const weekStartOf = (language) => {
+  try {
+    const locale = new Intl.Locale(language);
+    const info = locale.getWeekInfo?.() ?? locale.weekInfo;
+    return Number.isInteger(info?.firstDay) ? info.firstDay : 1;
+  } catch {
+    return 1;
+  }
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -13,7 +26,7 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
+      input: { ask: (target, name, payload) => ask(machine, target, name, payload), weekStart: weekStartOf(navigator.language) },
       events: { "settings.edited": settingsEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -450,7 +463,7 @@ class UsageTab extends LitElement {
     const who = whoOf(context);
     const summary = context.summary;
     const ready = summary && !summary.error;
-    const picture = ready ? pictureOf(summary, context.range, context.now(), context.focus) : null;
+    const picture = ready ? pictureOf(summary, context.range, context.now(), context.focus, context.weekStart) : null;
     return html`
       <div class="usage" @keydown=${(e) => this.#key(e)}>
         <span class="probe" aria-hidden="true"></span>
@@ -603,7 +616,7 @@ class UsageTab extends LitElement {
     const { context } = snapshot;
     if (!context.summary || context.summary.error) return;
     const focus = context.focus;
-    const picture = pictureOf(context.summary, context.range, context.now(), focus);
+    const picture = pictureOf(context.summary, context.range, context.now(), focus, context.weekStart);
     const t = (name) => this.#token(name);
     const ink = t("--color-ink");
     const mid = t("--color-body-mid");

@@ -24,6 +24,12 @@ function memory() {
     o,
     all: async () => [...t.values()],
     put: async (r) => void t.set(r.id, r),
+    add: async (r, ms, queue) => {
+      const row = { ...r, ms: (t.get(r.id)?.ms ?? 0) + ms };
+      t.set(r.id, row);
+      if (queue) o.set(r.id, row);
+      return row;
+    },
     outboxAll: async () => [...o.values()],
     outboxPut: async (r) => void o.set(r.id, r),
     outboxDelete: async (id) => void o.delete(id),

@@ -8,7 +8,16 @@ export function openUsage() {
   const db = openStore("usage", { totals: "id", outbox: "id", meta: "key" });
   return {
     all: () => db.all("totals"),
-    put: (total) => db.put("totals", total),
+    // Adds `ms` to the stored total in one transaction, so two tabs of this browser
+    // counting at once both land; `queue` also puts the new total in the outbox.
+    add: (total, ms, queue) =>
+      db.transaction(["totals", "outbox"], async () => {
+        const held = await db.get("totals", total.id);
+        const row = { ...total, ms: (held?.ms ?? 0) + ms };
+        await db.put("totals", row);
+        if (queue) await db.put("outbox", row);
+        return row;
+      }),
     outboxAll: () => db.all("outbox"),
     outboxPut: (row) => db.put("outbox", row),
     outboxDelete: (id) => db.delete("outbox", id),

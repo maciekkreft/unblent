@@ -18,14 +18,16 @@ const daysAgo = (n) => {
   d.setDate(d.getDate() - n);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
-// Two days this week and one long ago: Journal leads the week, Reading all of it.
+// Today and one day long ago: Journal leads the week, Reading all of it. The week begins
+// on Monday in en-GB, so today is its day WEEK_DAYS.
+const WEEK_DAYS = new Date().getDay() || 7;
 const SUMMARY = {
   accounts: 1,
   days: [
     { day: daysAgo(0), feature: "journal", ms: 40 * MIN },
     { day: daysAgo(0), feature: "notes", ms: 10 * MIN },
-    { day: daysAgo(1), feature: "reading", ms: 30 * MIN },
-    { day: daysAgo(1), feature: "chats", ms: 20 * MIN },
+    { day: daysAgo(0), feature: "reading", ms: 30 * MIN },
+    { day: daysAgo(0), feature: "chats", ms: 20 * MIN },
     { day: daysAgo(100), feature: "reading", ms: 200 * MIN },
   ],
 };
@@ -37,7 +39,7 @@ const text = (tab) => tab.evaluate((el) => el.shadowRoot.textContent.replace(/\s
 // server says about the account; `settings` is this device's starting preferences.
 async function open(browser, { me = {}, hidden = [], settings = null } = {}) {
   // Reduced motion: the charts draw at once, with nothing still moving under a click.
-  const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, reducedMotion: "reduce" });
+  const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, reducedMotion: "reduce", locale: "en-GB" });
   context.setDefaultTimeout(4000);
   await signedIn(context, forgeCookie(me.admin ? "admin" : "user"));
   await context.route(/\/api\/session\/me$/, async (route) => {
@@ -84,9 +86,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const said = await text(tab);
         assert.ok(said.includes("1 h 40 min"), `the week's total: ${said}`);
         assert.ok(said.includes("This week you spent this long in Unblent, most of it in Journal (40%)."), said);
-        assert.ok(said.includes("2 of 7 days in range active"), said);
+        assert.ok(said.includes("1 of " + WEEK_DAYS + " days in range active"), said);
         assert.equal(await tab.locator(".cal i[data-i]").count(), 182);
-        assert.equal(await tab.locator(".cal i.out").count(), 175);
+        assert.equal(await tab.locator(".cal i.out").count(), 182 - WEEK_DAYS);
         assert.ok((await tab.locator(".chart.stream svg path").count()) >= 4, "the flowing chart has bands");
         assert.deepEqual((await tab.locator(".chip").allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim()), ["Journal 40 min", "Reading 30 min", "Chats 20 min", "Notes 10 min"]);
 

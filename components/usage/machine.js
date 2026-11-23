@@ -11,6 +11,8 @@ import { ulid } from "ulid";
 
 // A pause longer than this between two actions is not counted.
 const GAP_MS = 2 * 60 * 1000;
+// While reading, the one action is a page turn, and a page can take longer than that.
+const READING_GAP_MS = 10 * 60 * 1000;
 // The pause in activity the network waits for, so a run of actions drains once (5).
 const SYNC_IDLE_MS = 60 * 1000;
 // The days a summary covers, the most recent last (queries/summary.json).
@@ -42,7 +44,8 @@ const isAction = (r) => r.kind === "event" && r.fromKind === "view" && r.outcome
 const toRecord = (r) => ({ id: r.id, device: r.device, day: r.day, feature: r.feature, ms: r.ms });
 
 // Adds `ms` of `feature` on the local day of `from`, split at each local midnight so a
-// stretch across midnight counts on both days. Returns the records it changed.
+// stretch across midnight counts on both days. Returns the records it changed, each
+// with the `ms` it added as `added`.
 function credit(context, from, to, feature) {
   const changed = [];
   for (let at = from; at < to; ) {
@@ -50,9 +53,10 @@ function credit(context, from, to, feature) {
     const day = dayOf(at);
     const id = `${context.device}:${day}:${feature}`;
     const held = context.records.get(id);
-    const r = { id, device: context.device, day, feature, ms: (held?.ms ?? 0) + Math.round(end - at) };
+    const added = Math.round(end - at);
+    const r = { id, device: context.device, day, feature, ms: (held?.ms ?? 0) + added };
     context.records.set(id, r);
-    changed.push(r);
+    changed.push({ record: r, added });
     at = end;
   }
   return changed;
@@ -88,7 +92,14 @@ function answerAll(context, enqueue) {
       reply({ error: "signed-out" });
       continue;
     }
-    const fallback = () => reply(who === "you" ? localSummary(records, now(), features) : { error: "unavailable" });
+    // The store, not this tab's copy, holds what every tab of this browser counted.
+    const fallback = () => {
+      if (who !== "you") return reply({ error: "unavailable" });
+      Promise.resolve(context.store.all()).then(
+        (rows) => reply(localSummary(rows.filter((r) => r?.device === context.device), now(), features)),
+        () => reply(localSummary(records, now(), features)),
+      );
+    };
     enqueue(() => {
       if (!context.on && who === "you") return fallback();
       if (!api) return fallback();
@@ -128,15 +139,23 @@ function onRecord(context, r, enqueue, self) {
   const feature = featureOf(context.counts, r.name, bare(r.from));
   const last = context.last;
   enqueue.assign({ last: { at: r.at, feature } });
-  if (!last || r.at <= last.at || r.at - last.at > GAP_MS) return;
+  const gap = last?.feature === "reading" ? READING_GAP_MS : GAP_MS;
+  if (!last || r.at <= last.at || r.at - last.at > gap) return;
   const changed = credit(context, last.at, r.at, last.feature);
-  for (const rec of changed) {
-    enqueue(() => context.store.put(rec).catch(() => {}));
-    if (!context.on) continue;
-    context.outbox.set(rec.id, rec);
-    enqueue(() => context.store.outboxPut(rec).catch(() => {}));
+  const on = context.on;
+  for (const { record, added } of changed) {
+    if (on) context.outbox.set(record.id, record);
+    // Every tab of this browser counts into the same stored totals under one device id,
+    // so the store adds to the total it holds, which another tab may have grown, and
+    // the stored total replaces this tab's copy.
+    enqueue(() =>
+      context.store.add(record, added, on).then(
+        (stored) => stored && self.send({ type: "_stored", record: toRecord(stored), queued: on }),
+        () => {},
+      ),
+    );
   }
-  if (context.on) enqueue.raise({ type: "_drain" });
+  if (on) enqueue.raise({ type: "_drain" });
 }
 
 // Share usage statistics decides only what leaves the device: counting goes on either
@@ -264,8 +283,10 @@ export const machine = setup({
       "each action a view announced, by its name and the view that announced it, never what " +
       "was written or read. The time between two actions is counted for the feature of the " +
       "first, and an action that opens something on the stage, such as a book from a chat, " +
-      "counts for what it opens; a pause of more than two minutes is not counted. Totals are kept per device, " +
-      "day and feature in the browser and sent to the account when there is something new, " +
+      "counts for what it opens; a pause of more than two minutes is not counted, or of " +
+      "more than ten minutes while reading a book, where a page turn is the only action. " +
+      "Totals are kept per device, day and feature in the browser, every tab of the " +
+      "browser adding to the same totals, and sent to the account when there is something new, " +
       "also later when the device was offline; the last write wins (5). Summary answers the " +
       "last 182 days for this account, or, for the admin only, added up across all accounts, " +
       "as totals with no breakdown per account (12). Offline, or while sharing is off, it " +
@@ -405,6 +426,19 @@ export const machine = setup({
       actions: enqueueActions(({ context, event, enqueue }) => share(context, event.value.usageCounting === true, enqueue)),
     },
     _probed: { actions: assign({ probing: false }) },
+    // A total as the store holds it after this tab added to it (onRecord); a row
+    // already sent or no longer queued is not queued again.
+    _stored: {
+      guard: ({ context, event }) => event.record.device === context.device,
+      actions: ({ context, event }) => {
+        const held = context.records.get(event.record.id);
+        if (!held || held.ms <= event.record.ms) context.records.set(event.record.id, event.record);
+        if (event.queued && context.on && context.outbox.has(event.record.id)) {
+          const queued = context.outbox.get(event.record.id);
+          if (queued.ms <= event.record.ms) context.outbox.set(event.record.id, event.record);
+        }
+      },
+    },
     // While loading, only whether the browser is leaving is kept (12); who is signed in
     // is read from session once the store is loaded.
     "session.changed": {
