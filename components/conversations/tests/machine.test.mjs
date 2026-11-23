@@ -942,6 +942,16 @@ test("an error, a listing, a cut result and an empty body name nothing more than
   assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x") }, undefined), {});
 });
 
+test("what's open is named with the other open books under its own heading, and with none it has no side list", () => {
+  const entry = entryOf(other("subject", "queries", "read"));
+  const subject = { kind: "book", id: "00000000000000000000000JRN", title: "Journal", view: "book-stage" };
+  const book = (id, title) => ({ kind: "book", id, title });
+  const content = JSON.stringify({ subject, alsoOpen: [book("b1", "Dune"), book("b2", " "), book("b3", "Emma")] });
+  assert.deepEqual(lookupName({ callId: "c", content }, entry), { name: "Journal", also: ["Dune", "Emma"], alsoLabel: "Also open" });
+  assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ subject, alsoOpen: [] }) }, entry), { name: "Journal" });
+  assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ subject }) }, entry), { name: "Journal" });
+});
+
 test("a chapter, stored as its title over its markdown, is named by its title and opens by the payload it was asked with", () => {
   assert.deepEqual(lookupName({ callId: "c", content: "Chapter One\n\nIt was a dark night." }, entryOf(BOOKS_CHAPTER), { id: BOOK, chapter: 3 }), { name: "Chapter One", opens: "chapter", id: BOOK, chapter: 3 });
   assert.deepEqual(lookupName({ callId: "c", content: "Chapter One\n\nIt was a dark night." }, entryOf(BOOKS_CHAPTER)), { name: "Chapter One" }, "no payload, nothing to open");

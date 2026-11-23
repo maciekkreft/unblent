@@ -293,3 +293,18 @@ test("a note's tab in front of another view than the one showing changes nothing
   await flush();
   assert.equal(changed.length, before);
 });
+
+test("read lists the other books open in the stage's tabs, the open book and notes left out", async () => {
+  const { actor } = start({ stage: "book-stage", openId: JRN, books: { [JRN]: journalBook } });
+  await flush();
+  actor.send(tabs(JRN, ["b1", "book", "Dune"], [JRN, "book", "Journal"], [NOTE, "note", "Plans"], ["b2", "book", "Emma"]));
+  await flush();
+  assert.deepEqual((await readSubject(actor)).alsoOpen, [
+    { kind: "book", id: "b1", title: "Dune" },
+    { kind: "book", id: "b2", title: "Emma" },
+  ]);
+  // The Journal alone in the tabs: nothing else is open.
+  actor.send(tabs(JRN, [JRN, "book", "Journal"]));
+  await flush();
+  assert.equal("alsoOpen" in (await readSubject(actor)), false);
+});

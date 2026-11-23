@@ -29,6 +29,20 @@
             "additionalProperties": false
           }
         ]
+      },
+      "alsoOpen": {
+        "type": "array",
+        "description": "The other books open in tabs on the stage, in the order of the tabs, the subject's own book left out: each with kind book, its id and the title on its tab. Absent when no other book is open.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "kind": { "const": "book" },
+            "id": { "type": "string", "minLength": 1 },
+            "title": { "type": "string" }
+          },
+          "required": ["kind", "id", "title"],
+          "additionalProperties": false
+        }
       }
     },
     "required": ["subject"],
@@ -36,8 +50,9 @@
   },
   "supersededBy": ["subject.changed"],
   "tool": {
-    "description": "Tells what the reader currently has in front: the open book and its title, or, when they have a note in front on the stage, that note (kind note) and its title, or that nothing is open. To read that note, pass its id to the lookup that reads a note. The note open in the Notes panel, or the Highlights, has its own lookup, reading the open note. The journal is a book too; when it is the open book, the day its page shows has its own lookup, reading the open journal day. What they have open can change during the chat, so call this to know what \"this\" book or chapter refers to right now. Takes no arguments.",
+    "description": "Tells what the reader currently has in front: the open book and its title, or, when they have a note in front on the stage, that note (kind note) and its title, or that nothing is open. To read that note, pass its id to the lookup that reads a note. The note open in the Notes panel, or the Highlights, has its own lookup, reading the open note. The journal is a book too; when it is the open book, the day its page shows has its own lookup, reading the open journal day. What they have open can change during the chat, so call this to know what \"this\" book or chapter refers to right now. alsoOpen lists the other books the reader has open in tabs. When the Journal is in front and the reader speaks of the book they have open, or its highlights, they most likely mean a book in alsoOpen; when it holds more than one, ask which. Takes no arguments.",
     "label": "Checking what's open", "title": "Which book or note is open", "group": "What's open", "order": 110,
-    "name": "/subject/title"
+    "name": "/subject/title",
+    "also": "/alsoOpen", "alsoName": "/title", "alsoLabel": "Also open"
   }
 }

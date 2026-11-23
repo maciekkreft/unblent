@@ -33,6 +33,14 @@ const noteInFront = (context) => {
   return front?.kind === "note" ? front : null;
 };
 
+// The other books in tabs on the showing view, in tab order, the open book left out, so
+// the chat can tell which book "the open book" means while the Journal is in front.
+// book-stage marks every tab that is not a note's or a chat's as a book's.
+const alsoOpenOf = (context) =>
+  (context.tabs[showing(context)] ?? [])
+    .filter((t) => t.id !== context.openId)
+    .map((t) => ({ kind: "book", id: t.id, title: t.label }));
+
 // The tab in front of a view's tabs.shown, or null when none is.
 const frontOf = (event) => (Array.isArray(event.tabs) ? event.tabs.find((t) => t.id === event.active) ?? null : null);
 
@@ -147,6 +155,12 @@ export const machine = setup({
   },
   actions: {
     keepFront: assign({
+      tabs: ({ context, event }) => ({
+        ...context.tabs,
+        [event.view]: (Array.isArray(event.tabs) ? event.tabs : [])
+          .filter((t) => t.kind === undefined || t.kind === "book")
+          .map((t) => ({ id: t.id, label: t.label })),
+      }),
       fronts: ({ context, event }) => {
         const front = frontOf(event);
         return { ...context.fronts, [event.view]: front ? { id: front.id, label: front.label, kind: front.kind } : null };
@@ -182,7 +196,9 @@ export const machine = setup({
       "shows, a note's tab in front of `book-stage` (a note opened on the stage, or the Slip-Box) " +
       "makes that note the subject, as kind note, its id, the tab's title and `book-stage`, " +
       "with no chapter; a book's or a chat's tab in front gives the open book back. With " +
-      "Slip-Box hidden, or on a page without `flags`, a note's tab changes nothing.",
+      "Slip-Box hidden, or on a page without `flags`, a note's tab changes nothing. Its read " +
+      "answer also lists the other books open in the stage's tabs, so the chat can tell which " +
+      "book the reader means by the open book while the Journal is in front.",
     kind: "fact",
     shape: "local-only",
     owns: "current subject",
@@ -208,12 +224,19 @@ export const machine = setup({
     // { id, label, kind }, or null.
     hidden: null,
     fronts: {},
+    // The book tabs of each view that announces tabs, by its address, as [{ id, label }].
+    tabs: {},
   }),
   initial: "starting",
   on: {
     // Query for the starting picture (4.3): honest even before the first asks land,
     // when the answer is null; subject.changed carries every change after.
-    "read?": { actions: ({ context, event }) => event.reply({ subject: context.subject }) },
+    "read?": {
+      actions: ({ context, event }) => {
+        const alsoOpen = alsoOpenOf(context);
+        event.reply(alsoOpen.length ? { subject: context.subject, alsoOpen } : { subject: context.subject });
+      },
+    },
     // The day is not held for the journal: open ask (journal.changed supersedes it), so a
     // day.shown that lands while starting is kept here and wins over the older reply.
     "day.shown": { actions: assign({ day: ({ event }) => event.day }) },

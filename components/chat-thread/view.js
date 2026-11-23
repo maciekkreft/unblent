@@ -1457,6 +1457,7 @@ class ChatThread extends LitElement {
     }
     if (result.name) {
       return html`<dt>Got</dt><dd>${this.#named(result, result.name)}</dd>
+        ${result.also?.length ? html`<dd class="also">${result.alsoLabel}: ${result.also.join(", ")}</dd>` : nothing}
         ${result.excerpt ? html`<dd>“${result.excerpt}”</dd>` : nothing}
         ${length}`;
     }

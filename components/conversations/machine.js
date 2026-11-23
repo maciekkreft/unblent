@@ -216,6 +216,19 @@ export const lookupName = (result, entry, payload = {}) => {
     const chapter = entry.openChapter ? pointAt(asked, entry.openChapter) : undefined;
     if (Number.isInteger(chapter) && chapter >= 0) out.chapter = chapter;
   }
+  // The other things read with the named one (7.2), such as the other open books, named
+  // under the entry's own heading, so the chat shows them without knowing the lookup.
+  const side = entry.also && entry.alsoName && entry.alsoLabel ? pointAt(reply, entry.also) : undefined;
+  if (Array.isArray(side)) {
+    const names = side
+      .slice(0, ITEMS_SHOWN)
+      .map((item) => pointAt(item, entry.alsoName))
+      .filter((n) => typeof n === "string" && words(n).length > 0);
+    if (names.length) {
+      out.also = names;
+      out.alsoLabel = entry.alsoLabel;
+    }
+  }
   return out;
 };
 
@@ -559,7 +572,7 @@ const buildTools = (context, reply) => {
     if (!q.tool) continue;
     const key = `${q.target}: ${q.name}`;
     meta[key] = { label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt };
-    for (const field of ["items", "itemName", "itemExcerpt", "total", "opens", "openId", "openChapter"]) if (q.tool[field] !== undefined) meta[key][field] = q.tool[field];
+    for (const field of ["items", "itemName", "itemExcerpt", "total", "opens", "openId", "openChapter", "also", "alsoName", "alsoLabel"]) if (q.tool[field] !== undefined) meta[key][field] = q.tool[field];
     if (q.tool.switch !== false && context.tools[key] === false) continue;
     if (!context.answered(q.target, q.name)) continue; // its owner is not on this page (7.7)
     if (featureHidden(key, context.hidden)) continue;

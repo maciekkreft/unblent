@@ -21,6 +21,11 @@ const DAYS = {
   more: 0,
 };
 
+const OPEN = {
+  subject: { kind: "book", id: U("JR"), title: "Journal", view: "book-stage" },
+  alsoOpen: [{ kind: "book", id: U("B1"), title: "Dune" }, { kind: "book", id: U("B2"), title: "Emma" }],
+};
+
 const look = (page) =>
   page.evaluate(() => {
     const root = document.querySelector("chat-thread").shadowRoot;
@@ -49,9 +54,10 @@ for (const engine of ENGINES) {
             calls: [
               { id: "c1", target: "journal", name: "index", payload: { from: "2026-10-01", contains: "mother" }, label: "Reading journal days" },
               { id: "c2", target: "notes", name: "read", payload: { id: U("N1") }, label: "Reading a note" },
+              { id: "c3", target: "subject", name: "read", payload: {}, label: "Checking what's open" },
             ],
           },
-          { id: U("R1"), role: "user", text: "", results: [{ callId: "c1", content: JSON.stringify(DAYS) }, { callId: "c2", content: "No note with that id.", isError: true }] },
+          { id: U("R1"), role: "user", text: "", results: [{ callId: "c1", content: JSON.stringify(DAYS) }, { callId: "c2", content: "No note with that id.", isError: true }, { callId: "c3", content: JSON.stringify(OPEN) }] },
           { id: U("A2"), role: "assistant", text: "On 28 October.", status: "done" },
         ];
         assert.ok((await context.request.put(`${BASE_URL}/api/conversations/${CHAT}`, { data: { title: "Mother", about: [], start: "", turns } })).ok(), "the chat is seeded");
@@ -59,8 +65,8 @@ for (const engine of ENGINES) {
         const problems = watch(page);
         await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
         await page.locator("conversation-list .row", { hasText: "Mother" }).click();
-        await until(async () => (await look(page)).length === 2);
-        assert.deepEqual((await look(page)).map((l) => l.open), [false, false], "closed by default");
+        await until(async () => (await look(page)).length === 3);
+        assert.deepEqual((await look(page)).map((l) => l.open), [false, false, false], "closed by default");
 
         await page.locator("chat-thread .lookup summary", { hasText: "Reading journal days" }).click();
         await until(async () => /28 Oct 2026/.test((await look(page))[0].got ?? ""));
@@ -76,6 +82,11 @@ for (const engine of ENGINES) {
         assert.ok((await look(page))[1].danger, "the failure is drawn in the danger color");
         await page.keyboard.press("Space");
         await until(async () => !(await look(page))[1].open);
+
+        // The other things read with the named one show under the lookup's own heading.
+        await page.locator("chat-thread .lookup summary", { hasText: "Checking what's open" }).click();
+        await until(async () => (await look(page))[2].got !== null);
+        assert.match((await look(page))[2].got, /^Got \| Journal \| Also open: Dune, Emma \| About \d+ words$/);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

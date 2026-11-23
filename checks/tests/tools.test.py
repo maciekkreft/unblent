@@ -36,8 +36,18 @@ class Ok(unittest.TestCase):
         entry = {**BASE, "itemExcerpt": "/summary", "openId": "/reply/id", "openChapter": "/payload/chapter"}
         self.assertEqual(problems(entry), [])
 
+    def test_side_list_beside_a_name_passes(self):
+        entry = {**BASE, "name": "/subject/title", "also": "/alsoOpen", "alsoName": "/title", "alsoLabel": "Also open"}
+        self.assertEqual(problems(entry), [])
+
 
 class Fails(unittest.TestCase):
+    def test_side_list_without_a_name_or_partial_fails(self):
+        side = {"also": "/alsoOpen", "alsoName": "/title", "alsoLabel": "Also open"}
+        self.assertIn("'also'", problems({**BASE, **side})[0])
+        self.assertEqual(len(problems({**BASE, "name": "/t", "also": "/alsoOpen"})), 1)
+        self.assertIn("'alsoName'", problems({**BASE, "name": "/t", **side, "alsoName": "title"})[0])
+
     def test_missing_label(self):
         self.assertEqual(len(problems({"description": "x"})), 1)
 
